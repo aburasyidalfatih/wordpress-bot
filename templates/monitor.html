@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% set active_page = 'monitor' %}
+{% block title %}Monitor — WordPress Bot{% endblock %}
+{% block page_title %}Monitor{% endblock %}
+{% block page_subtitle %}System performance & health{% endblock %}
+
+{% block topbar_actions %}
+<div style="display:flex;align-items:center;gap:6px;font-size:0.775rem;color:#475569;">
+    <div class="spinner" style="width:13px;height:13px;border-width:2px;"></div>
+    <span id="last-updated">Live</span>
+</div>
+{% endblock %}
+
+{% block content %}
+
+<div class="stats-grid section">
+    <!-- Health -->
+    <div class="stat-card" id="health-card">
+        <div class="stat-label">Health</div>
+        <div class="stat-value" style="font-size:1.1rem;color:#4ade80;" id="health-text">Healthy</div>
+        <div class="stat-sub">System status</div>
+    </div>
+    <!-- Gemini -->
+    <div class="stat-card">
+        <div class="stat-label">Gemini API</div>
+        <div class="stat-value" style="font-size:1.1rem;color:{% if gemini_status.status == 'healthy' %}#4ade80{% elif gemini_status.status == 'overload' %}#fbbf24{% else %}#f87171{% endif %};">
+            {% if gemini_status.status == 'healthy' %}Ready{% elif gemini_status.status == 'overload' %}Busy{% else %}Error{% endif %}
+        </div>
+        <div class="stat-sub">{{ gemini_status.message[:32] }}</div>
+    </div>
+    <!-- Scheduler -->
+    <div class="stat-card">
+        <div class="stat-label">Scheduler</div>
+        <div class="stat-value" style="font-size:1.1rem;color:{% if service_info.scheduler_running %}#4ade80{% else %}#f87171{% endif %};">
+            {{ service_info.scheduler_jobs }} jobs
+        </div>
+        <div class="stat-sub">{% if service_info.scheduler_running %}Running{% else %}Stopped{% endif %}</div>
+    </div>
+    <!-- Posts -->
+    <div class="stat-card">
+        <div class="stat-label">Total Posts</div>
+        <div class="stat-value" style="font-size:1.1rem;color:#a78bfa;">{{ stats.total_posts }}</div>
+        <div class="stat-sub">{{ stats.successful_posts }} published</div>
+    </div>
+</div>
+
+<!-- System Resources -->
+<div class="card section">
+    <div class="card-header">
+        <div class="card-title"><i data-lucide="cpu"></i> System Resources</div>
+    </div>
+    {% for name, label, color, val in [
+        ('cpu',    'CPU',    '#60a5fa', system_info.cpu_percent),
+        ('memory', 'Memory', '#4ade80', system_info.memory_percent),
+        ('disk',   'Disk',   '#fbbf24', system_info.disk_percent)
+    ] %}
+    <div style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="font-size:0.8rem;color:#94a3b8;">{{ label }}</span>
+            <span style="font-size:0.8rem;font-weight:600;color:{{ color }};" id="{{ name }}-value">{{ val }}%</span>
+        </div>
+        <div class="progress">
+            <div class="progress-fill" id="{{ name }}-bar"
+                 style="width:{{ val }}%;background:{% if val > 85 %}#f87171{% elif val > 65 %}#fbbf24{% else %}{{ color }}{% endif %};"></div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px;" class="two-col-grid">
+        <div style="padding:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:7px;">
+            <div style="font-size:0.72rem;color:#475569;margin-bottom:4px;">Database</div>
+            <div style="font-size:1rem;font-weight:600;color:#60a5fa;">{{ "%.1f"|format(service_info.database_size) }} MB</div>
+        </div>
+        <div style="padding:12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:7px;">
+            <div style="font-size:0.72rem;color:#475569;margin-bottom:4px;">Logs</div>
+            <div style="font-size:1rem;font-weight:600;color:#60a5fa;">{{ "%.1f"|format(service_info.log_size) }} MB</div>
+        </div>
+    </div>
+</div>
+
+<!-- Actions -->
+<div class="card section">
+    <div class="card-header">
+        <div class="card-title"><i data-lucide="wrench"></i> Actions</div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        <button onclick="refreshMetrics()" class="btn btn-primary btn-sm"><i data-lucide="refresh-cw"></i> Refresh Now</button>
+        <button onclick="window.open('/health','_blank')" class="btn btn-success btn-sm"><i data-lucide="heart-pulse"></i> Health Check</button>
+        <button onclick="window.location.href='/download-logs'" class="btn btn-ghost btn-sm"><i data-lucide="download"></i> Download Logs</button>
+    </div>
+</div>
+
+{% if recent_errors %}
+<div class="card section">
+    <div class="card-header">
+        <div class="card-title" style="color:#f87171;"><i data-lucide="alert-triangle"></i> Recent Errors</div>
+        <span class="badge badge-red">Last 10</span>
+    </div>
+    <div style="background:rgba(0,0,0,0.25);border:1px solid rgba(239,68,68,0.12);border-radius:7px;padding:12px;font-family:'SF Mono',monospace;font-size:0.72rem;max-height:240px;overflow-y:auto;">
+        {% for error in recent_errors %}
+        <div style="color:#fca5a5;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">{{ error }}</div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let lastUpdated = Date.now();
+setInterval(refreshMetrics, 5000);
+
+function refreshMetrics() {
+    fetch('/api/health-metrics').then(r=>r.json()).then(d=>{
+        lastUpdated = Date.now();
+        const ok = d.service.status==='healthy';
+        const el = document.getElementById('health-text');
+        if(el){el.textContent=ok?'Healthy':'Unhealthy';el.style.color=ok?'#4ade80':'#f87171';}
+        ['cpu','memory','disk'].forEach(n=>{
+            const v=d.system[n+'_percent'];
+            const ve=document.getElementById(n+'-value');
+            const be=document.getElementById(n+'-bar');
+            if(ve)ve.textContent=v+'%';
+            if(be){be.style.width=v+'%';be.style.background=v>85?'#f87171':v>65?'#fbbf24':(n==='cpu'?'#60a5fa':n==='memory'?'#4ade80':'#fbbf24');}
+        });
+    }).catch(()=>{});
+}
+
+setInterval(() => {
+    const secs = Math.round((Date.now() - lastUpdated) / 1000);
+    const el = document.getElementById('last-updated');
+    if (el) el.textContent = secs < 5 ? 'Just updated' : `Updated ${secs}s ago`;
+}, 1000);
+</script>
+{% endblock %}

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% set active_page = 'research' %}
+{% block title %}Research — WordPress Bot{% endblock %}
+{% block page_title %}Research{% endblock %}
+{% block page_subtitle %}Trending topics & SEO data{% endblock %}
+
+{% block content %}
+
+{% if research_data %}
+<div class="alert alert-green">
+    <i data-lucide="check-circle"></i>
+    <strong>{{ research_data|length }} categories researched</strong>
+</div>
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;" class="research-grid section">
+    {% for category, data in research_data.items() %}
+    <div class="card">
+        <div style="margin-bottom:12px;">
+            <div style="font-size:0.875rem;font-weight:600;color:#f1f5f9;margin-bottom:2px;">{{ category }}</div>
+            <div style="font-size:0.72rem;color:#475569;">{{ data.created_at }}</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;">
+            <span class="badge badge-blue"><i data-lucide="lightbulb"></i> {{ data.suggestions_count }} topics</span>
+            <span class="badge badge-purple"><i data-lucide="key-round"></i> {{ data.keywords_count }} keywords</span>
+            <span class="badge badge-yellow"><i data-lucide="help-circle"></i> {{ data.questions_count }} questions</span>
+        </div>
+        {% if data.suggestions %}
+        <div style="margin-bottom:10px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#60a5fa;margin-bottom:5px;">Topics</div>
+            {% for topic in data.suggestions %}
+            <div style="padding:5px 10px;margin-bottom:3px;background:rgba(255,255,255,0.02);border-left:2px solid #3b82f6;border-radius:0 5px 5px 0;font-size:0.775rem;color:#cbd5e1;">{{ loop.index }}. {{ topic.topic }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if data.keywords %}
+        <div style="margin-bottom:10px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#a78bfa;margin-bottom:5px;">Keywords</div>
+            <div>{% for kw in data.keywords %}<span style="display:inline-block;padding:2px 7px;margin:2px;background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.18);border-radius:4px;font-size:0.7rem;color:#a78bfa;">{{ kw }}</span>{% endfor %}</div>
+        </div>
+        {% endif %}
+        {% if data.questions %}
+        <div>
+            <div style="font-size:0.72rem;font-weight:600;color:#fb923c;margin-bottom:5px;">Questions</div>
+            {% for q in data.questions %}
+            <div style="padding:5px 10px;margin-bottom:3px;background:rgba(255,255,255,0.02);border-left:2px solid #f97316;border-radius:0 5px 5px 0;font-size:0.75rem;color:#cbd5e1;">{{ q }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-yellow section">
+    <i data-lucide="alert-triangle"></i>
+    <strong>No research data</strong> &nbsp;·&nbsp; Click "Research" in Dashboard to start
+</div>
+{% endif %}
+
+<!-- Trending Lookup -->
+<div class="card section">
+    <div class="card-header"><div class="card-title"><i data-lucide="flame"></i> Trending by Category</div></div>
+    <select id="categorySelect" onchange="loadTrending()" class="input">
+        <option value="">— Select a category —</option>
+        {% for cat in config.selected_categories %}
+        <option value="{{ cat.name }}">{{ cat.name }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+<div id="loadingIndicator" style="display:none;" class="alert alert-blue section">
+    <div class="spinner" style="width:14px;height:14px;border-width:2px;"></div> Loading trending data…
+</div>
+
+<div id="resultsContainer" style="display:none;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;" class="two-col-grid">
+        <div class="card">
+            <div class="card-header"><div class="card-title"><i data-lucide="flame"></i> Trending Now</div></div>
+            <ul id="trendingList" style="list-style:none;display:flex;flex-direction:column;gap:4px;"></ul>
+        </div>
+        <div class="card">
+            <div class="card-header"><div class="card-title"><i data-lucide="trending-up"></i> Rising</div></div>
+            <ul id="risingList" style="list-style:none;display:flex;flex-direction:column;gap:4px;"></ul>
+        </div>
+    </div>
+    <div class="card section">
+        <div class="card-header"><div class="card-title"><i data-lucide="star"></i> Popular</div></div>
+        <ul id="topList" style="list-style:none;display:flex;flex-direction:column;gap:4px;"></ul>
+    </div>
+    <div class="card section">
+        <div class="card-header"><div class="card-title"><i data-lucide="sparkles"></i> Suggested Topics</div></div>
+        <button onclick="getSuggestions()" class="btn btn-primary btn-sm" style="margin-bottom:12px;">
+            <i data-lucide="sparkles"></i> Generate
+        </button>
+        <div id="suggestionsList"></div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function renderList(id, items, icon) {
+    document.getElementById(id).innerHTML = items.length
+        ? items.map(t=>`<li style="padding:6px 10px;background:rgba(255,255,255,0.02);border-radius:5px;font-size:0.8rem;color:#cbd5e1;display:flex;align-items:center;gap:6px;"><i data-lucide="${icon}" style="width:11px;height:11px;flex-shrink:0;color:#475569;"></i>${t}</li>`).join('')
+        : `<li style="font-size:0.8rem;color:#475569;padding:4px 0;">No data</li>`;
+    lucide.createIcons();
+}
+function loadTrending() {
+    const cat = document.getElementById('categorySelect').value;
+    if (!cat) return;
+    document.getElementById('loadingIndicator').style.display='flex';
+    document.getElementById('resultsContainer').style.display='none';
+    fetch(`/api/trending/${encodeURIComponent(cat)}`).then(r=>r.json()).then(d=>{
+        document.getElementById('loadingIndicator').style.display='none';
+        document.getElementById('resultsContainer').style.display='block';
+        renderList('trendingList',d.trending_now,'flame');
+        renderList('risingList',d.related_rising,'trending-up');
+        renderList('topList',d.related_top,'star');
+    }).catch(e=>{document.getElementById('loadingIndicator').style.display='none';showToast('Error: '+e.message,'error');});
+}
+function getSuggestions() {
+    const cat = document.getElementById('categorySelect').value;
+    if (!cat) return showToast('Select a category first','warning');
+    fetch('/api/suggest-topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat,count:10})})
+    .then(r=>r.json()).then(d=>{
+        document.getElementById('suggestionsList').innerHTML = d.suggestions.map(s=>
+            `<div style="padding:7px 12px;margin-bottom:4px;border-radius:5px;border-left:2px solid ${s.type==='rising'?'#4ade80':'#60a5fa'};background:rgba(255,255,255,0.02);font-size:0.8rem;color:#cbd5e1;display:flex;align-items:center;gap:8px;">
+                <i data-lucide="${s.type==='rising'?'rocket':'star'}" style="width:12px;height:12px;flex-shrink:0;color:${s.type==='rising'?'#4ade80':'#60a5fa'};"></i>
+                <span><strong style="color:${s.type==='rising'?'#4ade80':'#60a5fa'};">${s.type==='rising'?'Rising':'Popular'}:</strong> ${s.topic}</span>
+            </div>`
+        ).join('')||'<p style="font-size:0.8rem;color:#475569;">No suggestions</p>';
+        lucide.createIcons();
+    }).catch(e=>showToast('Error: '+e.message,'error'));
+}
+</script>
+{% endblock %}

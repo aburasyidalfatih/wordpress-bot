@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% set active_page = 'settings' %}
+{% block title %}Settings — WordPress Bot{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block page_subtitle %}Configure your bot{% endblock %}
+
+{% block topbar_actions %}
+<button type="submit" form="settings-form" class="btn btn-primary btn-sm"><i data-lucide="save" style="width:13px;height:13px;"></i> Save</button>
+{% endblock %}
+
+{% block content %}
+<form id="settings-form" method="POST" action="/save-config">
+
+    <div class="settings-grid">
+
+        <!-- Col 1 -->
+        <div class="settings-col">
+
+            <!-- API -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="key-round" style="width:14px;height:14px;"></i> API Configuration</div></div>
+                <div class="form-group">
+                    <label class="form-label">Gemini API Key</label>
+                    <div class="input-secret">
+                        <input type="password" name="gemini_api_key" value="{{ config.gemini_api_key }}" class="input" placeholder="AIza…" autocomplete="off">
+                        <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
+                    </div>
+                    <p class="form-hint">Get from <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio ↗</a></p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Model Artikel</label>
+                    <select name="gemini_model" class="input">
+                        <option value="gemini-2.5-pro"           {% if config.gemini_model == 'gemini-2.5-pro' %}selected{% endif %}>Gemini 2.5 Pro — Best Quality</option>
+                        <option value="gemini-2.5-flash"         {% if config.gemini_model == 'gemini-2.5-flash' %}selected{% endif %}>Gemini 2.5 Flash — Fast & Cheap</option>
+                        <option value="gemini-2.5-flash-lite"    {% if config.gemini_model == 'gemini-2.5-flash-lite' %}selected{% endif %}>Gemini 2.5 Flash-Lite — Fastest</option>
+                        <option value="gemini-3.1-pro-preview"   {% if config.gemini_model == 'gemini-3.1-pro-preview' %}selected{% endif %}>Gemini 3.1 Pro — Most Advanced</option>
+                        <option value="gemini-3-flash-preview"   {% if config.gemini_model == 'gemini-3-flash-preview' %}selected{% endif %}>Gemini 3 Flash — Frontier</option>
+                    </select>
+                    <p class="form-hint">Digunakan untuk generate konten artikel</p>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Model Gambar</label>
+                    <select name="gemini_image_model" class="input">
+                        <option value="gemini-3.1-flash-image-preview" {% if config.gemini_image_model == 'gemini-3.1-flash-image-preview' %}selected{% endif %}>Gemini 3.1 Flash Image (Nano Banana 2) — Fast</option>
+                        <option value="gemini-3-pro-image-preview"     {% if config.gemini_image_model == 'gemini-3-pro-image-preview' %}selected{% endif %}>Gemini 3 Pro Image (Nano Banana Pro) — Best Quality</option>
+                        <option value="gemini-2.5-flash-image"         {% if config.gemini_image_model == 'gemini-2.5-flash-image' %}selected{% endif %}>Gemini 2.5 Flash Image (Nano Banana) — Stable</option>
+                    </select>
+                    <p class="form-hint">Model khusus untuk generate featured image artikel</p>
+                </div>
+            </div>
+
+            <!-- Schedule -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="clock" style="width:14px;height:14px;"></i> Posting Schedule</div></div>
+                <div class="form-group">
+                    <label class="form-label">Schedule Hours</label>
+                    <input type="text" name="schedule_hours" value="{{ config.schedule_hours or '0,6,12,18' }}" class="input" placeholder="0,6,12,18">
+                    <p class="form-hint">Hours (0–23), comma-separated</p>
+                </div>
+                <label class="checkbox-row" style="margin-bottom:0;">
+                    <input type="checkbox" name="auto_post" {% if config.auto_post %}checked{% endif %}> Enable Auto Post
+                </label>
+            </div>
+
+            <!-- Research -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="search" style="width:14px;height:14px;"></i> Research Settings</div></div>
+                <div class="alert alert-blue" style="margin-bottom:14px;">
+                    <i data-lucide="info" style="width:14px;height:14px;"></i> Bot researches trending topics daily to generate more relevant articles.
+                </div>
+                <label class="checkbox-row"><input type="checkbox" name="auto_research_enabled" {% if config.auto_research_enabled %}checked{% endif %}> Enable Daily Auto Research</label>
+                <label class="checkbox-row" style="margin-bottom:14px;"><input type="checkbox" name="use_research_topics" {% if config.use_research_topics %}checked{% endif %}> Use Research Topics for Articles</label>
+                <a href="/research" style="font-size:0.8rem;color:#8b5cf6;">View Research Results →</a>
+            </div>
+
+            <!-- Telegram -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="send" style="width:14px;height:14px;"></i> Telegram Notifications</div></div>
+                <label class="checkbox-row"><input type="checkbox" name="telegram_enabled" {% if config.telegram_enabled %}checked{% endif %}> Enable Telegram Notifications</label>
+                <div class="form-group">
+                    <label class="form-label">Bot Token</label>
+                    <div class="input-secret">
+                        <input type="password" name="telegram_bot_token" value="{{ config.telegram_bot_token }}" class="input" placeholder="123456:ABC-DEF…" autocomplete="off">
+                        <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
+                    </div>
+                    <p class="form-hint">Get from @BotFather</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Chat ID</label>
+                    <input type="text" name="telegram_chat_id" value="{{ config.telegram_chat_id }}" class="input" placeholder="123456789">
+                    <p class="form-hint">Get from @userinfobot</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Channel ID</label>
+                    <input type="text" name="telegram_channel_id" value="{{ config.telegram_channel_id }}" class="input" placeholder="@channelname">
+                    <p class="form-hint">Your Telegram channel</p>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                    <label class="checkbox-row" style="margin-bottom:0;"><input type="checkbox" name="telegram_post_to_channel" {% if config.telegram_post_to_channel %}checked{% endif %}> Auto Post to Channel</label>
+                    <button type="button" onclick="apiAction('/test-telegram', this, 'Testing…', 'Test sent!')" class="btn btn-ghost btn-sm">
+                        <i data-lucide="send" style="width:13px;height:13px;"></i> Test
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Col 2 -->
+        <div class="settings-col">
+
+            <!-- WordPress -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="globe" style="width:14px;height:14px;"></i> WordPress</div></div>
+                <div class="form-group">
+                    <label class="form-label">Site URL</label>
+                    <input type="text" name="wordpress_url" value="{{ config.wordpress_url }}" class="input" placeholder="https://example.com">
+                    <p class="form-hint">Without trailing slash</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Username</label>
+                    <input type="text" name="wordpress_username" value="{{ config.wordpress_username }}" class="input" placeholder="admin">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Application Password</label>
+                    <div class="input-secret">
+                        <input type="password" name="wordpress_password" value="{{ config.wordpress_password }}" class="input" placeholder="xxxx xxxx xxxx xxxx" autocomplete="off">
+                        <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
+                    </div>
+                    <p class="form-hint">WordPress Admin → Users → Profile → Application Passwords</p>
+                </div>
+                <button type="button" onclick="apiAction('/fetch-categories', this, 'Fetching…', 'Categories loaded!')" class="btn btn-success btn-sm">
+                    <i data-lucide="refresh-cw" style="width:13px;height:13px;"></i> Fetch Categories
+                </button>
+            </div>
+
+            <!-- Categories -->
+            <div class="card section">
+                <div class="card-header">
+                    <div class="card-title"><i data-lucide="folder-open" style="width:14px;height:14px;"></i> Categories</div>
+                    {% if config.categories %}<span class="badge badge-purple">{{ config.categories|length }}</span>{% endif %}
+                </div>
+                {% if config.categories %}
+                <div style="max-height:200px;overflow-y:auto;border:1px solid rgba(255,255,255,0.07);border-radius:7px;padding:10px;display:flex;flex-direction:column;gap:4px;">
+                    {% for category in config.categories %}
+                    <label class="checkbox-row" style="margin-bottom:0;">
+                        <input type="checkbox" name="selected_categories" value="{{ category.id }}"
+                            {% if category.id in config.selected_categories|map(attribute='id')|list %}checked{% endif %}>
+                        {{ category.name }}
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="alert alert-blue" style="margin-bottom:0;">
+                    <i data-lucide="info" style="width:14px;height:14px;"></i> No categories — click "Fetch Categories" above.
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Facebook -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="facebook" style="width:14px;height:14px;"></i> Facebook</div></div>
+                <label class="checkbox-row"><input type="checkbox" name="facebook_enabled" {% if config.facebook_enabled %}checked{% endif %}> Enable Facebook</label>
+                <div class="form-group">
+                    <label class="form-label">Page ID</label>
+                    <input type="text" name="facebook_page_id" value="{{ config.facebook_page_id }}" class="input" placeholder="123456789">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Access Token</label>
+                    <div class="input-secret">
+                        <input type="password" name="facebook_access_token" value="{{ config.facebook_access_token }}" class="input" placeholder="EAAxxxxx…" autocomplete="off">
+                        <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Twitter -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="twitter" style="width:14px;height:14px;"></i> Twitter / X</div></div>
+                <label class="checkbox-row"><input type="checkbox" name="twitter_enabled" {% if config.twitter_enabled %}checked{% endif %}> Enable Twitter</label>
+                {% for field in [('twitter_api_key','API Key'),('twitter_api_secret','API Secret'),('twitter_access_token','Access Token'),('twitter_access_secret','Access Secret')] %}
+                <div class="form-group" style="{% if loop.last %}margin-bottom:0;{% endif %}">
+                    <label class="form-label">{{ field[1] }}</label>
+                    <div class="input-secret">
+                        <input type="password" name="{{ field[0] }}" value="{{ config[field[0]] }}" class="input" autocomplete="off">
+                        <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Threads -->
+            <div class="card section">
+                <div class="card-header"><div class="card-title"><i data-lucide="at-sign" style="width:14px;height:14px;"></i> Threads</div></div>
+                <label class="checkbox-row"><input type="checkbox" name="threads_enabled" {% if config.threads_enabled %}checked{% endif %}> Enable Threads</label>
+                <div class="form-group">
+                    <label class="form-label">User ID</label>
+                    <input type="text" name="threads_user_id" value="{{ config.threads_user_id }}" class="input">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Access Token</label>
+                    <div class="input-secret">
+                        <input type="password" name="threads_access_token" value="{{ config.threads_access_token }}" class="input" autocomplete="off">
+                        <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Save — full width -->
+    <div style="display:flex;gap:8px;margin-top:4px;padding-bottom:8px;">
+        <button type="submit" class="btn btn-primary"><i data-lucide="save" style="width:14px;height:14px;"></i> Save Configuration</button>
+        <a href="/" class="btn btn-ghost"><i data-lucide="x" style="width:14px;height:14px;"></i> Cancel</a>
+    </div>
+
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('settings-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving…';
+    fetch('/save-config', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: new FormData(this)
+    }).then(r => r.json()).then(d => {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        lucide.createIcons({ nodes: [btn] });
+        d.success ? showToast('Configuration saved!', 'success') : showToast(d.error || 'Save failed', 'error');
+    }).catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        lucide.createIcons({ nodes: [btn] });
+        showToast('Save failed', 'error');
+    });
+});
+</script>
+{% endblock %}

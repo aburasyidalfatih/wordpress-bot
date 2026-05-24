@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{% block title %}WordPress Bot{% endblock %}</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <script src="/static/lucide.min.js"></script>
+</head>
+<body class="page-transition">
+
+{% block body %}
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+<div class="app-shell">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon">
+                <i data-lucide="bot" style="width:16px;height:16px;color:#fff;"></i>
+            </div>
+            <div>
+                <div class="sidebar-brand-name">WordPress Bot</div>
+                <div class="sidebar-brand-tag">Auto Publisher</div>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="/"         class="nav-item {% if active_page == 'dashboard' %}active{% endif %}"><i data-lucide="layout-dashboard" style="width:15px;height:15px;flex-shrink:0;"></i><span>Dashboard</span></a>
+            <a href="/settings" class="nav-item {% if active_page == 'settings'  %}active{% endif %}"><i data-lucide="settings"          style="width:15px;height:15px;flex-shrink:0;"></i><span>Settings</span></a>
+            <a href="/prompts"  class="nav-item {% if active_page == 'prompts'   %}active{% endif %}"><i data-lucide="file-text"         style="width:15px;height:15px;flex-shrink:0;"></i><span>Prompts</span></a>
+            <a href="/research" class="nav-item {% if active_page == 'research'  %}active{% endif %}"><i data-lucide="search"            style="width:15px;height:15px;flex-shrink:0;"></i><span>Research</span></a>
+            <a href="/monitor"  class="nav-item {% if active_page == 'monitor'   %}active{% endif %}"><i data-lucide="activity"          style="width:15px;height:15px;flex-shrink:0;"></i><span>Monitor</span></a>
+        </nav>
+
+        <div class="sidebar-bottom">
+            <button onclick="logout()" class="sidebar-logout">
+                <i data-lucide="log-out" style="width:15px;height:15px;flex-shrink:0;"></i><span>Logout</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- Page wrapper -->
+    <div class="page-wrapper">
+        <header class="topbar">
+            <button class="hamburger" onclick="toggleSidebar()"><i data-lucide="menu" style="width:16px;height:16px;"></i></button>
+            <div style="min-width:0;">
+                <div class="topbar-heading">{% block page_title %}{% endblock %}</div>
+                {% set subtitle %}{% block page_subtitle %}{% endblock %}{% endset %}
+                {% if subtitle.strip() %}<div class="topbar-sub">{{ subtitle }}</div>{% endif %}
+            </div>
+            <div class="topbar-right">{% block topbar_actions %}{% endblock %}</div>
+        </header>
+
+        <main class="page-content">
+            <div class="content-area">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+</div>
+{% endblock %}
+
+<div id="page-loader"></div>
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

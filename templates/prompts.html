@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% set active_page = 'prompts' %}
+{% block title %}Prompts — WordPress Bot{% endblock %}
+{% block page_title %}Custom Prompts{% endblock %}
+{% block page_subtitle %}Override default AI prompts for article & image generation{% endblock %}
+
+{% block topbar_actions %}
+<button type="submit" form="prompts-form" class="btn btn-primary btn-sm"><i data-lucide="save" style="width:13px;height:13px;"></i> Save</button>
+{% endblock %}
+
+{% block content %}
+<form id="prompts-form" method="POST" action="/save-prompts">
+
+    {# ── Article Prompt ── #}
+    <div class="card section">
+        <div class="card-header">
+            <div class="card-title"><i data-lucide="file-pen"></i> Article Generation Prompt</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+                {% if config.article_prompt %}
+                <span class="badge badge-green">Custom Active</span>
+                {% else %}
+                <span class="badge badge-slate">Using Default</span>
+                {% endif %}
+                <button type="button" onclick="loadDefault('article_prompt', defaultArticlePrompt)" class="btn btn-ghost btn-sm">
+                    <i data-lucide="download" style="width:12px;height:12px;"></i> Load Default
+                </button>
+                <button type="button" onclick="resetPrompt('article_prompt')" class="btn btn-ghost btn-sm">
+                    <i data-lucide="rotate-ccw" style="width:12px;height:12px;"></i> Reset
+                </button>
+            </div>
+        </div>
+
+        <div class="alert alert-blue" style="margin-bottom:14px;">
+            <i data-lucide="info" style="width:14px;height:14px;"></i>
+            <span>Variables: <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:0.75rem;">{topic}</code> <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:0.75rem;">{category}</code> <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:0.75rem;">{existing_titles}</code> <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:0.75rem;">{seo_section}</code> — Kosongkan untuk pakai default bawaan.</span>
+        </div>
+
+        <div class="form-group" style="margin-bottom:0;">
+            <textarea name="article_prompt" id="article_prompt" class="input prompt-textarea"
+                rows="22" spellcheck="false">{{ config.article_prompt or default_article_prompt }}</textarea>
+            <p class="form-hint" style="margin-top:6px;">
+                <i data-lucide="alert-triangle" style="width:11px;height:11px;display:inline;"></i>
+                Output HARUS JSON valid dengan keys: <code style="font-size:0.7rem;">title, content, meta_description, focus_keyword, excerpt</code>
+            </p>
+        </div>
+    </div>
+
+    {# ── Image Prompt ── #}
+    <div class="card section">
+        <div class="card-header">
+            <div class="card-title"><i data-lucide="image"></i> Image Generation Prompt</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+                {% if config.image_prompt %}
+                <span class="badge badge-green">Custom Active</span>
+                {% else %}
+                <span class="badge badge-slate">Using Default</span>
+                {% endif %}
+                <button type="button" onclick="loadDefault('image_prompt', defaultImagePrompt)" class="btn btn-ghost btn-sm">
+                    <i data-lucide="download" style="width:12px;height:12px;"></i> Load Default
+                </button>
+                <button type="button" onclick="resetPrompt('image_prompt')" class="btn btn-ghost btn-sm">
+                    <i data-lucide="rotate-ccw" style="width:12px;height:12px;"></i> Reset
+                </button>
+            </div>
+        </div>
+
+        <div class="alert alert-blue" style="margin-bottom:14px;">
+            <i data-lucide="info" style="width:14px;height:14px;"></i>
+            <span>Variables: <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:0.75rem;">{topic}</code> <code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:0.75rem;">{title}</code> — Kosongkan untuk pakai default bawaan.</span>
+        </div>
+
+        <div class="form-group" style="margin-bottom:0;">
+            <textarea name="image_prompt" id="image_prompt" class="input prompt-textarea"
+                rows="12" spellcheck="false">{{ config.image_prompt or default_image_prompt }}</textarea>
+        </div>
+    </div>
+
+    {# ── Save ── #}
+    <div style="display:flex;gap:8px;padding-bottom:8px;">
+        <button type="submit" class="btn btn-primary"><i data-lucide="save" style="width:14px;height:14px;"></i> Save Prompts</button>
+        <a href="/" class="btn btn-ghost"><i data-lucide="x" style="width:14px;height:14px;"></i> Cancel</a>
+    </div>
+
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const defaultArticlePrompt = {{ default_article_prompt | tojson }};
+const defaultImagePrompt = {{ default_image_prompt | tojson }};
+
+document.getElementById('prompts-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving…';
+    fetch('/save-prompts', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: new FormData(this)
+    }).then(r => r.json()).then(d => {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        lucide.createIcons({ nodes: [btn] });
+        d.success ? (showToast('Prompts saved!', 'success'), setTimeout(() => location.reload(), 800))
+                  : showToast(d.error || 'Save failed', 'error');
+    }).catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+        lucide.createIcons({ nodes: [btn] });
+        showToast('Save failed', 'error');
+    });
+});
+
+function loadDefault(fieldId, defaultText) {
+    document.getElementById(fieldId).value = defaultText;
+    showToast('Default prompt loaded — save to apply', 'info');
+}
+
+function resetPrompt(fieldId) {
+    showConfirm('Reset Prompt?', 'Ini akan menghapus custom prompt dan kembali ke default bawaan.', () => {
+        document.getElementById(fieldId).value = '';
+        showToast('Prompt cleared — save to apply', 'info');
+    });
+}
+</script>
+<style>
+.prompt-textarea {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.775rem;
+    line-height: 1.6;
+    resize: vertical;
+    min-height: 160px;
+}
+</style>
+{% endblock %}

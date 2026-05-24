@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sign In — WordPress Bot</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <script src="/static/lucide.min.js"></script>
+</head>
+<body class="page-transition" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
+
+    <div style="width:100%;max-width:340px;">
+        <div style="text-align:center;margin-bottom:24px;">
+            <div style="width:44px;height:44px;background:linear-gradient(135deg,#8b5cf6,#6d28d9);border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;box-shadow:0 0 20px rgba(139,92,246,0.35);">
+                <i data-lucide="bot" style="width:22px;height:22px;color:#fff;"></i>
+            </div>
+            <h1 style="font-size:1.25rem;font-weight:700;color:#f1f5f9;margin:0 0 4px;letter-spacing:-0.01em;">WordPress Bot</h1>
+            <p style="font-size:0.8rem;color:#475569;margin:0;">Enter your PIN to continue</p>
+        </div>
+
+        <div class="card">
+            {% if error %}
+            <div class="alert alert-red" style="margin-bottom:14px;">
+                <i data-lucide="alert-circle"></i> {{ error }}
+            </div>
+            {% endif %}
+
+            <form method="POST">
+                <div class="form-group">
+                    <label class="form-label" style="text-align:center;display:block;letter-spacing:0.04em;">PIN</label>
+                    <input type="tel" inputmode="numeric" name="pin"
+                        placeholder="● ● ● ● ● ●" maxlength="6" pattern="[0-9]{6}"
+                        class="input" style="text-align:center;font-size:1.5rem;letter-spacing:0.5em;padding:13px;"
+                        required autofocus>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;padding:10px;font-size:0.875rem;">
+                    <i data-lucide="unlock"></i> Sign In
+                </button>
+            </form>
+        </div>
+
+        <p style="text-align:center;font-size:0.7rem;color:#334155;margin-top:16px;">bot.kelasmaster.id</p>
+    </div>
+
+    <div id="page-loader"></div>
+    <script src="/static/app.js"></script>
+    <script>
+        document.querySelector('input[name="pin"]').addEventListener('input', e => {
+            e.target.value = e.target.value.replace(/\D/g, '');
+            if (e.target.value.length === 6) setTimeout(() => e.target.form.submit(), 300);
+        });
+    </script>
+</body>
+</html>

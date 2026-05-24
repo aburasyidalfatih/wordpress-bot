@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% set active_page = 'dashboard' %}
+{% block title %}Dashboard — WordPress Bot{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_subtitle %}Content generation & publishing{% endblock %}
+
+{% block topbar_actions %}
+<button onclick="manualPost(this)" class="btn btn-primary btn-sm"><i data-lucide="file-pen"></i> Post Now</button>
+<button onclick="apiAction('/manual-research', this, 'Researching…', 'Research complete!')" class="btn btn-ghost btn-sm"><i data-lucide="search"></i> Research</button>
+<button onclick="apiAction('/sync-engagement', this, 'Syncing…', 'Sync complete!')" class="btn btn-ghost btn-sm"><i data-lucide="refresh-cw"></i> Sync</button>
+<button onclick="apiAction('/optimize-categories', this, 'Optimizing…', 'Done!')" class="btn btn-ghost btn-sm"><i data-lucide="target"></i> Optimize</button>
+{% endblock %}
+
+{% block content %}
+
+{# ── Status banner ── #}
+{% if config.auto_post %}
+<div class="alert alert-green">
+    <span style="width:7px;height:7px;background:#4ade80;border-radius:50%;flex-shrink:0;animation:blink 2s infinite;"></span>
+    <span><strong style="color:#4ade80;">Auto Post Active</strong> &nbsp;·&nbsp; Every {{ config.interval_hours }}h &nbsp;·&nbsp; {{ config.gemini_model or 'gemini-2.5-pro' }} / {{ config.gemini_image_model or 'gemini-3.1-flash-image-preview' }}</span>
+    {% if next_post_time %}
+    <span style="margin-left:auto;font-size:0.75rem;color:#475569;display:flex;align-items:center;gap:4px;flex-shrink:0;">
+        <i data-lucide="clock" style="width:12px;height:12px;"></i> Next: {{ next_post_time.strftime('%d %b, %H:%M') }}
+    </span>
+    {% endif %}
+</div>
+{% else %}
+<div class="alert alert-yellow">
+    <i data-lucide="pause-circle"></i>
+    <span><strong style="color:#fbbf24;">Auto Post Paused</strong> &nbsp;·&nbsp; Enable in <a href="/settings" style="color:#a78bfa;text-decoration:underline;">Settings</a> &nbsp;·&nbsp; {{ config.gemini_model or 'gemini-2.5-pro' }} / {{ config.gemini_image_model or 'gemini-3.1-flash-image-preview' }}</span>
+</div>
+{% endif %}
+
+{# ── Stats ── #}
+<div class="stats-grid section">
+    <div class="stat-card">
+        <div class="stat-label">Total Articles</div>
+        <div class="stat-value" style="color:#a78bfa;">{{ stats.total_posts }}</div>
+        <div class="stat-sub">All time</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Published</div>
+        <div class="stat-value" style="color:#4ade80;">{{ stats.successful_posts }}</div>
+        <div class="stat-sub">Successful posts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Failed</div>
+        <div class="stat-value" style="color:#f87171;">{{ stats.failed_posts }}</div>
+        <div class="stat-sub">Errors</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Success Rate</div>
+        <div class="stat-value" style="color:#fbbf24;">
+            {% if stats.total_posts > 0 %}{{ "%.0f"|format((stats.successful_posts / stats.total_posts) * 100) }}%{% else %}—{% endif %}
+        </div>
+        <div class="stat-sub">Overall</div>
+    </div>
+</div>
+
+{# ── AI Insights ── #}
+{% if insights.status == 'success' and insights.recommendations %}
+<div class="card section">
+    <div class="card-header">
+        <div class="card-title"><i data-lucide="sparkles"></i> AI Insights</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+        {% for rec in insights.recommendations %}
+        <div style="padding:12px 14px;border-radius:7px;background:rgba(255,255,255,0.02);border-left:2px solid {% if rec.type == 'increase_frequency' %}#4ade80{% else %}#fbbf24{% endif %};">
+            <div style="font-size:0.8125rem;font-weight:600;color:{% if rec.type == 'increase_frequency' %}#4ade80{% else %}#fbbf24{% endif %};margin-bottom:3px;">{{ rec.category }}</div>
+            <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:3px;">{{ rec.reason }}</div>
+            <div style="font-size:0.75rem;color:#475569;display:flex;align-items:center;gap:4px;"><i data-lucide="lightbulb" style="width:11px;height:11px;"></i> {{ rec.action }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{# ── Category Performance ── #}
+{% if performance %}
+<div class="card section">
+    <div class="card-header">
+        <div class="card-title"><i data-lucide="bar-chart-2"></i> Category Performance</div>
+    </div>
+    <div style="overflow-x:auto;">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Category</th>
+                    <th class="center">Posts</th>
+                    <th class="center">Avg Engagement</th>
+                    <th class="center">Views</th>
+                    <th class="center">Comments</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cat in performance %}
+                <tr>
+                    <td style="font-weight:500;color:#e2e8f0;">{{ cat.category }}</td>
+                    <td class="center"><span class="badge badge-purple">{{ cat.total_posts }}</span></td>
+                    <td class="center"><span class="badge badge-green">{{ cat.avg_engagement }}</span></td>
+                    <td class="center" style="color:#64748b;">{{ cat.total_views }}</td>
+                    <td class="center" style="color:#64748b;">{{ cat.total_comments }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{# ── Recent Activity ── #}
+<div class="card section">
+    <div class="card-header">
+        <div class="card-title"><i data-lucide="clock"></i> Recent Activity</div>
+        <span class="badge badge-slate">Last 20</span>
+    </div>
+    <div class="activity-list">
+        {% if logs %}
+        {% for log in logs %}
+        <div class="activity-row">
+            <div class="activity-dot" style="background:{% if log.success %}#4ade80{% else %}#f87171{% endif %};"></div>
+            <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="activity-title">{{ log.title }}</span>
+                    {% if log.success and log.post_url %}
+                    <a href="{{ log.post_url }}" target="_blank" style="color:#6d28d9;flex-shrink:0;display:flex;">
+                        <i data-lucide="external-link" style="width:12px;height:12px;"></i>
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="activity-meta">
+                    <span class="badge badge-purple">{{ log.category }}</span>
+                    <span class="activity-meta-item">{{ log.timestamp }}</span>
+                    {% if log.views > 0 %}
+                    <span class="activity-meta-item"><i data-lucide="eye"></i> {{ log.views }}</span>
+                    <span class="activity-meta-item"><i data-lucide="message-circle"></i> {{ log.comments }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <span class="badge {% if log.success %}badge-green{% else %}badge-red{% endif %}" style="flex-shrink:0;">
+                {% if log.success %}Published{% else %}Failed{% endif %}
+            </span>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div style="text-align:center;padding:32px 0;">
+            <i data-lucide="inbox" style="width:32px;height:32px;color:#1e293b;margin-bottom:10px;display:block;margin-left:auto;margin-right:auto;"></i>
+            <p style="font-size:0.8125rem;color:#334155;">No activity yet. Post your first article!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<div id="loadingOverlay" class="hidden">
+    <div class="loading-box">
+        <div class="spinner spinner-lg" style="margin:0 auto;"></div>
+        <h3 id="loading-msg">Generating Article…</h3>
+        <p>This may take 30–60 seconds</p>
+    </div>
+</div>
+<script>
+function manualPost(btn) {
+    fetch('/api/next-category').then(r=>r.json()).then(d=>doPost(d.category||'Unknown')).catch(()=>doPost('Unknown'));
+}
+function doPost(cat) {
+    showConfirm('Post Article Now?', `Next category: ${cat}`, () => {
+        showLoading();
+        fetch('/manual-post',{method:'POST'}).then(r=>r.json()).then(d=>{
+            hideLoading();
+            d.success ? (showToast('Article posted!','success'),setTimeout(()=>location.reload(),1500)) : showToast('Error: '+d.error,'error');
+        }).catch(e=>{hideLoading();showToast('Error: '+e,'error');});
+    });
+}
+</script>
+<style>@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}</style>
+{% endblock %}
