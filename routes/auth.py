@@ -228,3 +228,11 @@ def api_auth_verify(user_id):
             'tier': user.tier or 'free',
             'credits': user.credits if user.credits is not None else 5
         })
+
+@auth_bp.route('/api/auth/config', methods=['GET'])
+def api_auth_config():
+    from config import Config
+    return jsonify({
+        'success': True,
+        'google_client_id': Config.GOOGLE_CLIENT_ID or ''
+    })
