@@ -56,28 +56,46 @@ app.register_blueprint(prompts_bp)
 # Background tasks & workers retained in app namespace for RQ compatibility
 
 def regenerate_image_job(user_id, log_id):
-    from database import PostLog
+    from database import PostLog, WordPressSite
     from bot import ArticleGenerator, WordPressPublisher
     try:
         config = load_config(user_id)
         generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
-        publisher = WordPressPublisher(
-            config['wordpress_url'],
-            config['wordpress_username'],
-            config['wordpress_password']
-        )
         
         with db.get_session() as session:
             log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
             if not log:
+                logger.error(f"Post log not found for ID {log_id}")
                 return
             
             title = log.title
             category_name = log.category_name
             post_id = log.post_id
+            site_id = log.site_id
+            
+            if not site_id:
+                # Fallback to first active site if site_id is missing from log
+                site = session.query(WordPressSite).filter_by(user_id=user_id, is_active=True).first()
+            else:
+                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+                
+            if not site:
+                logger.error(f"No active WordPress site found for user {user_id} and site {site_id}")
+                return
+                
+            wordpress_url = site.wordpress_url
+            wordpress_username = site.wordpress_username
+            wordpress_password = site.wordpress_password
             
         if not post_id:
+            logger.error("No post ID found in post log")
             return
+            
+        publisher = WordPressPublisher(
+            wordpress_url,
+            wordpress_username,
+            wordpress_password
+        )
             
         logger.info(f"Regenerating image for post {post_id} - {title}")
         custom_image_prompt = config.get('image_prompt') or None
