@@ -9,8 +9,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=your-super-secret-jwt-key
-      # Add FERNET_KEY here or let Dokploy handle it
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-jwt-key}
+      - FERNET_KEY=${FERNET_KEY}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.autowp-web.rule=Host(`autowp.web.id`)"
@@ -27,6 +27,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
       - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-jwt-key}
+      - FERNET_KEY=${FERNET_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,6 +41,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
       - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-jwt-key}
+      - FERNET_KEY=${FERNET_KEY}
     depends_on:
       redis:
         condition: service_healthy
