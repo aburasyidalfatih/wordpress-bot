@@ -18,6 +18,10 @@ def api_dashboard(user_id):
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
             
+        site_auto_post = site.auto_post
+        site_selected_categories = site.selected_categories
+        site_schedule_hours = site.schedule_hours
+            
         logs = db.get_logs(user_id, site_id=site_id, limit=20)
         stats = db.get_stats(user_id, site_id=site_id)
         insights = optimizer.get_content_recommendations(user_id, site_id=site_id) 
@@ -25,8 +29,8 @@ def api_dashboard(user_id):
         
         # Get next scheduled post time dynamically
         next_post_time = None
-        if site.auto_post and site.selected_categories:
-            schedule_hours = site.schedule_hours or '0,6,12,18'
+        if site_auto_post and site_selected_categories:
+            schedule_hours = site_schedule_hours or '0,6,12,18'
             try:
                 hours_list = sorted([int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()])
                 if hours_list:
