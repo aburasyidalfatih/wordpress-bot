@@ -410,7 +410,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 f"📝 <b>Judul:</b> {article.get('title', '')}\n"
                 f"📂 <b>Kategori:</b> {category['name']}\n"
                 f"📊 <b>Panjang:</b> {len(article.get('content', '').split())} kata\n"
-                f"🎨 <b>Featured Image:</b> JPEG ({file_size:.1f} KB)\n"
+                f"🎨 <b>Featured Image:</b> WebP ({file_size:.1f} KB)\n"
                 f"🔗 <b>URL:</b> {post_url}\n\n"
                 f"🎉 Status: Published")
             

@@ -414,8 +414,7 @@ Style: Educational blog featured image."""
                 config=types.GenerateContentConfig(
                     response_modalities=['IMAGE'],
                     image_config=types.ImageConfig(
-                        aspect_ratio='16:9',  # Landscape for featured image
-                        image_size='2K'
+                        aspect_ratio='16:9'  # Landscape for featured image
                     )
                 )
             )
@@ -424,16 +423,16 @@ Style: Educational blog featured image."""
                 if part.inline_data is not None:
                     image_bytes = part.inline_data.data
                     
-                    # Convert to JPEG for better compatibility and compression
+                    # Convert to WebP for better compression
                     img = Image.open(BytesIO(image_bytes))
                     
-                    # Convert RGBA to RGB if needed (JPEG does not support alpha channel)
+                    # Convert RGBA to RGB if needed
                     if img.mode != 'RGB':
                         img = img.convert('RGB')
                     
-                    # Save as JPEG with high quality
+                    # Save as WebP with high quality
                     output = BytesIO()
-                    img.save(output, format='JPEG', quality=85)
+                    img.save(output, format='WEBP', quality=85)
                     output.seek(0)
                     return output
             
@@ -495,8 +494,8 @@ class WordPressPublisher:
         try:
             if isinstance(image_data, BytesIO):
                 image_bytes = image_data.getvalue()
-                filename = f'{title[:50].replace("/", "-").replace(":", "").replace(" ", "-")}.jpg'
-                mime_type = 'image/jpeg'
+                filename = f'{title[:50].replace("/", "-").replace(":", "").replace(" ", "-")}.webp'
+                mime_type = 'image/webp'
             else:
                 response = requests.get(image_data, timeout=30)
                 if response.status_code != 200:
