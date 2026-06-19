@@ -1,29 +1,5 @@
-from flask import Blueprint, request, jsonify
-from core_extensions import db, load_config, require_jwt
-
-prompts_bp = Blueprint('prompts', __name__)
-
-@prompts_bp.route('/api/prompts')
-@require_jwt
-def api_prompts(user_id):
-    site_id = request.args.get('site_id', type=int)
-    
-    if not site_id:
-        return jsonify({'success': False, 'error': 'site_id is required'}), 400
-        
-    with db.get_session() as session:
-        from database import WordPressSite
-        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-        if not site:
-            return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
-        return jsonify({
-            'success': True,
-            'config': {
-                'article_prompt': site.article_prompt,
-                'image_prompt': site.image_prompt
-            },
-            'default_article_prompt': """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website kelasmaster.id tentang: {topic}
+===ARTICLE===
+Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website kelasmaster.id tentang: {topic}
 {existing_titles}{research_note}{seo_section}
 TARGET AUDIENCE: Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia
 
@@ -97,8 +73,9 @@ FORMAT OUTPUT (JSON valid, tanpa markdown code blocks):
     "excerpt": "Ringkasan engaging 2-3 kalimat",
     "reading_time": "estimasi menit",
     "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"]
-}""",
-            'default_image_prompt': """Create a professional featured image for this article about {topic}.
+}
+===IMAGE===
+Create a professional featured image for this article about {topic}.
 
 Article Title: "{title}"
 
@@ -111,28 +88,4 @@ Design Requirements:
 - High quality, eye-catching design
 - Suitable as blog header/featured image
 
-Style: Modern, professional, suitable for educational blog featured image."""
-        })
-
-@prompts_bp.route('/save-prompts', methods=['POST'])
-@require_jwt
-def save_prompts(user_id):
-    site_id = request.form.get('site_id', type=int)
-    
-    if not site_id:
-        return jsonify({'success': False, 'error': 'site_id is required'}), 400
-        
-    article_prompt = request.form.get('article_prompt')
-    image_prompt = request.form.get('image_prompt')
-    
-    with db.get_session() as session:
-        from database import WordPressSite
-        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-        if not site:
-            return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
-        site.article_prompt = article_prompt
-        site.image_prompt = image_prompt
-        session.commit()
-        
-    return jsonify({'success': True, 'message': 'Prompts saved!'})
+Style: Modern, professional, suitable for educational blog featured image.
