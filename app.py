@@ -256,7 +256,13 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         
         custom_article_prompt = site_config.get('article_prompt') or None
         custom_image_prompt = site_config.get('image_prompt') or None
-        article = generator.generate_article(category['name'], existing_titles, custom_topic, seo_data, custom_prompt=custom_article_prompt, site_name=site_config['site_name'])
+        article = generator.generate_article(
+            category['name'], 
+            existing_titles, 
+            custom_topic, 
+            seo_data,
+            custom_prompt=custom_article_prompt
+        )
         
         # Check for duplicate or similar titles
         def is_similar_title(new_title, existing_titles):
@@ -308,8 +314,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 custom_topic, 
                 seo_data,
                 avoid_similar=True,
-                custom_prompt=custom_article_prompt,
-                site_name=site_config['site_name']
+                custom_prompt=custom_article_prompt
             )
         
         image_data = generator.generate_image(
@@ -416,7 +421,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             category_name=log_category_name,
             title=f"ERROR: {log_title}",
             success=False,
-            result_msg=f"Sistem Berhenti Tiba-tiba: {error_msg}",
+            result=f"Sistem Berhenti Tiba-tiba: {error_msg}",
             post_id=None,
             post_url=None
         )
