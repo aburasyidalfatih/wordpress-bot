@@ -9,6 +9,7 @@ export interface WordPressSite {
   is_active: boolean;
 
   schedule_hours: string;
+  timezone?: string;
   auto_post: boolean;
   categories: any[];
   selected_categories: any[];

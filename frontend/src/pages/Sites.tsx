@@ -31,6 +31,7 @@ export default function Sites() {
       is_active: true,
       auto_post: false,
       schedule_hours: '0,6,12,18',
+      timezone: 'Asia/Jakarta',
       telegram_enabled: false,
       facebook_enabled: false,
       twitter_enabled: false,
@@ -248,11 +249,34 @@ export default function Sites() {
 
 
                       
-                      <div className="pt-4 border-t">
+                      <div className="pt-4 border-t grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
                           <Label htmlFor="schedule_hours" className="text-foreground">Posting Schedule (Hours)</Label>
                           <Input id="schedule_hours" name="schedule_hours" value={currentSite.schedule_hours || ''} onChange={handleChange} placeholder="0, 6, 12, 18" className="bg-background" />
                           <p className="text-[11px] text-muted-foreground leading-tight">Comma-separated hours (0-23). Example: 0, 6, 12, 18</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="timezone" className="text-foreground">Timezone</Label>
+                          <select 
+                            id="timezone" 
+                            name="timezone" 
+                            value={currentSite.timezone || 'Asia/Jakarta'} 
+                            onChange={(e) => setCurrentSite(prev => ({ ...prev, timezone: e.target.value }))}
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <option value="Asia/Jakarta">Asia/Jakarta (WIB, GMT+7)</option>
+                            <option value="Asia/Makassar">Asia/Makassar (WITA, GMT+8)</option>
+                            <option value="Asia/Jayapura">Asia/Jayapura (WIT, GMT+9)</option>
+                            <option value="Asia/Singapore">Asia/Singapore (GMT+8)</option>
+                            <option value="UTC">UTC (GMT+0)</option>
+                            <option value="Europe/London">Europe/London (GMT/BST)</option>
+                            <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
+                            <option value="America/New_York">America/New_York (EST/EDT)</option>
+                            <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                            <option value="Asia/Tokyo">Asia/Tokyo (JST, GMT+9)</option>
+                            <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
+                          </select>
+                          <p className="text-[11px] text-muted-foreground leading-tight">Select the timezone for this website's posting schedule.</p>
                         </div>
                       </div>
 

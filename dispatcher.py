@@ -5,7 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from redis import Redis
 from rq import Queue
-from database import Database, WordPressSite, User
+from database import Database, WordPressSite
 
 # Setup logging
 logging.basicConfig(
@@ -24,61 +24,67 @@ db_url = os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db')
 db = Database(db_url)
 
 def dispatch_jobs():
-    logger.info("Running central dispatcher...")
-    wib = ZoneInfo("Asia/Jakarta")
     with db.get_session() as session:
         # Get all active WordPress sites
         sites = session.query(WordPressSite).filter_by(is_active=True).all()
         
-        current_hour = datetime.now(wib).hour
-        
         for site in sites:
             user_id = site.user_id
             site_id = site.id
+            tz_name = site.timezone or 'Asia/Jakarta'
             
-            # Check auto post
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception as e:
+                logger.error(f"Invalid timezone '{tz_name}' for site_id={site_id}, falling back to Asia/Jakarta: {e}")
+                tz = ZoneInfo('Asia/Jakarta')
+            
+            now_site = datetime.now(tz)
+            current_hour = now_site.hour
+            current_hour_str = now_site.strftime("%Y-%m-%d %H")
+            
+            # 1. Check auto post
             if site.auto_post and site.selected_categories:
                 schedule_hours = site.schedule_hours or '0,6,12,18'
                 try:
                     hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
                     if current_hour in hours_list:
-                        logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id} (hour={current_hour})")
-                        q.enqueue('app.generate_and_post', user_id, None, site_id)
+                        lock_key = f"scheduler:last_run_post:{site_id}"
+                        last_run = redis_conn.get(lock_key)
+                        if last_run:
+                            last_run = last_run.decode('utf-8')
+                        
+                        if last_run != current_hour_str:
+                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id} (hour={current_hour} in {tz_name})")
+                            q.enqueue('app.generate_and_post', user_id, None, site_id)
+                            redis_conn.set(lock_key, current_hour_str)
                 except Exception as e:
-                    logger.error(f"Error parsing schedule for site_id={site_id}: {e}")
+                    logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
             
-            # Check auto research (runs daily at 00:00)
+            # 2. Check auto research (runs daily at 00:00)
             if site.auto_research_enabled:
                 if current_hour == 0:
                     try:
-                        logger.info(f"Enqueueing deep_research_job for user_id={user_id}, site_id={site_id} (hour={current_hour})")
-                        q.enqueue('app.deep_research_job', user_id, True, site_id)
+                        lock_key = f"scheduler:last_run_research:{site_id}"
+                        last_run = redis_conn.get(lock_key)
+                        if last_run:
+                            last_run = last_run.decode('utf-8')
+                        
+                        if last_run != current_hour_str:
+                            logger.info(f"Enqueueing deep_research_job for user_id={user_id}, site_id={site_id} (hour={current_hour} in {tz_name})")
+                            q.enqueue('app.deep_research_job', user_id, True, site_id)
+                            redis_conn.set(lock_key, current_hour_str)
                     except Exception as e:
-                        logger.error(f"Error enqueuing deep_research_job for site_id={site_id}: {e}")
+                        logger.error(f"Error checking auto research for site_id={site_id}: {e}")
 
 if __name__ == '__main__':
     logger.info("Dispatcher started.")
     
-    # Target timezone is Asia/Jakarta (WIB)
-    wib = ZoneInfo("Asia/Jakarta")
-    
     while True:
         try:
-            now = datetime.now(wib)
-            current_hour_str = now.strftime("%Y-%m-%d %H")
-            
-            # Check Redis for the last run hour to prevent missed/double runs on restarts
-            last_run = redis_conn.get("scheduler:last_run")
-            if last_run:
-                last_run = last_run.decode('utf-8')
-            
-            # If the current hour is different from the last run hour, execute jobs
-            if last_run != current_hour_str:
-                dispatch_jobs()
-                redis_conn.set("scheduler:last_run", current_hour_str)
-                
+            dispatch_jobs()
         except Exception as e:
-            logger.error(f"Error in scheduler loop: {e}")
+            logger.error(f"Error in scheduler main loop: {e}")
             
         # Check every 10 seconds to ensure high precision without CPU overhead
         time.sleep(10)

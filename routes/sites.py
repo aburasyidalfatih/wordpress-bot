@@ -21,6 +21,7 @@ def get_sites(user_id):
                 'is_active': site.is_active,
 
                 'schedule_hours': site.schedule_hours,
+                'timezone': site.timezone,
                 'auto_post': site.auto_post,
                 'categories': site.categories,
                 'selected_categories': site.selected_categories,
@@ -53,6 +54,7 @@ def create_site(user_id):
             wordpress_password=data.get('wordpress_password', ''), # Virtual setter
 
             schedule_hours=data.get('schedule_hours', '0,6,12,18'),
+            timezone=data.get('timezone', 'Asia/Jakarta'),
             auto_post=data.get('auto_post', False)
         )
         session.add(site)
@@ -79,6 +81,7 @@ def update_site(user_id, site_id):
         # Update schedule
 
         if 'schedule_hours' in data: site.schedule_hours = data['schedule_hours']
+        if 'timezone' in data: site.timezone = data['timezone']
         if 'auto_post' in data: site.auto_post = data['auto_post']
         
         # Update categories
