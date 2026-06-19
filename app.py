@@ -317,19 +317,26 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 custom_prompt=custom_article_prompt
             )
         
-        image_data = generator.generate_image(
-            category['name'], 
-            article.get('title', ''),
-            article.get('content', ''),
-            custom_prompt=custom_image_prompt
-        )
         image_failed = False
         featured_image_id = None
-        if image_data:
-            featured_image_id = publisher.upload_image(image_data, article.get('title', ''))
-            if not featured_image_id:
+        
+        try:
+            logger.info("Generating featured image...")
+            image_data = generator.generate_image(
+                category['name'], 
+                article.get('title', ''),
+                article.get('content', ''),
+                custom_prompt=custom_image_prompt
+            )
+            if image_data:
+                logger.info("Uploading featured image...")
+                featured_image_id = publisher.upload_image(image_data, article.get('title', ''))
+                if not featured_image_id:
+                    image_failed = True
+            else:
                 image_failed = True
-        else:
+        except Exception as img_err:
+            logger.error(f"Image generation or upload failed: {img_err}", exc_info=True)
             image_failed = True
         
         success, result = publisher.create_post(
