@@ -122,13 +122,14 @@ def generate_titles(user_id, category):
             
             keywords = latest.keywords if latest and latest.keywords else []
             questions = latest.questions if latest and latest.questions else []
+            site_name = site.site_name
         
         # Use ArticleGenerator to suggest titles
         from bot import ArticleGenerator
         generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
         
         # Prompt Gemini to generate titles
-        prompt = f"""Buatlah {count} judul artikel blog yang sangat menarik, click-worthy, dan SEO-optimized untuk kategori "{category}" pada website {site.site_name}.
+        prompt = f"""Buatlah {count} judul artikel blog yang sangat menarik, click-worthy, dan SEO-optimized untuk kategori "{category}" pada website {site_name}.
 Fokuskan pada audiens yang relevan.
 Tahun saat ini: 2026. Jangan gunakan tahun 2024 atau 2025.
 Kata kunci terkait: {', '.join(keywords[:5]) if keywords else category}
