@@ -400,7 +400,27 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             logger.error(f"Article publish failed: {result}")
             
     except Exception as e:
-        logger.error(f"Error in generate_and_post: {e}", exc_info=True)
+        error_msg = str(e)
+        logger.error(f"Error in generate_and_post for site {site_id}: {error_msg}", exc_info=True)
+        
+        # Determine category values for logging even if it failed early
+        log_category_id = category['id'] if 'category' in locals() and category else None
+        log_category_name = category['name'] if 'category' in locals() and category else "Unknown Category"
+        log_title = custom_topic if 'custom_topic' in locals() and custom_topic else "Unknown Title"
+        
+        # Add to history so user sees the failure
+        db.add_log(
+            user_id=user_id,
+            site_id=site_id,
+            category_id=log_category_id,
+            category_name=log_category_name,
+            title=f"ERROR: {log_title}",
+            success=False,
+            result_msg=f"Sistem Berhenti Tiba-tiba: {error_msg}",
+            post_id=None,
+            post_url=None
+        )
+        
         if item_id:
             try:
                 from database import ContentQueue
