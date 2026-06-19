@@ -2,6 +2,16 @@
 SEO Research Module - Advanced Enterprise Keyword & Competitor Research
 Uses open source libraries to perform deep topic analysis.
 """
+import urllib3
+import urllib3.util.retry
+
+# Monkey-patch urllib3 Retry to support old method_whitelist parameter used by pytrends
+original_init = urllib3.util.retry.Retry.__init__
+def patched_init(self, *args, **kwargs):
+    if 'method_whitelist' in kwargs:
+        kwargs['allowed_methods'] = kwargs.pop('method_whitelist')
+    original_init(self, *args, **kwargs)
+urllib3.util.retry.Retry.__init__ = patched_init
 
 import requests
 from bs4 import BeautifulSoup
@@ -38,7 +48,20 @@ class SEOResearch:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        self.ddgs = DDGS(verify=False) if DDGS else None
+        if DDGS:
+            try:
+                # Try simple initialization (v6.x compatibility)
+                self.ddgs = DDGS()
+            except Exception as e:
+                logger.warning(f"Failed to initialize DDGS with default arguments: {e}. Trying verify=False fallback.")
+                try:
+                    # Fallback for older versions if needed
+                    self.ddgs = DDGS(verify=False)
+                except Exception as ex:
+                    logger.error(f"Failed to initialize DDGS: {ex}")
+                    self.ddgs = None
+        else:
+            self.ddgs = None
     
     def get_keyword_suggestions(self, keyword, limit=10):
         """Get keyword suggestions from Google Autocomplete"""

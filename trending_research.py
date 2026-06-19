@@ -1,3 +1,14 @@
+import urllib3
+import urllib3.util.retry
+
+# Monkey-patch urllib3 Retry to support old method_whitelist parameter used by pytrends
+original_init = urllib3.util.retry.Retry.__init__
+def patched_init(self, *args, **kwargs):
+    if 'method_whitelist' in kwargs:
+        kwargs['allowed_methods'] = kwargs.pop('method_whitelist')
+    original_init(self, *args, **kwargs)
+urllib3.util.retry.Retry.__init__ = patched_init
+
 from pytrends.request import TrendReq
 import logging
 from datetime import datetime, timedelta
@@ -58,7 +69,7 @@ class TrendingResearch:
     def get_interest_over_time(self, keywords):
         """Get interest over time for keywords"""
         try:
-            self.pytrends.build_payload(keywords, timeframe='today 3-m', geo='ID')
+            self._get_pytrends().build_payload(keywords, timeframe='today 3-m', geo='ID')
             time.sleep(1)
             data = self.pytrends.interest_over_time()
             

@@ -11,6 +11,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 logger = logging.getLogger(__name__)
 
+def sanitize_filename(name):
+    import re
+    import unicodedata
+    name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
+    name = re.sub(r'[^a-zA-Z0-9._-]', '-', name)
+    name = re.sub(r'-+', '-', name)
+    return name.strip('-')
+
 class ArticleGenerator:
     def __init__(self, api_key, model='gemini-3.5-flash', image_model='gemini-3.1-flash-image'):
         self.client = genai.Client(api_key=api_key)
@@ -499,7 +507,8 @@ class WordPressPublisher:
         try:
             if isinstance(image_data, BytesIO):
                 image_bytes = image_data.getvalue()
-                filename = f'{title[:50].replace("/", "-").replace(":", "").replace(" ", "-")}.webp'
+                sanitized_title = sanitize_filename(title[:50])
+                filename = f'{sanitized_title}.webp'
                 mime_type = 'image/webp'
             else:
                 response = requests.get(image_data, timeout=30)
@@ -507,7 +516,8 @@ class WordPressPublisher:
                     logger.error(f"Failed to download image: {response.status_code}")
                     return None
                 image_bytes = response.content
-                filename = f'{title[:50].replace("/", "-").replace(":", "").replace(" ", "-")}.jpg'
+                sanitized_title = sanitize_filename(title[:50])
+                filename = f'{sanitized_title}.jpg'
                 mime_type = 'image/jpeg'
             
             # Upload via WordPress REST API
