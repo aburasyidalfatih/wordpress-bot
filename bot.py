@@ -22,7 +22,11 @@ class ArticleGenerator:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
     )
-    def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None):
+    def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, **kwargs):
+        # Resolve custom prompt from either parameter name
+        custom_prompt = custom_prompt or kwargs.get('custom_article_prompt')
+        target_site = site_name if site_name else "kelasmaster.id"
+        target_audience = "Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia" if target_site == "kelasmaster.id" else f"Pembaca website {target_site}"
         # Context mapping untuk setiap kategori
         context_map = {
             'Digitalisasi Pendidikan': 'transformasi digital sekolah, sistem informasi manajemen pendidikan, platform pembelajaran online, administrasi paperless, teknologi pendidikan',
@@ -84,9 +88,9 @@ class ArticleGenerator:
                     seo_section += f"- {q}\n"
                 seo_section += "\n💡 Pastikan artikel menjawab pertanyaan-pertanyaan ini secara lengkap!\n"
         
-        prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website kelasmaster.id tentang: {topic_focus}
+        prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}
-TARGET AUDIENCE: Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia
+TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
 
 ⚠️ PENTING - TAHUN SAAT INI: 2026
@@ -265,7 +269,7 @@ CRITICAL:
 
         # Use custom prompt if provided, injecting dynamic variables
         if custom_prompt:
-            prompt = custom_prompt.replace('{topic}', topic_focus).replace('{category}', topic).replace('{existing_titles}', existing_titles_text).replace('{seo_section}', seo_section).replace('{research_note}', research_note)
+            prompt = custom_prompt.replace('{topic}', topic_focus).replace('{category}', topic).replace('{existing_titles}', existing_titles_text).replace('{seo_section}', seo_section).replace('{research_note}', research_note).replace('{site_name}', target_site)
 
         response = self.client.models.generate_content(
             model=self.model,
@@ -377,8 +381,9 @@ CRITICAL:
                 ]
             }
     
-    def generate_image(self, topic, title, article_content=None, custom_prompt=None):
+    def generate_image(self, topic, title, article_content=None, custom_prompt=None, site_name=None, **kwargs):
         """Generate landscape featured image for blog"""
+        target_site = site_name if site_name else "kelasmaster.id"
         try:
             if article_content:
                 prompt = f"""Create a professional featured image for this article about {topic}.
@@ -387,25 +392,25 @@ Article Title: {title}
 
 Design Requirements:
 - Modern, clean design in landscape orientation (16:9) - perfect for blog featured image
-- Professional color scheme (blues, greens, education colors)
+- Professional color scheme (blues, greens, corporate/modern colors)
 - Include the title text: "{title}"
 - Add relevant visual elements, icons, or illustrations
-- "kelasmaster.id" branding subtly placed
+- "{target_site}" branding subtly placed
 - High quality, eye-catching design
 - Suitable as blog header/featured image
 
-Style: Modern, professional, suitable for educational blog featured image."""
+Style: Modern, professional, suitable for blog featured image."""
             else:
                 prompt = f"""Create a professional featured image about {topic}.
 
 Title: "{title}"
 
-Design: Modern, landscape (16:9), professional colors, with title text and kelasmaster.id branding.
-Style: Educational blog featured image."""
+Design: Modern, landscape (16:9), professional colors, with title text and {target_site} branding.
+Style: Blog featured image."""
 
             # Use custom image prompt if provided
             if custom_prompt:
-                prompt = custom_prompt.replace('{topic}', topic).replace('{title}', title)
+                prompt = custom_prompt.replace('{topic}', topic).replace('{title}', title).replace('{site_name}', target_site)
 
             # Use configured image model for image generation
             response = self.client.models.generate_content(

@@ -104,7 +104,8 @@ def regenerate_image_job(user_id, log_id):
             category_name,
             title,
             "",
-            custom_prompt=custom_image_prompt
+            custom_prompt=custom_image_prompt,
+            site_name=site.site_name
         )
         
         if image_data:
@@ -279,7 +280,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             existing_titles, 
             custom_topic, 
             seo_data,
-            custom_prompt=custom_article_prompt
+            custom_prompt=custom_article_prompt,
+            site_name=site_config.get('site_name')
         )
         
         # Check for duplicate or similar titles
@@ -332,7 +334,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 custom_topic, 
                 seo_data,
                 avoid_similar=True,
-                custom_prompt=custom_article_prompt
+                custom_prompt=custom_article_prompt,
+                site_name=site_config.get('site_name')
             )
         
         image_failed = False
@@ -344,7 +347,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 category['name'], 
                 article.get('title', ''),
                 article.get('content', ''),
-                custom_prompt=custom_image_prompt
+                custom_prompt=custom_image_prompt,
+                site_name=site_config.get('site_name')
             )
             if image_data:
                 logger.info("Uploading featured image...")

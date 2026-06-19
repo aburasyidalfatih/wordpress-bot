@@ -205,8 +205,8 @@ def test_generate(user_id):
         try:
             # We will need to pass site prompts to ArticleGenerator, but let's keep it simple for now
             # The app.py generate_and_post will need refactoring to take site_id
-            generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'), config.get('gemini_model', 'gemini-2.5-pro'))
-            article = generator.generate_article(category_name, custom_article_prompt=site.article_prompt, site_name=site.site_name)
+            generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
+            article = generator.generate_article(category_name, custom_prompt=site.article_prompt, site_name=site.site_name)
             return jsonify({'success': True, 'article': article})
         except Exception as e:
             logger.error(f"Test generate error: {e}")
