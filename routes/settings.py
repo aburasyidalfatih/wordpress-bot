@@ -1,22 +1,41 @@
 from flask import Blueprint, request, jsonify
-from core_extensions import db, load_config, save_config, require_jwt
+from core_extensions import db, load_config, save_config, require_jwt, require_admin
 
 settings_bp = Blueprint('settings', __name__)
 
 @settings_bp.route('/api/settings')
 @require_jwt
 def api_settings(user_id):
+    from database import User
+    is_admin = False
+    with db.get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        if user and user.role == 'admin':
+            is_admin = True
+
     config = load_config(user_id)
+    if not is_admin:
+        # Hide the API key for non-admins
+        config = config.copy()
+        config['gemini_api_key'] = ''
+        
     return jsonify({'config': config})
 
 @settings_bp.route("/save-config", methods=["POST"])
-@require_jwt
+@require_admin
 def save_config_route(user_id):
     config = load_config(user_id)
     
-    config['gemini_api_key'] = request.form.get('gemini_api_key', '')
-    config['gemini_model'] = request.form.get('gemini_model', 'gemini-2.5-pro')
+    # Support form-data and json
+    if request.is_json:
+        data = request.json or {}
+        config['gemini_api_key'] = data.get('gemini_api_key', '')
+        config['gemini_model'] = data.get('gemini_model', 'gemini-2.5-pro')
+    else:
+        config['gemini_api_key'] = request.form.get('gemini_api_key', '')
+        config['gemini_model'] = request.form.get('gemini_model', 'gemini-2.5-pro')
     
+    # Save the config under the current user (which is the admin)
     save_config(user_id, config)
 
     # Return JSON success response
@@ -37,7 +56,10 @@ def api_profile(user_id):
                 'success': True,
                 'profile': {
                     'name': user.name or '',
-                    'email': user.email or ''
+                    'email': user.email or '',
+                    'role': user.role or 'user',
+                    'tier': user.tier or 'free',
+                    'credits': user.credits if user.credits is not None else 5
                 }
             })
             

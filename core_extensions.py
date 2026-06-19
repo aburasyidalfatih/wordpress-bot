@@ -39,12 +39,26 @@ trending = TrendingResearch()
 _config_cache = {'data': None, 'timestamp': 0}
 _stats_cache = {'data': None, 'timestamp': 0}
 
-def load_config(user_id):
+def load_config(user_id=None):
     now = time()
     if now - _config_cache['timestamp'] < 5:  # 5 second cache
         return _config_cache['data']
     
-    config = db.get_config(user_id)
+    admin_id = None
+    try:
+        from database import User
+        with db.get_session() as session:
+            admin = session.query(User).filter_by(role='admin').first()
+            if admin:
+                admin_id = admin.id
+    except Exception as e:
+        logger.error(f"Error querying admin for config: {e}")
+        
+    target_id = admin_id if admin_id is not None else user_id
+    if target_id is None:
+        target_id = 1
+        
+    config = db.get_config(target_id)
     _config_cache['data'] = config
     _config_cache['timestamp'] = now
     return config
@@ -65,6 +79,8 @@ def get_cached_stats(user_id, site_id=None):
     return stats
 
 def save_config(user_id, config_data):
+    # If the user is saving, check if they are the admin, but this save_config is used on db. 
+    # The route handler will enforce the admin check.
     db.save_config(user_id, config_data)
 
 # JWT decorator
@@ -88,6 +104,19 @@ def require_jwt(f):
             
         return f(user_id, *args, **kwargs)
             
+    return decorated_function
+
+# Admin decorator
+def require_admin(f):
+    @wraps(f)
+    @require_jwt
+    def decorated_function(user_id, *args, **kwargs):
+        from database import User
+        with db.get_session() as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user or user.role != 'admin':
+                return jsonify({'success': False, 'error': 'Admin privilege required'}), 403
+        return f(user_id, *args, **kwargs)
     return decorated_function
 
 # PIN Protection decorator
@@ -442,4 +471,68 @@ def post_to_threads(config, article, post_url, image_data=None):
             return False
     except Exception as e:
         logger.error(f"Threads post error: {e}")
+        return False
+
+def send_email_notification(to_email, subject, body_text):
+    """Send an email notification using SMTP Mailketing"""
+    from config import Config
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    if not Config.SMTP_HOST or not Config.SMTP_USER or not Config.SMTP_PASSWORD:
+        logger.info("SMTP settings not configured. Skipping email notification.")
+        return False
+        
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = Config.SMTP_SENDER_EMAIL or Config.SMTP_USER
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body_text, 'plain'))
+        
+        server = smtplib.SMTP(Config.SMTP_HOST, Config.SMTP_PORT or 587, timeout=15)
+        server.starttls()
+        server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+        server.sendmail(msg['From'], to_email, msg.as_string())
+        server.quit()
+        logger.info(f"Email sent successfully to {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send email via SMTP: {e}", exc_info=True)
+        return False
+
+def send_whatsapp_notification(to_number, message):
+    """Send WhatsApp notification using Starsender WA Gateway"""
+    from config import Config
+    
+    if not Config.STARSENDER_API_KEY or not Config.STARSENDER_DEVICE_ID:
+        logger.info("Starsender WA Gateway settings not configured. Skipping WhatsApp notification.")
+        return False
+        
+    to_number = str(to_number).strip()
+    if to_number.startswith('0'):
+        to_number = '62' + to_number[1:]
+    elif to_number.startswith('+'):
+        to_number = to_number[1:]
+        
+    try:
+        url = "https://starsender.online/api/sendText"
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        payload = {
+            'apikey': Config.STARSENDER_API_KEY,
+            'tujuan': to_number,
+            'message': message
+        }
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        if response.status_code == 200:
+            logger.info(f"WhatsApp notification sent successfully to {to_number}")
+            return True
+        else:
+            logger.error(f"Starsender WA Gateway returned status code {response.status_code}: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to send WhatsApp notification via Starsender: {e}", exc_info=True)
         return False

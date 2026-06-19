@@ -17,9 +17,26 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(100))
     email = Column(String(120), unique=True, index=True)
-    password_hash = Column(String(255))
+    password_hash = Column(String(255), nullable=True) # Google-only users might not have a password hash
     created_at = Column(DateTime, default=datetime.now)
     is_active = Column(Boolean, default=True)
+    role = Column(String(50), default='user') # 'admin' or 'user'
+    tier = Column(String(50), default='free') # 'free' or 'pro'
+    credits = Column(Integer, default=5)
+    google_id = Column(String(255), unique=True, nullable=True)
+
+class Transaction(Base):
+    __tablename__ = 'transactions'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, index=True)
+    payment_method = Column(String(50)) # 'manual', 'tripay', 'paypal'
+    invoice_id = Column(String(255), unique=True)
+    credits_purchased = Column(Integer)
+    amount = Column(Float)
+    receipt_url = Column(String(500), nullable=True)
+    status = Column(String(50), default='pending') # 'pending', 'awaiting_approval', 'success', 'failed'
+    created_at = Column(DateTime, default=datetime.now)
 
 class Config(Base):
     __tablename__ = 'config'
@@ -28,6 +45,7 @@ class Config(Base):
     user_id = Column(Integer, index=True)
     _gemini_api_key = Column('gemini_api_key', String(500))
     gemini_model = Column(String(100), default='gemini-2.5-pro')
+    gemini_image_model = Column(String(100), default='gemini-3.1-flash-image')
     
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -273,6 +291,11 @@ class Database:
                 self.migrate_add_language_column()
             except Exception as em:
                 logger.warning(f"Database language migration warning: {em}")
+            
+            try:
+                self.migrate_credit_system_tables()
+            except Exception as em:
+                logger.warning(f"Database credit system migration warning: {em}")
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
@@ -465,8 +488,58 @@ class Database:
                         logger.info("Added column 'language' to 'wordpress_sites' table in SQLite")
             except Exception as e:
                 logger.warning(f"Language migration warning: {e}")
+
+    def migrate_credit_system_tables(self):
+        from sqlalchemy import text
+        with self.get_session() as session:
+            try:
+                is_postgres = 'postgresql' in str(self.engine.url)
+                if is_postgres:
+                    for col, col_type, default_val in [
+                        ('role', 'VARCHAR(50)', "'user'"),
+                        ('tier', 'VARCHAR(50)', "'free'"),
+                        ('credits', 'INTEGER', "5"),
+                        ('google_id', 'VARCHAR(255)', "NULL")
+                    ]:
+                        res = session.execute(text(
+                            f"SELECT column_name FROM information_schema.columns "
+                            f"WHERE table_name='users' AND column_name='{col}'"
+                        )).fetchone()
+                        if not res:
+                            session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
+                            session.commit()
+                            logger.info(f"Added column '{col}' to 'users' table in PostgreSQL")
+                            
+                    res_config = session.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='config' AND column_name='gemini_image_model'"
+                    )).fetchone()
+                    if not res_config:
+                        session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
+                        session.commit()
+                        logger.info("Added column 'gemini_image_model' to 'config' table in PostgreSQL")
+                else:
+                    res = session.execute(text("PRAGMA table_info(users)")).fetchall()
+                    cols = [col[1] for col in res]
+                    for col, col_type, default_val in [
+                        ('role', 'VARCHAR(50)', "'user'"),
+                        ('tier', 'VARCHAR(50)', "'free'"),
+                        ('credits', 'INTEGER', "5"),
+                        ('google_id', 'VARCHAR(255)', "NULL")
+                    ]:
+                        if col not in cols:
+                            session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
+                            session.commit()
+                            logger.info(f"Added column '{col}' to 'users' table in SQLite")
+                            
+                    res_config = session.execute(text("PRAGMA table_info(config)")).fetchall()
+                    cols_config = [col[1] for col in res_config]
+                    if 'gemini_image_model' not in cols_config:
+                        session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
+                        session.commit()
+                        logger.info("Added column 'gemini_image_model' to 'config' table in SQLite")
             except Exception as e:
-                logger.warning(f"Timezone migration warning: {e}")
+                logger.warning(f"Credit system user/config migration warning: {e}")
     
     def get_config(self, user_id):
         with self.get_session() as session:
@@ -475,13 +548,15 @@ class Database:
                 config = Config(
                     user_id=user_id,
                     gemini_api_key='',
-                    gemini_model='gemini-2.5-pro'
+                    gemini_model='gemini-2.5-pro',
+                    gemini_image_model='gemini-3.1-flash-image'
                 )
                 session.add(config)
                 session.commit()
             return {
                 'gemini_api_key': config.gemini_api_key or '',
-                'gemini_model': config.gemini_model or 'gemini-2.5-pro'
+                'gemini_model': config.gemini_model or 'gemini-2.5-pro',
+                'gemini_image_model': config.gemini_image_model or 'gemini-3.1-flash-image'
             }
     
     def save_config(self, user_id, data):
@@ -493,6 +568,7 @@ class Database:
             
             config.gemini_api_key = data.get('gemini_api_key', '')
             config.gemini_model = data.get('gemini_model', 'gemini-2.5-pro')
+            config.gemini_image_model = data.get('gemini_image_model', 'gemini-3.1-flash-image')
     
     def add_log(self, user_id, site_id, category_id, category_name, title, success, result, post_id=None, post_url=None, image_failed=False):
         with self.get_session() as session:

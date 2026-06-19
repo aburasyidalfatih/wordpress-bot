@@ -15,9 +15,12 @@ const Prompts = lazy(() => import('./pages/Prompts'));
 const Research = lazy(() => import('./pages/Research'));
 const Monitor = lazy(() => import('./pages/Monitor'));
 const Queue = lazy(() => import('./pages/Queue'));
+const Billing = lazy(() => import('./pages/Billing'));
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [userRole, setUserRole] = useState<string>('user');
 
   useEffect(() => {
     apiFetch('/api/auth/status')
@@ -25,7 +28,10 @@ function App() {
         if (!res.ok) throw new Error('Not auth');
         return res.json();
       })
-      .then(data => setIsAuthenticated(data.authenticated))
+      .then(data => {
+        setIsAuthenticated(data.authenticated);
+        if (data.role) setUserRole(data.role);
+      })
       .catch(() => setIsAuthenticated(false));
   }, []);
 
@@ -49,6 +55,8 @@ function App() {
             <Route path="/research" element={isAuthenticated ? <Layout><Research /></Layout> : <Navigate to="/login" />} />
             <Route path="/queue" element={isAuthenticated ? <Layout><Queue /></Layout> : <Navigate to="/login" />} />
             <Route path="/monitor" element={isAuthenticated ? <Layout><Monitor /></Layout> : <Navigate to="/login" />} />
+            <Route path="/billing" element={isAuthenticated ? <Layout><Billing /></Layout> : <Navigate to="/login" />} />
+            <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/" />} />
           </Routes>
         </Suspense>
         <Toaster position="top-center" richColors />

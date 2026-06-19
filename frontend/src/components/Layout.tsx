@@ -14,7 +14,10 @@ import {
   Sun,
   Moon,
   Bell,
-  ChevronDown
+  ChevronDown,
+  Shield,
+  CreditCard,
+  Coins
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -29,7 +32,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return localStorage.getItem('theme') === 'dark' || 
       (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
-  const [profile, setProfile] = useState<{name?: string, email?: string}>({});
+  const [profile, setProfile] = useState<{
+    name?: string;
+    email?: string;
+    role?: string;
+    tier?: string;
+    credits?: number;
+  }>({});
 
   const { sites, selectedSiteId, setSelectedSiteId, loading } = useSiteContext();
 
@@ -63,7 +72,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { name: 'Queue', href: '/queue', icon: ListTodo },
     { name: 'Monitor', href: '/monitor', icon: Activity },
     { name: 'Planner', href: '/prompts', icon: FileText },
+    { name: 'Billing', href: '/billing', icon: CreditCard },
     { name: 'Settings', href: '/settings', icon: Settings },
+    ...(profile.role === 'admin' ? [{ name: 'Admin Panel', href: '/admin', icon: Shield }] : [])
   ];
 
   const handleLogout = async () => {
@@ -115,8 +126,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        {/* Theme and Logout controls */}
-        <div className="pt-4 border-t space-y-2">
+
+
+        {/* Theme control */}
+        <div className="pt-4 border-t">
           <Button 
             variant="ghost"
             onClick={toggleDarkMode}
@@ -124,14 +137,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           >
             {isDarkMode ? <Sun className="h-5 w-5 text-yellow-500" /> : <Moon className="h-5 w-5" />}
             {isDarkMode ? 'Light Mode' : 'Dark Mode'}
-          </Button>
-          <Button 
-            variant="ghost" 
-            className="w-full justify-start gap-3.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl"
-            onClick={handleLogout}
-          >
-            <LogOut className="h-5 w-5" />
-            Logout
           </Button>
         </div>
       </div>
@@ -146,6 +151,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <span className="text-lg font-bold bg-gradient-to-r from-primary to-indigo-600 bg-clip-text text-transparent">AutoWP</span>
           </div>
           <div className="flex items-center gap-2">
+            {/* Mobile Credits Badge */}
+            <Link to="/billing" className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/25 text-primary">
+              <Coins className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <span className="text-xs font-bold">{profile.credits !== undefined ? profile.credits : 0}</span>
+            </Link>
+
             <Button variant="ghost" size="icon" onClick={toggleDarkMode} className="rounded-lg">
               {isDarkMode ? <Sun className="h-5 w-5 text-yellow-500" /> : <Moon className="h-5 w-5" />}
             </Button>
@@ -189,6 +200,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <Bell className="h-5 w-5 text-muted-foreground" />
               <span className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
             </Button>
+
+            {/* Desktop Credits Badge */}
+            <Link to="/billing" className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 hover:bg-primary/20 border border-primary/25 text-primary transition-all duration-200 hover:scale-[1.02]">
+              <Coins className="h-4 w-4 shrink-0 text-primary" />
+              <span className="text-xs font-bold">{profile.credits !== undefined ? profile.credits : 0} Credits</span>
+              <span className="text-[10px] bg-primary/20 text-primary font-extrabold px-1.5 py-0.5 rounded-md capitalize">{profile.tier || 'free'}</span>
+            </Link>
             <div className="relative">
               <button 
                 onClick={() => setIsProfileOpen(!isProfileOpen)} 
@@ -313,6 +331,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 );
               })}
             </nav>
+
+
 
             <div className="pt-6 border-t">
               <Button 

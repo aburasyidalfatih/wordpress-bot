@@ -33,3 +33,36 @@ class Config:
     # Rate Limiting
     GEMINI_RATE_LIMIT = 60  # requests per minute
     WORDPRESS_RATE_LIMIT = 100
+
+    # Payment Gateways (Tripay, Paypal, Manual)
+    TRIPAY_API_KEY = os.getenv('TRIPAY_API_KEY', 'MOCK_TRIPAY_API_KEY')
+    TRIPAY_PRIVATE_KEY = os.getenv('TRIPAY_PRIVATE_KEY', 'MOCK_TRIPAY_PRIVATE_KEY')
+    TRIPAY_MERCHANT_CODE = os.getenv('TRIPAY_MERCHANT_CODE', 'MOCK_MERCHANT_CODE')
+    TRIPAY_API_URL = os.getenv('TRIPAY_API_URL', 'https://tripay.co.id/api-sandbox')
+    
+    PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID', 'MOCK_PAYPAL_CLIENT_ID')
+    PAYPAL_SECRET = os.getenv('PAYPAL_SECRET', 'MOCK_PAYPAL_SECRET')
+    PAYPAL_API_URL = os.getenv('PAYPAL_API_URL', 'https://api-m.sandbox.paypal.com')
+    
+    PAYMENT_USD_RATE = float(os.getenv('PAYMENT_USD_RATE', '16000.0'))
+    
+    # Google OAuth
+    GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+    GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+    
+    # SMTP Settings (SMTP Mailketing)
+    SMTP_HOST = os.getenv('SMTP_HOST', '')
+    SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+    SMTP_USER = os.getenv('SMTP_USER', '')
+    SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
+    SMTP_SENDER_EMAIL = os.getenv('SMTP_SENDER_EMAIL', '')
+    
+    # Starsender WA Gateway
+    STARSENDER_API_KEY = os.getenv('STARSENDER_API_KEY', '')
+    STARSENDER_DEVICE_ID = os.getenv('STARSENDER_DEVICE_ID', '')
+
+    # Manual Bank Settings
+    MANUAL_BANK_NAME = os.getenv('MANUAL_BANK_NAME', 'Bank Mandiri')
+    MANUAL_BANK_ACCOUNT = os.getenv('MANUAL_BANK_ACCOUNT', '12345-67890-123')
+    MANUAL_BANK_HOLDER = os.getenv('MANUAL_BANK_HOLDER', 'ADMIN AUTOWP')
+    ADMIN_WHATSAPP = os.getenv('ADMIN_WHATSAPP', '628123456789')

@@ -37,6 +37,8 @@ from routes.settings import settings_bp
 from routes.monitor import monitor_bp
 from routes.sites import sites_bp
 from routes.prompts import prompts_bp
+from routes.payments import payments_bp
+from routes.admin import admin_bp
 
 load_dotenv()
 
@@ -52,6 +54,8 @@ app.register_blueprint(settings_bp)
 app.register_blueprint(monitor_bp)
 app.register_blueprint(sites_bp)
 app.register_blueprint(prompts_bp)
+app.register_blueprint(payments_bp)
+app.register_blueprint(admin_bp)
 
 # Background tasks & workers retained in app namespace for RQ compatibility
 
@@ -60,7 +64,11 @@ def regenerate_image_job(user_id, log_id):
     from bot import ArticleGenerator, WordPressPublisher
     try:
         config = load_config(user_id)
-        generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
+        generator = ArticleGenerator(
+            config['gemini_api_key'], 
+            config.get('gemini_model', 'gemini-2.5-pro'),
+            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+        )
         
         with db.get_session() as session:
             log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
@@ -137,9 +145,23 @@ def regenerate_image_job(user_id, log_id):
 
 def generate_and_post(user_id, item_id=None, site_id=None):
     config = load_config(user_id)
-    from database import WordPressSite
+    from database import WordPressSite, User
     
     with db.get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            logger.error(f"User {user_id} not found. Aborting generation.")
+            return
+        if (user.credits or 0) <= 0:
+            logger.warning(f"User {user.email} has insufficient credits ({user.credits}). Aborting generation.")
+            if item_id:
+                from database import ContentQueue
+                db_item = session.query(ContentQueue).filter_by(id=item_id).first()
+                if db_item:
+                    db_item.status = 'failed'
+                    session.commit()
+            return
+            
         if item_id:
             from database import ContentQueue
             queue_item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
@@ -192,7 +214,11 @@ def generate_and_post(user_id, item_id=None, site_id=None):
     
     try:
         logger.info(f"Starting generate and post job for site {site_id}")
-        generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
+        generator = ArticleGenerator(
+            config['gemini_api_key'], 
+            config.get('gemini_model', 'gemini-2.5-pro'),
+            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+        )
         publisher = WordPressPublisher(
             site_config['wordpress_url'],
             site_config['wordpress_username'],
@@ -410,6 +436,15 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                     session.commit()
         
         if success:
+            # Deduct 1 credit from user
+            from database import User
+            with db.get_session() as session:
+                user = session.query(User).filter_by(id=user_id).first()
+                if user:
+                    user.credits = max(0, (user.credits or 0) - 1)
+                    session.commit()
+                    logger.info(f"Deducted 1 credit from User {user.email}. Remaining: {user.credits}")
+            
             file_size = len(image_data.getvalue())/1024 if image_data else 0
             send_telegram_notification(site_config,
                 f"✅ <b>Artikel Berhasil Dipublish!</b>\n\n"
@@ -608,4 +643,4 @@ def serve_frontend(path):
 
 if __name__ == '__main__':
     # Production mode
-    app.run(debug=False, host='0.0.0.0', port=5003)
+    app.run(debug=False, host='0.0.0.0', port=5005)

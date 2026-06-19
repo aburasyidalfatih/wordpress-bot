@@ -142,7 +142,11 @@ def generate_titles(user_id, category):
         
         # Use ArticleGenerator to suggest titles
         from bot import ArticleGenerator
-        generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
+        generator = ArticleGenerator(
+            config['gemini_api_key'], 
+            config.get('gemini_model', 'gemini-2.5-pro'),
+            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+        )
         
         # Prompt Gemini to generate titles
         prompt = f"""Buatlah {count} judul artikel blog yang sangat menarik, click-worthy, dan SEO-optimized untuk kategori "{category}" pada website {site_name}.

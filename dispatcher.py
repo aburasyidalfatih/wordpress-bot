@@ -5,7 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from redis import Redis
 from rq import Queue
-from database import Database, WordPressSite
+from database import Database, WordPressSite, User
 
 # Setup logging
 logging.basicConfig(
@@ -31,8 +31,19 @@ def dispatch_jobs():
         for site in sites:
             user_id = site.user_id
             site_id = site.id
-            tz_name = site.timezone or 'Asia/Jakarta'
             
+            # Check user credits
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user or (user.credits or 0) <= 0:
+                # Log only once every hour to avoid spamming the log
+                lock_key_log = f"scheduler:log_credit_warning:{site_id}"
+                has_logged = redis_conn.get(lock_key_log)
+                if not has_logged:
+                    logger.info(f"Skipping auto-post for site_id={site_id}: user_id={user_id} has insufficient credits.")
+                    redis_conn.setex(lock_key_log, 3600, "1")
+                continue
+            
+            tz_name = site.timezone or 'Asia/Jakarta'
             try:
                 tz = ZoneInfo(tz_name)
             except Exception as e:

@@ -119,8 +119,12 @@ def reorder_queue_api(user_id):
 @queue_bp.route('/api/queue/post/<int:item_id>', methods=['POST'])
 @require_jwt
 def post_queue_api(user_id, item_id):
-    from database import ContentQueue
+    from database import ContentQueue, User
     with db.get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user or (user.credits or 0) <= 0:
+            return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
+
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if not item:
             return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
@@ -147,10 +151,16 @@ def regenerate_image_api(user_id, log_id):
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
 def manual_post(user_id):
+    from database import User
     site_id = request.json.get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
+    with db.get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user or (user.credits or 0) <= 0:
+            return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
+
     try:
         job = q.enqueue('app.generate_and_post', user_id, None, site_id, job_timeout='10m')
         return jsonify({'success': True, 'message': 'Artikel dijadwalkan untuk diposting'})
@@ -205,7 +215,11 @@ def test_generate(user_id):
         try:
             # We will need to pass site prompts to ArticleGenerator, but let's keep it simple for now
             # The app.py generate_and_post will need refactoring to take site_id
-            generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
+            generator = ArticleGenerator(
+                config['gemini_api_key'], 
+                config.get('gemini_model', 'gemini-2.5-pro'),
+                config.get('gemini_image_model', 'gemini-3.1-flash-image')
+            )
             article = generator.generate_article(category_name, custom_prompt=site.article_prompt, site_name=site.site_name, language=site.language or 'id')
             return jsonify({'success': True, 'article': article})
         except Exception as e:

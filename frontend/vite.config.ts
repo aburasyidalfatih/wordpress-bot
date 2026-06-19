@@ -13,18 +13,18 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:5003',
-      '/login': 'http://127.0.0.1:5003',
-      '/logout': 'http://127.0.0.1:5003',
-      '/save-config': 'http://127.0.0.1:5003',
-      '/save-prompts': 'http://127.0.0.1:5003',
-      '/manual-post': 'http://127.0.0.1:5003',
-      '/manual-research': 'http://127.0.0.1:5003',
-      '/sync-engagement': 'http://127.0.0.1:5003',
-      '/optimize-categories': 'http://127.0.0.1:5003',
-      '/test-telegram': 'http://127.0.0.1:5003',
-      '/fetch-categories': 'http://127.0.0.1:5003',
-      '/test-generate': 'http://127.0.0.1:5003',
+      '/api': 'http://127.0.0.1:5005',
+      '/login': 'http://127.0.0.1:5005',
+      '/logout': 'http://127.0.0.1:5005',
+      '/save-config': 'http://127.0.0.1:5005',
+      '/save-prompts': 'http://127.0.0.1:5005',
+      '/manual-post': 'http://127.0.0.1:5005',
+      '/manual-research': 'http://127.0.0.1:5005',
+      '/sync-engagement': 'http://127.0.0.1:5005',
+      '/optimize-categories': 'http://127.0.0.1:5005',
+      '/test-telegram': 'http://127.0.0.1:5005',
+      '/fetch-categories': 'http://127.0.0.1:5005',
+      '/test-generate': 'http://127.0.0.1:5005',
     }
   }
 })

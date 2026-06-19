@@ -14,7 +14,11 @@ publisher = WordPressPublisher(
     config['wordpress_password']
 )
 
-generator = ArticleGenerator(config['gemini_api_key'])
+generator = ArticleGenerator(
+    config['gemini_api_key'],
+    config.get('gemini_model', 'gemini-2.5-pro'),
+    config.get('gemini_image_model', 'gemini-3.1-flash-image')
+)
 
 # 2 artikel terakhir yang gagal upload gambar
 articles = [
