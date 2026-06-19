@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    # command: gunicorn is already specified in Dockerfile
+    expose:
+      - "5003"
+    environment:
+      - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=your-super-secret-jwt-key
+      # Add FERNET_KEY here or let Dokploy handle it
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.autowp-web.rule=Host(`autowp.web.id`)"
+      - "traefik.http.services.autowp-web.loadbalancer.server.port=5003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: rq worker -u redis://redis:6379/0 high default low
+    environment:
+      - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    command: python dispatcher.py
+    environment:
+      - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=autowp
+      - POSTGRES_PASSWORD=securepassword
+      - POSTGRES_DB=autowpdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autowp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

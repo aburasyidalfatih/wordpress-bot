@@ -7,7 +7,12 @@ logger = logging.getLogger(__name__)
 
 class TrendingResearch:
     def __init__(self):
-        self.pytrends = TrendReq(hl='id-ID', tz=420, timeout=(10, 25))  # Indonesia timezone
+        self.pytrends = None
+
+    def _get_pytrends(self):
+        if self.pytrends is None:
+            self.pytrends = TrendReq(hl='id-ID', tz=420, timeout=(10, 25))
+        return self.pytrends
     
     def get_trending_topics(self, category_name, limit=10):
         """Get trending topics related to category"""
@@ -22,7 +27,8 @@ class TrendingResearch:
             
             # Get related queries for category
             try:
-                self.pytrends.build_payload([category_name], timeframe='now 7-d', geo='ID')
+                pytrends = self._get_pytrends()
+                pytrends.build_payload([category_name], timeframe='now 7-d', geo='ID')
                 time.sleep(1)  # Rate limiting
                 related = self.pytrends.related_queries()
                 
@@ -32,15 +38,17 @@ class TrendingResearch:
                     if related[category_name]['top'] is not None and not related[category_name]['top'].empty:
                         results['related_top'] = related[category_name]['top'].head(limit)['query'].tolist()
             except Exception as e:
-                logger.warning(f"Related queries error for {category_name}: {e}")
+                logger.warning(f"Could not get related queries: {e}")
+                self.pytrends = None # Reset so it tries to get new cookies next time
             
             # Try to get trending searches (general Indonesia trends)
             try:
-                trending = self.pytrends.trending_searches(pn='indonesia')
+                trending = self._get_pytrends().trending_searches(pn='indonesia')
                 if not trending.empty:
                     results['trending_now'] = trending.head(limit).values.flatten().tolist()
             except Exception as e:
-                logger.warning(f"Trending searches error: {e}")
+                logger.warning(f"Could not get trending searches: {e}")
+                self.pytrends = None
             
             return results
         except Exception as e:

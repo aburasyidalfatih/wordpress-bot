@@ -12,7 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 logger = logging.getLogger(__name__)
 
 class ArticleGenerator:
-    def __init__(self, api_key, model='gemini-2.5-pro', image_model='gemini-3.1-flash-image-preview'):
+    def __init__(self, api_key, model='gemini-3.5-flash', image_model='gemini-3.1-flash-image'):
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.image_model = image_model
@@ -491,26 +491,6 @@ class WordPressPublisher:
         except Exception as e:
             print(f"Error getting post stats: {e}")
             return None
-        try:
-            response = requests.get(
-                f"{self.api_url}/categories",
-                headers=self._get_auth(),
-                params={'per_page': 100},
-                timeout=10
-            )
-            
-            print(f"WordPress API Response Status: {response.status_code}")
-            print(f"WordPress API URL: {self.api_url}/categories")
-            
-            if response.status_code == 200:
-                categories = response.json()
-                return [{'id': cat['id'], 'name': cat['name']} for cat in categories if cat['id'] != 1]
-            else:
-                print(f"Error Response: {response.text}")
-                return []
-        except Exception as e:
-            print(f"Exception in get_categories: {str(e)}")
-            return []
     
     @retry(
         stop=stop_after_attempt(3),

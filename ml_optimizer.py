@@ -7,9 +7,9 @@ class ContentOptimizer:
         self.db = db
         self.scaler = StandardScaler()
     
-    def analyze_performance(self):
+    def analyze_performance(self, user_id, site_id=None):
         """Analyze category performance and return insights"""
-        performance = self.db.get_category_performance()
+        performance = self.db.get_category_performance(user_id, site_id=site_id)
         
         if not performance:
             return None
@@ -32,9 +32,9 @@ class ContentOptimizer:
         
         return performance
     
-    def get_content_recommendations(self):
+    def get_content_recommendations(self, user_id, site_id=None):
         """Get AI-powered content recommendations"""
-        performance = self.analyze_performance()
+        performance = self.analyze_performance(user_id, site_id=site_id)
         
         if not performance or len(performance) < 3:
             return {
@@ -75,9 +75,9 @@ class ContentOptimizer:
             'performance_data': performance
         }
     
-    def optimize_category_order(self, current_categories):
+    def optimize_category_order(self, current_categories, user_id, site_id=None):
         """Reorder categories based on performance"""
-        performance = self.analyze_performance()
+        performance = self.analyze_performance(user_id, site_id=site_id)
         
         if not performance:
             return current_categories
@@ -94,9 +94,9 @@ class ContentOptimizer:
         
         return optimized
     
-    def predict_engagement(self, category_name):
+    def predict_engagement(self, category_name, user_id, site_id=None):
         """Predict expected engagement for a category"""
-        performance = self.db.get_category_performance()
+        performance = self.db.get_category_performance(user_id, site_id=site_id)
         
         for cat in performance:
             if cat['category'] == category_name:

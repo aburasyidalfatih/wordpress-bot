@@ -11,6 +11,9 @@ class Config:
     # Database
     DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db')
     
+    # Redis
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    
     # Scheduler
     SCHEDULER_JOBSTORE_URL = 'sqlite:///scheduler_jobs.db'
     
