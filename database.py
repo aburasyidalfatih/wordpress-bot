@@ -369,11 +369,22 @@ class Database:
     def migrate_plain_configs(self):
         from security import decrypt_value, encrypt_value
         with self.get_session() as session:
-            configs = session.query(Config).all()
             migrated = False
+            
+            # Migrate Config table
+            configs = session.query(Config).all()
             for config in configs:
+                val = getattr(config, '_gemini_api_key', None)
+                if val and val.strip() and not val.startswith('gAAAAA'):
+                    decrypted = decrypt_value(val)
+                    if decrypted == val:
+                        setattr(config, 'gemini_api_key', val)
+                        migrated = True
+            
+            # Migrate WordPressSite table
+            sites = session.query(WordPressSite).all()
+            for site in sites:
                 field_map = {
-                    '_gemini_api_key': 'gemini_api_key',
                     '_wordpress_password': 'wordpress_password',
                     '_telegram_bot_token': 'telegram_bot_token',
                     '_facebook_access_token': 'facebook_access_token',
@@ -384,13 +395,13 @@ class Database:
                     '_threads_access_token': 'threads_access_token'
                 }
                 for backing_col, prop_name in field_map.items():
-                    val = getattr(config, backing_col)
+                    val = getattr(site, backing_col, None)
                     if val and val.strip() and not val.startswith('gAAAAA'):
                         decrypted = decrypt_value(val)
                         if decrypted == val:
-                            # It is plaintext. Set via the property setter, which encrypts it
-                            setattr(config, prop_name, val)
+                            setattr(site, prop_name, val)
                             migrated = True
+            
             if migrated:
                 session.commit()
                 logger.info("Migrated plaintext credentials in database to encrypted format successfully.")

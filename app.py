@@ -172,7 +172,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
     
     try:
         logger.info(f"Starting generate and post job for site {site_id}")
-        generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'), config.get('gemini_model', 'gemini-2.5-pro'))
+        generator = ArticleGenerator(config['gemini_api_key'], config.get('gemini_model', 'gemini-2.5-pro'))
         publisher = WordPressPublisher(
             site_config['wordpress_url'],
             site_config['wordpress_username'],
