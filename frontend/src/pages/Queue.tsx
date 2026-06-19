@@ -373,22 +373,20 @@ export default function Queue() {
                   
                   {item.success && item.post_url && (
                     <div className="flex gap-2">
-                      {item.image_failed && (
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          className="text-amber-600 border-amber-200 hover:bg-amber-50"
-                          disabled={regeneratingIds[item.id]}
-                          onClick={() => handleRegenerateImage(item.id)}
-                        >
-                          {regeneratingIds[item.id] ? (
-                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-4 w-4 mr-2" />
-                          )}
-                          Regenerate Image
-                        </Button>
-                      )}
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-amber-600 border-amber-200 hover:bg-amber-50"
+                        disabled={regeneratingIds[item.id]}
+                        onClick={() => handleRegenerateImage(item.id)}
+                      >
+                        {regeneratingIds[item.id] ? (
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                        )}
+                        Regenerate Image
+                      </Button>
                       <Button variant="outline" size="icon" onClick={() => window.open(item.post_url, '_blank')} className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 z-20" title="View Post">
                         <Eye className="h-4 w-4" />
                       </Button>
