@@ -424,23 +424,16 @@ Style: Educational blog featured image."""
                 if part.inline_data is not None:
                     image_bytes = part.inline_data.data
                     
-                    # Convert to WebP for better compression
+                    # Convert to JPEG for better compatibility and compression
                     img = Image.open(BytesIO(image_bytes))
                     
-                    # Convert RGBA to RGB if needed
-                    if img.mode in ('RGBA', 'LA', 'P'):
-                        background = Image.new('RGB', img.size, (255, 255, 255))
-                        if img.mode == 'P':
-                            img = img.convert('RGBA')
-                        if img.mode == 'RGBA':
-                            background.paste(img, mask=img.split()[-1])
-                        else:
-                            background.paste(img)
-                        img = background
+                    # Convert RGBA to RGB if needed (JPEG does not support alpha channel)
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
                     
-                    # Save as WebP with high quality
+                    # Save as JPEG with high quality
                     output = BytesIO()
-                    img.save(output, format='WEBP', quality=85, method=6)
+                    img.save(output, format='JPEG', quality=85)
                     output.seek(0)
                     return output
             
@@ -502,8 +495,8 @@ class WordPressPublisher:
         try:
             if isinstance(image_data, BytesIO):
                 image_bytes = image_data.getvalue()
-                filename = f'{title[:50].replace("/", "-").replace(":", "").replace(" ", "-")}.webp'
-                mime_type = 'image/webp'
+                filename = f'{title[:50].replace("/", "-").replace(":", "").replace(" ", "-")}.jpg'
+                mime_type = 'image/jpeg'
             else:
                 response = requests.get(image_data, timeout=30)
                 if response.status_code != 200:
