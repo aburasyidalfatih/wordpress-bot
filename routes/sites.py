@@ -22,6 +22,7 @@ def get_sites(user_id):
 
                 'schedule_hours': site.schedule_hours,
                 'timezone': site.timezone,
+                'language': site.language,
                 'auto_post': site.auto_post,
                 'categories': site.categories,
                 'selected_categories': site.selected_categories,
@@ -55,6 +56,7 @@ def create_site(user_id):
 
             schedule_hours=data.get('schedule_hours', '0,6,12,18'),
             timezone=data.get('timezone', 'Asia/Jakarta'),
+            language=data.get('language', 'id'),
             auto_post=data.get('auto_post', False)
         )
         session.add(site)
@@ -82,6 +84,7 @@ def update_site(user_id, site_id):
 
         if 'schedule_hours' in data: site.schedule_hours = data['schedule_hours']
         if 'timezone' in data: site.timezone = data['timezone']
+        if 'language' in data: site.language = data['language']
         if 'auto_post' in data: site.auto_post = data['auto_post']
         
         # Update categories

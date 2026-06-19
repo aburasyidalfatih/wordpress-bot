@@ -33,8 +33,13 @@ class ArticleGenerator:
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, **kwargs):
         # Resolve custom prompt from either parameter name
         custom_prompt = custom_prompt or kwargs.get('custom_article_prompt')
+        language = kwargs.get('language') or 'id'
         target_site = site_name if site_name else "kelasmaster.id"
-        target_audience = "Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia" if target_site == "kelasmaster.id" else f"Pembaca website {target_site}"
+        
+        if language == 'en':
+            target_audience = f"Readers of website {target_site}"
+        else:
+            target_audience = "Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia" if target_site == "kelasmaster.id" else f"Pembaca website {target_site}"
         # Context mapping untuk setiap kategori
         context_map = {
             'Digitalisasi Pendidikan': 'transformasi digital sekolah, sistem informasi manajemen pendidikan, platform pembelajaran online, administrasi paperless, teknologi pendidikan',
@@ -278,6 +283,10 @@ CRITICAL:
         # Use custom prompt if provided, injecting dynamic variables
         if custom_prompt:
             prompt = custom_prompt.replace('{topic}', topic_focus).replace('{category}', topic).replace('{existing_titles}', existing_titles_text).replace('{seo_section}', seo_section).replace('{research_note}', research_note).replace('{site_name}', target_site)
+
+        if language == 'en':
+            language_instruction = "\n\n⚠️ CRITICAL REQUIREMENT - LANGUAGE: English\n- Write the entire JSON response (including title, meta_description, excerpt, key_takeaways, and content) in ENGLISH.\n- Do not use Indonesian words or translations.\n- Keep the tone professional, engaging, and polished for an English-speaking audience.\n- If references to Indonesian context are made, explain them in English.\n- Use the year 2026 as the current year."
+            prompt = prompt + language_instruction
 
         response = self.client.models.generate_content(
             model=self.model,

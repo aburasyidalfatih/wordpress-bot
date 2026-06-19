@@ -32,6 +32,7 @@ export default function Sites() {
       auto_post: false,
       schedule_hours: '0,6,12,18',
       timezone: 'Asia/Jakarta',
+      language: 'id',
       telegram_enabled: false,
       facebook_enabled: false,
       twitter_enabled: false,
@@ -249,7 +250,7 @@ export default function Sites() {
 
 
                       
-                      <div className="pt-4 border-t grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="pt-4 border-t grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="space-y-2">
                           <Label htmlFor="schedule_hours" className="text-foreground">Posting Schedule (Hours)</Label>
                           <Input id="schedule_hours" name="schedule_hours" value={currentSite.schedule_hours || ''} onChange={handleChange} placeholder="0, 6, 12, 18" className="bg-background" />
@@ -277,6 +278,20 @@ export default function Sites() {
                             <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
                           </select>
                           <p className="text-[11px] text-muted-foreground leading-tight">Select the timezone for this website's posting schedule.</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="language" className="text-foreground">Language</Label>
+                          <select 
+                            id="language" 
+                            name="language" 
+                            value={currentSite.language || 'id'} 
+                            onChange={(e) => setCurrentSite(prev => ({ ...prev, language: e.target.value }))}
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <option value="id">Bahasa Indonesia</option>
+                            <option value="en">English (US/UK)</option>
+                          </select>
+                          <p className="text-[11px] text-muted-foreground leading-tight">Select the language of the generated articles.</p>
                         </div>
                       </div>
 

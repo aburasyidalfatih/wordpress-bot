@@ -10,6 +10,7 @@ export interface WordPressSite {
 
   schedule_hours: string;
   timezone?: string;
+  language?: string;
   auto_post: boolean;
   categories: any[];
   selected_categories: any[];

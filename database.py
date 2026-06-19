@@ -53,6 +53,7 @@ class WordPressSite(Base):
 
     schedule_hours = Column(String(100), default='0,6,12,18')
     timezone = Column(String(100), default='Asia/Jakarta')
+    language = Column(String(50), default='id')
     categories = Column(JSON, default=[])
     selected_categories = Column(JSON, default=[])
     auto_post = Column(Boolean, default=False)
@@ -267,6 +268,11 @@ class Database:
                 self.migrate_add_timezone_column()
             except Exception as em:
                 logger.warning(f"Database timezone migration warning: {em}")
+            
+            try:
+                self.migrate_add_language_column()
+            except Exception as em:
+                logger.warning(f"Database language migration warning: {em}")
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
@@ -433,6 +439,32 @@ class Database:
                         session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN timezone VARCHAR(100) DEFAULT 'Asia/Jakarta'"))
                         session.commit()
                         logger.info("Added column 'timezone' to 'wordpress_sites' table in SQLite")
+            except Exception as e:
+                logger.warning(f"Timezone migration warning: {e}")
+
+    def migrate_add_language_column(self):
+        from sqlalchemy import text
+        with self.get_session() as session:
+            try:
+                is_postgres = 'postgresql' in str(self.engine.url)
+                if is_postgres:
+                    res = session.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='wordpress_sites' AND column_name='language'"
+                    )).fetchone()
+                    if not res:
+                        session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN language VARCHAR(50) DEFAULT 'id'"))
+                        session.commit()
+                        logger.info("Added column 'language' to 'wordpress_sites' table in PostgreSQL")
+                else:
+                    res = session.execute(text("PRAGMA table_info(wordpress_sites)")).fetchall()
+                    cols = [col[1] for col in res]
+                    if 'language' not in cols:
+                        session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN language VARCHAR(50) DEFAULT 'id'"))
+                        session.commit()
+                        logger.info("Added column 'language' to 'wordpress_sites' table in SQLite")
+            except Exception as e:
+                logger.warning(f"Language migration warning: {e}")
             except Exception as e:
                 logger.warning(f"Timezone migration warning: {e}")
     

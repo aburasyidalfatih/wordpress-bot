@@ -180,6 +180,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             'threads_access_token': site.threads_access_token,
             'article_prompt': site.article_prompt,
             'image_prompt': site.image_prompt,
+            'language': site.language,
             'auto_post': site.auto_post,
             'site_name': site.site_name
         }
@@ -281,7 +282,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             custom_topic, 
             seo_data,
             custom_prompt=custom_article_prompt,
-            site_name=site_config.get('site_name')
+            site_name=site_config.get('site_name'),
+            language=site_config.get('language', 'id')
         )
         
         # Check for duplicate or similar titles
@@ -335,7 +337,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 seo_data,
                 avoid_similar=True,
                 custom_prompt=custom_article_prompt,
-                site_name=site_config.get('site_name')
+                site_name=site_config.get('site_name'),
+                language=site_config.get('language', 'id')
             )
         
         image_failed = False
