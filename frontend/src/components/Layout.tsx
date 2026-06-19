@@ -66,7 +66,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [isDarkMode]);
 
   const navigation = [
-    { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Websites', href: '/sites', icon: Bot },
     { name: 'Research', href: '/research', icon: Search },
     { name: 'Queue', href: '/queue', icon: ListTodo },

@@ -6,6 +6,7 @@ import { Toaster } from './components/ui/sonner';
 import { SiteProvider } from './contexts/SiteContext';
 
 // Lazy loaded pages
+const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -44,11 +45,12 @@ function App() {
       <BrowserRouter>
         <Suspense fallback={<div className="flex h-screen items-center justify-center">Loading page...</div>}>
           <Routes>
-            <Route path="/login" element={<Login setIsAuthenticated={setIsAuthenticated} />} />
-            <Route path="/register" element={<Register />} />
+            <Route path="/" element={<Landing />} />
+            <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Login setIsAuthenticated={setIsAuthenticated} />} />
+            <Route path="/register" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Register />} />
             
             {/* Authenticated Routes with Layout */}
-            <Route path="/" element={isAuthenticated ? <Layout><Dashboard /></Layout> : <Navigate to="/login" />} />
+            <Route path="/dashboard" element={isAuthenticated ? <Layout><Dashboard /></Layout> : <Navigate to="/login" />} />
             <Route path="/sites" element={isAuthenticated ? <Layout><Sites /></Layout> : <Navigate to="/login" />} />
             <Route path="/settings" element={isAuthenticated ? <Layout><Settings /></Layout> : <Navigate to="/login" />} />
             <Route path="/prompts" element={isAuthenticated ? <Layout><Prompts /></Layout> : <Navigate to="/login" />} />
@@ -56,7 +58,7 @@ function App() {
             <Route path="/queue" element={isAuthenticated ? <Layout><Queue /></Layout> : <Navigate to="/login" />} />
             <Route path="/monitor" element={isAuthenticated ? <Layout><Monitor /></Layout> : <Navigate to="/login" />} />
             <Route path="/billing" element={isAuthenticated ? <Layout><Billing /></Layout> : <Navigate to="/login" />} />
-            <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/" />} />
+            <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/dashboard" />} />
           </Routes>
         </Suspense>
         <Toaster position="top-center" richColors />

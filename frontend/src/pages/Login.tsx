@@ -24,7 +24,7 @@ export default function Login({ setIsAuthenticated }: { setIsAuthenticated: (val
         localStorage.setItem('token', data.token);
         setIsAuthenticated(true);
         toast.success('Login successful!');
-        navigate('/');
+        navigate('/dashboard');
       } else {
         toast.error(data.error || 'Login failed');
       }
@@ -48,7 +48,7 @@ export default function Login({ setIsAuthenticated }: { setIsAuthenticated: (val
         localStorage.setItem('token', data.token);
         setIsAuthenticated(true);
         toast.success('Logged in with Google successfully!');
-        navigate('/');
+        navigate('/dashboard');
       } else {
         toast.error(data.error || 'Google login failed');
       }

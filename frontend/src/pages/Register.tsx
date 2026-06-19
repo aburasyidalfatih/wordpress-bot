@@ -45,7 +45,7 @@ export default function Register() {
       if (data.success) {
         localStorage.setItem('token', data.token);
         // Force refresh / navigation
-        window.location.href = '/';
+        window.location.href = '/dashboard';
         toast.success('Registered and logged in with Google successfully!');
       } else {
         toast.error(data.error || 'Google sign-up failed');
