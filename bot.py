@@ -40,6 +40,7 @@ class ArticleGenerator:
             target_audience = f"Readers of website {target_site}"
         else:
             target_audience = "Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia" if target_site == "kelasmaster.id" else f"Pembaca website {target_site}"
+        
         # Context mapping untuk setiap kategori
         context_map = {
             'Digitalisasi Pendidikan': 'transformasi digital sekolah, sistem informasi manajemen pendidikan, platform pembelajaran online, administrasi paperless, teknologi pendidikan',
@@ -55,34 +56,104 @@ class ArticleGenerator:
             'Hotnews Pendidikan': 'berita viral pendidikan, trending education news, isu pendidikan terkini, viral education stories, hot topics pendidikan Indonesia',
             'Biaya Pendidikan': 'biaya sekolah swasta, biaya masuk universitas, PSB pendaftaran siswa baru, biaya kuliah, beasiswa pendidikan, informasi biaya pendidikan Indonesia'
         }
+
+        context_map_en = {
+            'Digitalisasi Pendidikan': 'school digital transformation, education management information system, online learning platform, paperless administration, edtech',
+            'Strategi Pemasaran': 'school digital marketing, social media strategy, education branding, student recruitment, school website SEO, online promotion',
+            'Pengembangan Kurikulum': 'curriculum implementation, student-centered learning, assessment methods, teacher training, professional development',
+            'Manajemen Keuangan': 'school financial management, education budgeting, financial transparency, accounting software, compliance',
+            'Legalitas Dan Perizinan': 'school operational permit, accreditation, educational regulation compliance, legal documents',
+            'Manajemen SDM': 'teacher recruitment, performance management, teacher training, retention strategy, educational HR development',
+            'Layanan Orang Tua': 'school-parent communication, parent engagement, parent information system, family involvement',
+            'Pembuatan SOP': 'school standard operating procedures, process documentation, educational quality assurance',
+            'Manajemen Asrama': 'dormitory management, boarding school management, student welfare',
+            'Unit Usaha Sekolah': 'school entrepreneurship, income generating activities, school cooperative, education business unit',
+            'Hotnews Pendidikan': 'viral education news, trending education news, current education issues, viral education stories, hot topics in education',
+            'Biaya Pendidikan': 'private school fees, university admission fees, student enrollment, tuition fees, scholarships, education cost information'
+        }
+
+        context_map_en_keys = {
+            'Digital Education': 'school digital transformation, education management information system, online learning platform, paperless administration, edtech',
+            'Marketing Strategy': 'school digital marketing, social media strategy, education branding, student recruitment, school website SEO, online promotion',
+            'Curriculum Development': 'curriculum implementation, student-centered learning, assessment methods, teacher training, professional development',
+            'Financial Management': 'school financial management, education budgeting, financial transparency, accounting software, compliance',
+            'Legality and Licensing': 'school operational permit, accreditation, educational regulation compliance, legal documents',
+            'HR Management': 'teacher recruitment, performance management, teacher training, retention strategy, educational HR development',
+            'Parent Services': 'school-parent communication, parent engagement, parent information system, family involvement',
+            'SOP Creation': 'school standard operating procedures, process documentation, educational quality assurance',
+            'Dormitory Management': 'dormitory management, boarding school management, student welfare',
+            'School Business Unit': 'school entrepreneurship, income generating activities, school cooperative, education business unit',
+            'Education Hotnews': 'viral education news, trending education news, current education issues, viral education stories, hot topics in education',
+            'Education Cost': 'private school fees, university admission fees, student enrollment, tuition fees, scholarships, education cost information'
+        }
         
-        context = context_map.get(topic, topic)
+        context = topic
+        if language == 'en':
+            found = False
+            for k, v in context_map_en_keys.items():
+                if k.lower() == topic.lower():
+                    context = v
+                    found = True
+                    break
+            if not found:
+                for k, v in context_map_en.items():
+                    if k.lower() == topic.lower():
+                        context = v
+                        break
+        else:
+            for k, v in context_map.items():
+                if k.lower() == topic.lower():
+                    context = v
+                    break
         
         # Add existing titles to prompt to avoid duplicates
         existing_titles_text = ""
         if existing_titles:
-            if avoid_similar:
-                existing_titles_text = f"\n\n⚠️ CRITICAL - JUDUL HARUS SANGAT BERBEDA:\n"
-                existing_titles_text += "Judul sebelumnya terlalu mirip. Buat judul yang BENAR-BENAR UNIK dengan angle/perspektif berbeda!\n\n"
-                existing_titles_text += "Judul yang HARUS DIHINDARI:\n"
+            if language == 'en':
+                if avoid_similar:
+                    existing_titles_text = f"\n\n⚠️ CRITICAL - TITLES MUST BE VERY DIFFERENT:\n"
+                    existing_titles_text += "Previous titles are too similar. Create a TRULY UNIQUE title with a different angle/perspective!\n\n"
+                    existing_titles_text += "Titles to AVOID:\n"
+                else:
+                    existing_titles_text = f"\n\n⚠️ IMPORTANT - AVOID EXISTING TITLES:\n"
+                
+                for title in existing_titles[-10:]:
+                    existing_titles_text += f"- {title}\n"
+                
+                if avoid_similar:
+                    existing_titles_text += "\n💡 TIPS FOR UNIQUE TITLES:\n"
+                    existing_titles_text += "- Use different angles (e.g., from customer's perspective, manager's perspective, general public)\n"
+                    existing_titles_text += "- Focus on specific aspects not yet discussed\n"
+                    existing_titles_text += "- Use different formats (guide, checklist, case study, analysis, etc.)\n"
+                    existing_titles_text += "- Add specific context (location, time, situation)\n\n"
+                else:
+                    existing_titles_text += "\nThe article title MUST be different and unique from the list above!\n"
             else:
-                existing_titles_text = f"\n\n⚠️ PENTING - HINDARI JUDUL YANG SUDAH ADA:\n"
-            
-            for title in existing_titles[-10:]:  # Last 10 titles
-                existing_titles_text += f"- {title}\n"
-            
-            if avoid_similar:
-                existing_titles_text += "\n💡 TIPS MEMBUAT JUDUL UNIK:\n"
-                existing_titles_text += "- Gunakan angle berbeda (misalnya: dari sisi orang tua, dari sisi guru, dari sisi siswa)\n"
-                existing_titles_text += "- Fokus pada aspek spesifik yang belum dibahas\n"
-                existing_titles_text += "- Gunakan format berbeda (panduan, checklist, studi kasus, analisis, dll)\n"
-                existing_titles_text += "- Tambahkan konteks spesifik (lokasi, waktu, situasi)\n\n"
-            else:
-                existing_titles_text += "\nJudul artikel HARUS berbeda dan unik dari daftar di atas!\n"
+                if avoid_similar:
+                    existing_titles_text = f"\n\n⚠️ CRITICAL - JUDUL HARUS SANGAT BERBEDA:\n"
+                    existing_titles_text += "Judul sebelumnya terlalu mirip. Buat judul yang BENAR-BENAR UNIK dengan angle/perspektif berbeda!\n\n"
+                    existing_titles_text += "Judul yang HARUS DIHINDARI:\n"
+                else:
+                    existing_titles_text = f"\n\n⚠️ PENTING - HINDARI JUDUL YANG SUDAH ADA:\n"
+                
+                for title in existing_titles[-10:]:  # Last 10 titles
+                    existing_titles_text += f"- {title}\n"
+                
+                if avoid_similar:
+                    existing_titles_text += "\n💡 TIPS MEMBUAT JUDUL UNIK:\n"
+                    existing_titles_text += "- Gunakan angle berbeda (misalnya: dari sisi orang tua, dari sisi guru, dari sisi siswa)\n"
+                    existing_titles_text += "- Fokus pada aspek spesifik yang belum dibahas\n"
+                    existing_titles_text += "- Gunakan format berbeda (panduan, checklist, studi kasus, analisis, dll)\n"
+                    existing_titles_text += "- Tambahkan konteks spesifik (lokasi, waktu, situasi)\n\n"
+                else:
+                    existing_titles_text += "\nJudul artikel HARUS berbeda dan unik dari daftar di atas!\n"
         
         # Add custom topic from research if available
         topic_focus = custom_topic if custom_topic else topic
-        research_note = f"\n\n🔥 TRENDING TOPIC: {custom_topic}\nFokuskan artikel pada topik trending ini dalam konteks {topic}.\n" if custom_topic else ""
+        if language == 'en':
+            research_note = f"\n\n🔥 TRENDING TOPIC: {custom_topic}\nFocus the article on this trending topic within the context of {topic}.\n" if custom_topic else ""
+        else:
+            research_note = f"\n\n🔥 TRENDING TOPIC: {custom_topic}\nFokuskan artikel pada topik trending ini dalam konteks {topic}.\n" if custom_topic else ""
         
         # Add SEO data if available
         seo_section = ""
@@ -91,17 +162,181 @@ class ArticleGenerator:
             questions = seo_data.get('questions', [])
             
             if keywords:
-                seo_section += f"\n\n🔑 RELATED KEYWORDS (gunakan natural di artikel):\n"
+                if language == 'en':
+                    seo_section += f"\n\n🔑 RELATED KEYWORDS (use naturally in the article):\n"
+                else:
+                    seo_section += f"\n\n🔑 RELATED KEYWORDS (gunakan natural di artikel):\n"
                 for kw in keywords[:10]:
                     seo_section += f"- {kw}\n"
             
             if questions:
-                seo_section += f"\n\n❓ PERTANYAAN YANG SERING DICARI (jawab di artikel):\n"
+                if language == 'en':
+                    seo_section += f"\n\n❓ FREQUENTLY ASKED QUESTIONS (answer in the article):\n"
+                else:
+                    seo_section += f"\n\n❓ PERTANYAAN YANG SERING DICARI (jawab di artikel):\n"
                 for q in questions[:5]:
                     seo_section += f"- {q}\n"
-                seo_section += "\n💡 Pastikan artikel menjawab pertanyaan-pertanyaan ini secara lengkap!\n"
+                if language == 'en':
+                    seo_section += "\n💡 Ensure the article answers these questions comprehensively!\n"
+                else:
+                    seo_section += "\n💡 Pastikan artikel menjawab pertanyaan-pertanyaan ini secara lengkap!\n"
         
-        prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic_focus}
+        if language == 'en':
+            prompt = f"""Write a high-quality, SEO-optimized blog article for the website {target_site} about: {topic_focus}
+{existing_titles_text}{research_note}{seo_section}
+TARGET AUDIENCE: {target_audience}
+RELATED KEYWORDS: {context}
+
+⚠️ IMPORTANT - CURRENT YEAR: 2026
+- If mentioning years, use 2026 or "currently"
+- Do not use the year 2024 or 2025
+- Example: "Complete Guide 2026" or "Latest Strategies"
+
+ARTICLE STRUCTURE (2000-2500 WORDS):
+
+1. INTRODUCTORY HOOK (100 words):
+   ⚠️ MUST BE VARIATIVE - Use one of these approaches (DO NOT always use statistics):
+   
+   A. Story/Anecdote: "John, a manager in London, was almost desperate when..."
+   B. Problem Statement: "Imagine: Your costs went up by 20%, but your retention is dropping..."
+   C. Provocative Question: "What makes 3 out of 5 startups fail to survive?"
+   D. Surprising Fact: "In 2026, more businesses are closing than opening..."
+   E. Contrast: "Company A is full of customers, Company B is empty. The difference is only one thing..."
+   
+   ✓ End with a promise: "This article will guide you..."
+   ✗ DO NOT always start with the same pattern
+   ✗ DO NOT use the same opening pattern as previous articles
+
+2. CONTEXT (200 words):
+   - Current global or relevant regional situation related to the topic
+   - Why this topic is urgent and important
+   - Who needs this solution the most
+
+3. MAIN CONTENT (1500-1700 words):
+   
+   H2: Core Concept & Importance (300 words)
+   - Clear definition with practical language
+   - Why this is critical for the target audience/organization
+   - Concrete real-world examples
+   
+   H2: Step-by-Step Practical Implementation (600 words)
+   - Actionable guide with a numbered list
+   - Realistic timeline (weeks/months)
+   - Tools/templates that can be used
+   - Checklist to get started
+   - Budget estimation if relevant
+   
+   H2: Real-World Case Study (400 words)
+   - Real-world or highly realistic company/organization (realistic name & location)
+   - Challenge → Solution → Result (with specific numbers)
+   - Lesson learned that can be applied
+   - MUST: Direct quote from a manager/expert (make it realistic & natural)
+     Format: "engaging and specific quote," says Full Name, Title at Organization in City.
+     Example: "Initially we were hesitant, but after 3 months of implementation, our efficiency went up by 40%," says Robert Chen, Operations Director at TechCorp in Chicago.
+   
+   H2: Tips & Best Practices (300 words)
+   - Do's and Don'ts in an HTML table format (DO NOT use ASCII art or Unicode box drawing)
+   - Common mistakes to avoid
+   - Pro tips from practitioners (can add a short quote)
+   - Quick wins that can be applied immediately
+
+4. CONCLUSION (150 words):
+   - Recap 3-5 key takeaways
+   - Clear next action steps
+   - CTA: invitation to consult/download resource
+
+5. FAQ (150 words):
+   - 3-5 common questions with short answers
+   - Use Q&A format
+
+QUALITY REQUIREMENTS:
+
+E-E-A-T SIGNALS (MUST):
+✓ Experience: "Based on implementation across 50+ organizations..."
+✓ Expertise: Reference to industry standards, regulations, or research
+✓ Authoritativeness: Statistical data
+✓ Trustworthiness: Transparency (pros & cons), update date
+✓ Current: Use the year 2026 for current context
+
+WRITING STYLE:
+✓ Tone: Professional but approachable, use "you"
+✓ Sentences: VARY length for natural rhythm
+  - Short sentences (5-10 words): For emphasis and impact
+  - Medium sentences (15-20 words): For standard explanations
+  - Long sentences (25-35 words): For details and context
+✓ Paragraphs: 3-4 sentences maximum, vary their length
+✓ Examples: Always from a realistic context with specific names
+✓ Data: Include relevant statistics/numbers (but VARY the sources)
+✓ Empathy: Understand the pain points of the target audience
+✓ Quotes: Insert 1-2 realistic quotes from practitioners
+✓ Transitions: Use natural transitions, avoid repetitive connector phrases
+
+⚠️ AVOID REPETITIVE & AI-LIKE PHRASES:
+✗ "Our internal data shows...", "Based on our experience..."
+✗ "It is important to note that...", "Keep in mind that..."
+✗ "In this context...", "It is crucial to..."
+✗ "Let's discuss...", "In conclusion..."
+✓ Use variation: recent research, case studies, real stories, questions, etc.
+✓ Every article MUST have a UNIQUE and DIFFERENT opening
+✓ Use conversational language, not overly formal/academic
+
+SEO OPTIMIZATION:
+✓ Keyword in first 100 words
+✓ Keyword variations in H2 headings
+✓ LSI keywords naturally throughout
+✓ Related posts will appear automatically (no need for manual links)
+✓ Optimize for featured snippets (use lists/tables)
+
+⚠️ STRICT PROHIBITIONS:
+✗ DO NOT use placeholders like [FLOWCHART: ...], [INFOGRAPHIC: ...], [CHECKLIST: ...]
+✗ DO NOT use ASCII art or Unicode box drawing characters (─, │, ┼, ├, ┤, etc.)
+✗ DO NOT insert JSON artifacts or metadata inside the content
+✗ Use HTML table (<table>) for tables, NOT ASCII art
+✗ If you want a checklist, use <ul> or <ol>, NOT placeholders
+
+OUTPUT FORMAT (JSON):
+{{
+    "title": "Title with high CTR formula (50-60 characters):
+    
+    REQUIRED FORMULA (choose one):
+    1. [Number] + [Power Word] + [Benefit] + [Proof/Location]
+       Example: '7 Proven Strategies to Increase Sales 300% in London'
+    
+    2. [Problem] + [Number] + [Solution]
+       Example: 'Low Engagement? 5 Ways to Get 95% Retention in 3 Months'
+    
+    3. [Social Proof] + [Benefit] + [How]
+       Example: '50+ Businesses Grew 500% - Here is How They Did It'
+    
+    4. [Mistake/Warning] + [Solution]
+       Example: '5 Fatal Marketing Mistakes (And How to Fix Them)'
+    
+    RULES FOR TITLE:
+    ✓ MUST include a specific number (7, 5, 300%, 95%, etc.)
+    ✓ MUST include a power word (Proven, Secrets, Fatal, Effective, Powerful)
+    ✓ MUST include a clear benefit or problem
+    ✓ Location if relevant (Chicago, London, etc.)
+    ✓ Year 2026 if relevant
+    ✓ DO NOT include the category name
+    ✓ Focus on concrete results/solutions
+    ✓ Create curiosity (curiosity gap)",
+    
+    "meta_description": "Meta description 150-160 characters with CTA and keyword",
+    "content": "Full content of 2000-2500 words in HTML with semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters.",
+    "focus_keyword": "main keyword of the article",
+    "excerpt": "Engaging summary of 2-3 sentences with a strong hook",
+    "reading_time": "estimated reading time (minutes)",
+    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"]
+}}
+
+IMPORTANT:
+- Output MUST be valid JSON without markdown code blocks
+- DO NOT use ```json or ``` in output
+- Return ONLY the JSON object
+- Content must be cleanly formatted in HTML
+"""
+        else:
+            prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}
 TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
@@ -244,18 +479,7 @@ FORMAT OUTPUT (JSON):
     ✓ Tahun 2026 jika relevan
     ✓ JANGAN sertakan nama kategori
     ✓ Fokus pada hasil/solusi konkret
-    ✓ Bikin penasaran (curiosity gap)
-    
-    CONTOH BAGUS:
-    ✓ '7 Sekolah Jakarta Tingkatkan Nilai 40% dengan AI - Rahasianya?'
-    ✓ 'Biaya Sekolah Mahal? Cara Dapat 300+ Siswa Tanpa Turunkan Harga'
-    ✓ '5 Kesalahan Fatal Kepala Sekolah yang Bikin Guru Resign'
-    ✓ 'Asrama Penuh 95%: Strategi dari 10 Boarding School Terbaik'
-    
-    CONTOH BURUK:
-    ✗ 'Panduan Lengkap Digitalisasi Pendidikan' (terlalu generic)
-    ✗ 'Strategi Pemasaran Sekolah 2026' (tidak ada hook)
-    ✗ 'Manajemen Keuangan untuk Lembaga Pendidikan' (boring)",
+    ✓ Bikin penasaran (curiosity gap)",
     
     "meta_description": "Meta description 150-160 karakter dengan CTA dan keyword",
     "content": "Konten lengkap 2000-2500 kata dalam HTML dengan semantic markup (h2, h3, strong, em, ul, ol, blockquote). PENTING: Gunakan HTML table tag (<table>, <tr>, <td>) untuk tabel, JANGAN gunakan ASCII art atau Unicode box drawing characters (─, │, ┼, ├, ┤, dll)",
@@ -265,28 +489,12 @@ FORMAT OUTPUT (JSON):
     "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"]
 }}
 
-PENTING: 
+PENTING:
 - Output HARUS berupa JSON valid tanpa markdown code blocks
 - JANGAN gunakan ```json atau ``` di output
 - Langsung return JSON object saja
 - Content harus dalam format HTML yang rapi
-- JUDUL: Fokus pada benefit/solusi, BUKAN nama kategori (contoh: "7 Strategi Meningkatkan Pendaftaran Siswa Baru" bukan "Strategi Pemasaran untuk Sekolah")
-
-CRITICAL:
-- Konten HARUS original, mendalam, dan actionable
-- WAJIB ada contoh praktis dari sekolah Indonesia
-- WAJIB ada angka/data untuk credibility
-- WAJIB ada step-by-step guide yang bisa langsung diterapkan
-- Hindari konten generic, buat spesifik untuk konteks Indonesia
-- Panjang MINIMAL 2000 kata, OPTIMAL 2000-2500 kata"""
-
-        # Use custom prompt if provided, injecting dynamic variables
-        if custom_prompt:
-            prompt = custom_prompt.replace('{topic}', topic_focus).replace('{category}', topic).replace('{existing_titles}', existing_titles_text).replace('{seo_section}', seo_section).replace('{research_note}', research_note).replace('{site_name}', target_site)
-
-        if language == 'en':
-            language_instruction = "\n\n⚠️ CRITICAL REQUIREMENT - LANGUAGE: English\n- Write the entire JSON response (including title, meta_description, excerpt, key_takeaways, and content) in ENGLISH.\n- Do not use Indonesian words or translations.\n- Keep the tone professional, engaging, and polished for an English-speaking audience.\n- If references to Indonesian context are made, explain them in English.\n- Use the year 2026 as the current year."
-            prompt = prompt + language_instruction
+- JUDUL: Fokus pada benefit/solusi, BUKAN nama kategori (contoh: "7 Strategi Meningkatkan Pendaftaran Siswa Baru" bukan "Strategi Pemasaran untuk Sekolah")"""
 
         response = self.client.models.generate_content(
             model=self.model,
@@ -308,35 +516,11 @@ CRITICAL:
             result = json.loads(response_text)
             
             # Clean content from placeholders and artifacts
-            if result.get('content'):
-                content = result['content']
-                
-                # Remove placeholder patterns
-                import re
-                placeholders = [
-                    r'\[FLOWCHART:.*?\]',
-                    r'\[INFOGRAPHIC:.*?\]',
-                    r'\[CHECKLIST:.*?\]',
-                    r'\[DIAGRAM:.*?\]',
-                    r'\[IMAGE:.*?\]',
-                    r'\[CHART:.*?\]',
-                    r'\[TABLE:.*?\]',
-                ]
-                for pattern in placeholders:
-                    content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-                
-                # Remove ASCII art tables (Unicode box drawing characters)
-                content = re.sub(r'<pre[^>]*>.*?[─│┼├┤┬┴┌┐└┘].*?</pre>', '', content, flags=re.DOTALL)
-                content = re.sub(r'[─│┼├┤┬┴┌┐└┘╔╗╚╝║═╠╣╦╩╬]', '', content)
-                
-                # Remove empty paragraphs
-                content = re.sub(r'<p>\s*</p>', '', content)
-                content = re.sub(r'<p>\s*\\n\s*</p>', '', content)
-                
-                # Remove multiple newlines
-                content = re.sub(r'\n\n\n+', '\n\n', content)
-                
-                result['content'] = content.strip()
+            content = result.get('content', '')
+            if content:
+                # Remove any stray JSON codeblock markers AI might have embedded inside
+                content = content.replace('```json', '').replace('```', '')
+                result['content'] = content
             
             # Ensure minimum quality standards
             if not result.get('reading_time'):
@@ -379,24 +563,42 @@ CRITICAL:
             content = re.sub(r'^\s*\{.*?\n', '', content)  # Remove opening JSON
             content = re.sub(r'\n.*?\}\s*$', '', content)  # Remove closing JSON
             
-            # Try to extract title if present
-            title_match = content.split('\n')[0] if '\n' in content else f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia"
-            if title_match.startswith('#'):
-                title_match = title_match.replace('#', '').strip()
-            
-            return {
-                "title": title_match[:200] if len(title_match) < 200 else f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia",
-                "meta_description": f"Pelajari strategi dan tips praktis {topic} untuk meningkatkan kualitas lembaga pendidikan Anda. Panduan lengkap dengan studi kasus nyata.",
-                "content": content,
-                "focus_keyword": topic,
-                "excerpt": f"Panduan komprehensif tentang {topic} dengan tips praktis yang bisa langsung diterapkan di lembaga pendidikan Anda. Dilengkapi studi kasus dan checklist actionable.",
-                "reading_time": "8 menit",
-                "key_takeaways": [
-                    f"Implementasi {topic} step-by-step",
-                    "Best practices dari sekolah Indonesia",
-                    "Tools dan template siap pakai"
-                ]
-            }
+            if language == 'en':
+                title_match = content.split('\n')[0] if '\n' in content else f"Complete Guide to {topic}"
+                if title_match.startswith('#'):
+                    title_match = title_match.replace('#', '').strip()
+                return {
+                    "title": title_match[:200] if len(title_match) < 200 else f"Complete Guide to {topic}",
+                    "meta_description": f"Learn practical strategies and tips for {topic} to improve your organization. Complete guide with real-world case studies.",
+                    "content": content,
+                    "focus_keyword": topic,
+                    "excerpt": f"Comprehensive guide to {topic} with practical tips that can be applied immediately. Complete with case studies and actionable checklist.",
+                    "reading_time": "8 min read",
+                    "key_takeaways": [
+                        f"Step-by-step implementation of {topic}",
+                        "Best practices and insights",
+                        "Ready-to-use tools and templates"
+                    ]
+                }
+            else:
+                # Try to extract title if present
+                title_match = content.split('\n')[0] if '\n' in content else f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia"
+                if title_match.startswith('#'):
+                    title_match = title_match.replace('#', '').strip()
+                
+                return {
+                    "title": title_match[:200] if len(title_match) < 200 else f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia",
+                    "meta_description": f"Pelajari strategi dan tips praktis {topic} untuk meningkatkan kualitas lembaga pendidikan Anda. Panduan lengkap dengan studi kasus nyata.",
+                    "content": content,
+                    "focus_keyword": topic,
+                    "excerpt": f"Panduan komprehensif tentang {topic} dengan tips praktis yang bisa langsung diterapkan di lembaga pendidikan Anda. Dilengkapi studi kasus dan checklist actionable.",
+                    "reading_time": "8 menit",
+                    "key_takeaways": [
+                        f"Implementasi {topic} step-by-step",
+                        "Best practices dari sekolah Indonesia",
+                        "Tools dan template siap pakai"
+                    ]
+                }
     
     def generate_image(self, topic, title, article_content=None, custom_prompt=None, site_name=None, **kwargs):
         """Generate landscape featured image for blog"""

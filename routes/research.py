@@ -56,8 +56,16 @@ def api_research(user_id):
 @require_jwt
 def get_trending(user_id, category):
     """API endpoint to get trending topics for a category"""
+    site_id = request.args.get('site_id', type=int)
+    language = 'id'
+    if site_id:
+        with db.get_session() as session:
+            from database import WordPressSite
+            site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+            if site:
+                language = site.language or 'id'
     try:
-        data = trending.get_trending_topics(category, limit=15)
+        data = trending.get_trending_topics(category, limit=15, language=language)
         return jsonify(data)
     except Exception as e:
         logger.error(f"Trending API error: {e}")
@@ -71,8 +79,16 @@ def suggest_topics(user_id):
         data = request.json
         category = data.get('category')
         count = data.get('count', 5)
+        site_id = data.get('site_id') or request.args.get('site_id')
+        language = 'id'
+        if site_id:
+            with db.get_session() as session:
+                from database import WordPressSite
+                site = session.query(WordPressSite).filter_by(id=int(site_id), user_id=user_id).first()
+                if site:
+                    language = site.language or 'id'
         
-        suggestions = trending.suggest_article_topics(category, count)
+        suggestions = trending.suggest_article_topics(category, count, language=language)
         return jsonify({'suggestions': suggestions})
     except Exception as e:
         logger.error(f"Suggest topics error: {e}")

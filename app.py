@@ -496,6 +496,7 @@ def deep_research_job(user_id, force=True, site_id=None):
         telegram_enabled = site.telegram_enabled
         telegram_bot_token = site.telegram_bot_token
         telegram_chat_id = site.telegram_chat_id
+        language = site.language or 'id'
     
     if not selected_categories:
         logger.info(f"No categories selected for site {site_name}")
@@ -508,7 +509,7 @@ def deep_research_job(user_id, force=True, site_id=None):
     }
     
     try:
-        logger.info(f"Starting auto-research job for site {site_name}")
+        logger.info(f"Starting auto-research job for site {site_name} (language={language})")
         
         # Import SEO research module
         from seo_research import SEOResearch
@@ -519,14 +520,14 @@ def deep_research_job(user_id, force=True, site_id=None):
             logger.info(f"Researching category: {category_name} on {site_name}")
             
             # Get trending data
-            trending_data = trending.get_trending_topics(category_name, limit=15)
+            trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
             
             # Get suggestions
-            suggestions = trending.suggest_article_topics(category_name, count=10)
+            suggestions = trending.suggest_article_topics(category_name, count=10, language=language)
             
             # Get SEO research data
             try:
-                seo_data = seo.research_category(category_name)
+                seo_data = seo.research_category(category_name, language=language)
                 keywords = seo_data.get('suggestions', [])
                 questions = seo_data.get('questions', [])
                 competitor_outlines = seo_data.get('competitor_outlines', [])
