@@ -138,6 +138,8 @@ export default function Queue() {
       loadQueue();
     } catch (e) {
       console.error(e);
+    } finally {
+      setConfirmAction(null);
     }
   };
 
@@ -220,6 +222,8 @@ export default function Queue() {
       console.error(e);
       toast.error('Network error');
       loadQueue(true);
+    } finally {
+      setConfirmAction(null);
     }
   };
 
