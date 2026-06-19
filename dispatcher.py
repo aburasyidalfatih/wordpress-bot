@@ -2,10 +2,10 @@ import time
 import os
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from redis import Redis
 from rq import Queue
 from database import Database, WordPressSite, User
-from app import generate_and_post, deep_research_job
 
 # Setup logging
 logging.basicConfig(
@@ -25,11 +25,12 @@ db = Database(db_url)
 
 def dispatch_jobs():
     logger.info("Running central dispatcher...")
+    wib = ZoneInfo("Asia/Jakarta")
     with db.get_session() as session:
         # Get all active WordPress sites
         sites = session.query(WordPressSite).filter_by(is_active=True).all()
         
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(wib).hour
         
         for site in sites:
             user_id = site.user_id
@@ -42,26 +43,42 @@ def dispatch_jobs():
                     hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
                     if current_hour in hours_list:
                         logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id} (hour={current_hour})")
-                        q.enqueue(generate_and_post, user_id, None, site_id)
+                        q.enqueue('app.generate_and_post', user_id, None, site_id)
                 except Exception as e:
                     logger.error(f"Error parsing schedule for site_id={site_id}: {e}")
             
             # Check auto research (runs daily at 00:00)
             if site.auto_research_enabled:
                 if current_hour == 0:
-                    logger.info(f"Enqueueing deep_research_job for user_id={user_id}, site_id={site_id} (hour={current_hour})")
-                    q.enqueue(deep_research_job, user_id, True, site_id)
+                    try:
+                        logger.info(f"Enqueueing deep_research_job for user_id={user_id}, site_id={site_id} (hour={current_hour})")
+                        q.enqueue('app.deep_research_job', user_id, True, site_id)
+                    except Exception as e:
+                        logger.error(f"Error enqueuing deep_research_job for site_id={site_id}: {e}")
 
 if __name__ == '__main__':
     logger.info("Dispatcher started.")
-    last_run_hour = -1
+    
+    # Target timezone is Asia/Jakarta (WIB)
+    wib = ZoneInfo("Asia/Jakarta")
     
     while True:
-        now = datetime.now()
-        # Run only once per hour, at the 0th minute (top of the hour)
-        if now.minute == 0 and now.hour != last_run_hour:
-            dispatch_jobs()
-            last_run_hour = now.hour
-        
-        # Sleep for a minute before checking again
-        time.sleep(60)
+        try:
+            now = datetime.now(wib)
+            current_hour_str = now.strftime("%Y-%m-%d %H")
+            
+            # Check Redis for the last run hour to prevent missed/double runs on restarts
+            last_run = redis_conn.get("scheduler:last_run")
+            if last_run:
+                last_run = last_run.decode('utf-8')
+            
+            # If the current hour is different from the last run hour, execute jobs
+            if last_run != current_hour_str:
+                dispatch_jobs()
+                redis_conn.set("scheduler:last_run", current_hour_str)
+                
+        except Exception as e:
+            logger.error(f"Error in scheduler loop: {e}")
+            
+        # Check every 10 seconds to ensure high precision without CPU overhead
+        time.sleep(10)
