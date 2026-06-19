@@ -159,7 +159,6 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             'threads_enabled': site.threads_enabled,
             'threads_user_id': site.threads_user_id,
             'threads_access_token': site.threads_access_token,
-            'use_research_topics': site.use_research_topics,
             'article_prompt': site.article_prompt,
             'image_prompt': site.image_prompt,
             'auto_post': site.auto_post,
@@ -230,10 +229,9 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         
         existing_titles = db.get_existing_titles(user_id, site_id, category['name'], limit=50)
         
-        # Check if should use research topic
-        custom_topic = None
+        # Check if should use research topic (only if not a manual queue item)
         seo_data = None
-        if site_config.get('use_research_topics'):
+        if not item_id:
             custom_topic = db.get_unused_research_topic(user_id, site_id, category['name'])
             if custom_topic:
                 logger.info(f"Using research topic: {custom_topic}")
