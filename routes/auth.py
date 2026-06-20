@@ -68,7 +68,6 @@ def api_auth_register():
         # Send notifications
         try:
             import threading
-            from config import Config
             
             # Welcome email to user
             welcome_subj = "Welcome to AutoWP!"
@@ -137,7 +136,6 @@ def api_auth_google():
             # Send notifications
             try:
                 import threading
-                from config import Config
                 
                 # Welcome email to user
                 welcome_subj = "Welcome to AutoWP!"
@@ -231,7 +229,6 @@ def api_auth_verify(user_id):
 
 @auth_bp.route('/api/auth/config', methods=['GET'])
 def api_auth_config():
-    from config import Config
     return jsonify({
         'success': True,
         'google_client_id': Config.GOOGLE_CLIENT_ID or ''
