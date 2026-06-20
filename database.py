@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey, event, exc
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
@@ -265,6 +265,20 @@ class Database:
                 pool_recycle=1800,
                 echo=False
             )
+            
+            # Dispose of connections after process fork (multiprocessing safety)
+            @event.listens_for(self.engine, "connect")
+            def connect(dbapi_connection, connection_record):
+                connection_record.info['pid'] = os.getpid()
+
+            @event.listens_for(self.engine, "checkout")
+            def checkout(dbapi_connection, connection_record, connection_proxy):
+                pid = os.getpid()
+                if connection_record.info.get('pid') != pid:
+                    connection_record.connection = connection_proxy.connection = None
+                    raise exc.DisconnectionError(
+                        "Connection record belonged to a different process (forked worker)"
+                    )
             try:
                 Base.metadata.create_all(self.engine)
             except Exception as e:

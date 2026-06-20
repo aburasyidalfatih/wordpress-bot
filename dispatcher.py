@@ -1,7 +1,8 @@
 import time
 import os
 import logging
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from redis import Redis
 from rq import Queue
@@ -66,8 +67,9 @@ def dispatch_jobs():
                             last_run = last_run.decode('utf-8')
                         
                         if last_run != current_hour_str:
-                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id} (hour={current_hour} in {tz_name})")
-                            q.enqueue('app.generate_and_post', user_id, None, site_id)
+                            delay_minutes = random.randint(0, 50)
+                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
+                            q.enqueue_in(timedelta(minutes=delay_minutes), 'app.generate_and_post', user_id, None, site_id)
                             redis_conn.set(lock_key, current_hour_str)
                 except Exception as e:
                     logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
