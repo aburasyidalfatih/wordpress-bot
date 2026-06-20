@@ -223,10 +223,6 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
 
           {/* Admin Login Form */}
           <form onSubmit={handleAdminLogin} className="flex flex-col gap-4">
-            <div className="text-center mb-1">
-              <h3 className="text-sm font-bold text-slate-300">Login Khusus Admin</h3>
-              <p className="text-[10px] text-slate-500 mt-0.5">Gunakan email & password administrator</p>
-            </div>
             
             <div className="grid gap-3">
               <div className="grid gap-1.5">
@@ -255,9 +251,10 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
             </div>
             
             <Button type="submit" className="w-full py-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-md shadow-indigo-600/10 cursor-pointer">
-              Login Admin
+              Login
             </Button>
           </form>
+
         </CardContent>
       </Card>
     </div>
