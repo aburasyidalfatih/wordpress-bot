@@ -17,7 +17,8 @@ import {
   ChevronDown,
   Shield,
   CreditCard,
-  Coins
+  Coins,
+  Plus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -152,10 +153,26 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <div className="flex items-center gap-2">
             {/* Mobile Credits Badge */}
-            <Link to="/billing" className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/25 text-primary">
-              <Coins className="h-3.5 w-3.5 shrink-0 text-primary" />
-              <span className="text-xs font-bold">{profile.credits !== undefined ? profile.credits : 0}</span>
-            </Link>
+            {(() => {
+              const credits = profile.credits !== undefined ? profile.credits : 0;
+              let badgeClass = "bg-primary/10 border-primary/25 text-primary";
+              let coinColor = "text-primary";
+              
+              if (credits === 0) {
+                badgeClass = "bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400 animate-pulse";
+                coinColor = "text-red-500";
+              } else if (credits <= 2) {
+                badgeClass = "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400";
+                coinColor = "text-amber-500";
+              }
+              
+              return (
+                <Link to="/billing" className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${badgeClass}`}>
+                  <Coins className={`h-3.5 w-3.5 shrink-0 ${coinColor}`} />
+                  <span className="text-xs font-bold">{credits}</span>
+                </Link>
+              );
+            })()}
 
             <Button variant="ghost" size="icon" onClick={toggleDarkMode} className="rounded-lg">
               {isDarkMode ? <Sun className="h-5 w-5 text-yellow-500" /> : <Moon className="h-5 w-5" />}
@@ -173,18 +190,26 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             {loading ? (
               <div className="h-9 w-48 animate-pulse rounded-md bg-muted"></div>
             ) : (
-              <select
-                value={selectedSiteId || ''}
-                onChange={(e) => setSelectedSiteId(parseInt(e.target.value, 10))}
-                className="h-9 w-48 rounded-lg border border-input bg-card/80 backdrop-blur-sm px-3 py-1 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent cursor-pointer"
-              >
-                {sites.map(site => (
-                  <option key={site.id} value={site.id} className="bg-background text-foreground">
-                    {site.site_name}
-                  </option>
-                ))}
-                {sites.length === 0 && <option disabled value="">No Sites Found</option>}
-              </select>
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedSiteId || ''}
+                  onChange={(e) => setSelectedSiteId(parseInt(e.target.value, 10))}
+                  className="h-9 w-48 rounded-lg border border-input bg-card/80 backdrop-blur-sm px-3 py-1 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent cursor-pointer font-medium text-foreground/90"
+                >
+                  {sites.map(site => (
+                    <option key={site.id} value={site.id} className="bg-background text-foreground">
+                      🌐 {site.site_name}
+                    </option>
+                  ))}
+                  {sites.length === 0 && <option disabled value="">No Sites Found</option>}
+                </select>
+                {sites.length === 0 && (
+                  <Link to="/sites" className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 font-bold transition-colors ml-1 bg-primary/5 border border-primary/20 px-2.5 py-1 rounded-lg">
+                    <Plus className="h-3 w-3" />
+                    Tambah Site
+                  </Link>
+                )}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-4">
@@ -202,11 +227,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </Button>
 
             {/* Desktop Credits Badge */}
-            <Link to="/billing" className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 hover:bg-primary/20 border border-primary/25 text-primary transition-all duration-200 hover:scale-[1.02]">
-              <Coins className="h-4 w-4 shrink-0 text-primary" />
-              <span className="text-xs font-bold">{profile.credits !== undefined ? profile.credits : 0} Credits</span>
-              <span className="text-[10px] bg-primary/20 text-primary font-extrabold px-1.5 py-0.5 rounded-md capitalize">{profile.tier || 'free'}</span>
-            </Link>
+            {(() => {
+              const credits = profile.credits !== undefined ? profile.credits : 0;
+              let badgeClass = "bg-primary/10 hover:bg-primary/20 border-primary/25 text-primary";
+              let coinColor = "text-primary";
+              
+              if (credits === 0) {
+                badgeClass = "bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-600 dark:text-red-400 animate-pulse";
+                coinColor = "text-red-500";
+              } else if (credits <= 2) {
+                badgeClass = "bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-600 dark:text-amber-400";
+                coinColor = "text-amber-500";
+              }
+              
+              return (
+                <Link to="/billing" className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-200 hover:scale-[1.02] ${badgeClass}`}>
+                  <Coins className={`h-4 w-4 shrink-0 ${coinColor}`} />
+                  <span className="text-xs font-bold">{credits} Credits</span>
+                  <span className="text-[10px] bg-foreground/10 font-extrabold px-1.5 py-0.5 rounded-md capitalize">{profile.tier || 'free'}</span>
+                </Link>
+              );
+            })()}
             <div className="relative">
               <button 
                 onClick={() => setIsProfileOpen(!isProfileOpen)} 

@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
+import EmptyState from '@/components/EmptyState';
 
 export default function Research() {
   const { selectedSiteId } = useSiteContext();
@@ -125,7 +126,7 @@ export default function Research() {
     </div>
   </div>;
 
-  if (!selectedSiteId) return <div className="p-8 text-center text-muted-foreground mt-20">Please select a website from the top bar to view its research intelligence.</div>;
+  if (!selectedSiteId) return <EmptyState title="Intelligence Hub" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk memuat analisis kompetitor, tren sosial, dan topik terhangat." />;
 
   const researchData = data?.research_data || {};
   const categories = Object.keys(researchData);

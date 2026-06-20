@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useSiteContext } from '@/contexts/SiteContext';
+import EmptyState from '@/components/EmptyState';
 
 export default function Queue() {
   const { selectedSiteId, sites } = useSiteContext();
@@ -256,7 +257,7 @@ export default function Queue() {
   };
 
 
-  if (!selectedSiteId) return <div className="p-8 text-center text-muted-foreground mt-20">Please select a website from the top bar to view its queue.</div>;
+  if (!selectedSiteId) return <EmptyState title="Antrean Artikel" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk mengelola antrean penerbitan artikel AI." />;
   if (loading) return <div className="p-8 flex items-center justify-center">
     <RefreshCw className="h-8 w-8 animate-spin text-primary" />
   </div>;

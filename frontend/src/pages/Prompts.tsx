@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useSiteContext } from '@/contexts/SiteContext';
+import EmptyState from '@/components/EmptyState';
 
 export default function Prompts() {
   const { selectedSiteId } = useSiteContext();
@@ -69,7 +70,7 @@ export default function Prompts() {
     setter((prev: string) => prev + ` {${variable}}`);
   };
 
-  if (!selectedSiteId) return <div className="p-8 text-center text-muted-foreground mt-20">Please select a website from the top bar to configure its prompts.</div>;
+  if (!selectedSiteId) return <EmptyState title="Pengaturan Prompt AI" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk menyesuaikan instruksi penulisan artikel dan gambar AI." />;
   if (loading) return <div className="p-8">Loading prompts...</div>;
 
   return (

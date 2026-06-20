@@ -2,6 +2,7 @@ import { apiFetch } from '../lib/api';
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { FileText, CheckCircle, Clock, BarChart2, AlertCircle, Lightbulb, TrendingUp, Sparkles, MessageSquare } from 'lucide-react';
+import EmptyState from '@/components/EmptyState';
 
 import { useSiteContext } from '@/contexts/SiteContext';
 
@@ -33,7 +34,8 @@ export default function Dashboard() {
     </div>
   );
 
-  if (!selectedSiteId) return <div className="p-8 text-center text-muted-foreground mt-20">Please select a website from the top bar to view its dashboard.</div>;
+  if (!selectedSiteId) return <EmptyState title="Dashboard Analitik" description="Pilih salah satu website dari menu dropdown di kanan atas untuk memantau ringkasan performa dan otomatisasi postingan Anda." />;
+
 
   const { stats, next_post_time, logs, insights, performance } = data || {};
 

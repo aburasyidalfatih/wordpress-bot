@@ -34,7 +34,7 @@ export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNo
 
   return (
     <div ref={setNodeRef} style={style} className={`transition-opacity ${isDragging ? 'opacity-50' : 'opacity-100'}`}>
-      <Card className="hover:border-primary/50 transition-colors bg-card">
+      <Card className={`hover:border-primary/50 transition-all duration-300 bg-card ${item.status === 'posting' ? 'border-blue-500/60 shadow-lg shadow-blue-500/5 ring-1 ring-blue-500/15 bg-gradient-to-r from-card via-card to-blue-500/[0.02]' : ''}`}>
         <CardContent className="p-0 flex items-stretch">
           <div 
             {...attributes} 
@@ -46,11 +46,17 @@ export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNo
           
           <div className="p-6 flex flex-1 flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/15">
                   {item.category}
                 </span>
-                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${item.status === 'pending' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : item.status === 'posting' ? 'bg-blue-100 text-blue-800 border-blue-200 animate-pulse' : 'bg-green-100 text-green-800 border-green-200'}`}>
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border shadow-sm transition-all ${
+                  item.status === 'pending' 
+                    ? 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400' 
+                    : item.status === 'posting' 
+                    ? 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400 animate-pulse' 
+                    : 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400'
+                }`}>
                   {item.status === 'posting' ? 'PROCESSING...' : item.status.toUpperCase()}
                 </span>
               </div>
@@ -61,6 +67,7 @@ export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNo
                 </p>
               )}
               <p className="text-xs text-muted-foreground mt-2">Added: {item.created_at}</p>
+
               
               {item.status === 'posting' && (
                 <div className="mt-4 max-w-sm">
