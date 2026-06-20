@@ -287,7 +287,14 @@ def update_admin_config(user_id):
                 val = str(val).strip()
             updates[k] = val
 
+    # Save to PostgreSQL database system_settings table
+    try:
+        db.save_system_settings(updates)
+    except Exception as e:
+        logger.error(f"Failed to save system settings to DB: {e}")
+
     env_path = '.env'
+
     lines = []
     if os.path.exists(env_path):
         try:

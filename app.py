@@ -42,8 +42,33 @@ from routes.admin import admin_bp
 
 load_dotenv()
 
+# Load system settings from database and override Config values on startup
+try:
+    system_settings = db.get_system_settings()
+    for k, v in system_settings.items():
+        if v is not None:
+            if k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
+                setattr(Config, k, v.lower() == 'true')
+            elif k == 'SMTP_PORT':
+                try:
+                    setattr(Config, k, int(v))
+                except ValueError:
+                    pass
+            elif k == 'PAYMENT_USD_RATE':
+                try:
+                    setattr(Config, k, float(v))
+                except ValueError:
+                    pass
+            else:
+                setattr(Config, k, v)
+            os.environ[k] = v
+    logger.info(f"Loaded {len(system_settings)} system settings from database.")
+except Exception as e:
+    logger.error(f"Failed to load system settings from database: {e}")
+
 app = Flask(__name__)
 app.config.from_object(Config)
+
 
 # Register Blueprints
 app.register_blueprint(auth_bp)

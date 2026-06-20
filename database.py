@@ -253,6 +253,12 @@ class ContentQueue(Base):
     post_url = Column(String(500))
     created_at = Column(DateTime, default=datetime.now)
 
+class SystemSetting(Base):
+    __tablename__ = 'system_settings'
+    
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=True)
+
 class Database:
     def __init__(self, db_url):
         try:
@@ -583,6 +589,34 @@ class Database:
             config.gemini_api_key = data.get('gemini_api_key', '')
             config.gemini_model = data.get('gemini_model', 'gemini-2.5-pro')
             config.gemini_image_model = data.get('gemini_image_model', 'gemini-3.1-flash-image')
+    
+    def get_system_settings(self):
+        with self.get_session() as session:
+            try:
+                settings = session.query(SystemSetting).all()
+                return {s.key: s.value for s in settings}
+            except Exception as e:
+                logger.error(f"Error reading system settings: {e}")
+                return {}
+
+    def save_system_settings(self, settings_dict):
+        with self.get_session() as session:
+            for k, v in settings_dict.items():
+                try:
+                    setting = session.query(SystemSetting).filter_by(key=k).first()
+                    if not setting:
+                        setting = SystemSetting(key=k, value=str(v) if v is not None else None)
+                        session.add(setting)
+                    else:
+                        setting.value = str(v) if v is not None else None
+                except Exception as e:
+                    logger.error(f"Error saving system setting {k}: {e}")
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Error committing system settings: {e}")
+                raise e
     
     def add_log(self, user_id, site_id, category_id, category_name, title, success, result, post_id=None, post_url=None, image_failed=False):
         with self.get_session() as session:
