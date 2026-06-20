@@ -232,10 +232,29 @@ def api_auth_verify(user_id):
 
 @auth_bp.route('/api/auth/config', methods=['GET'])
 def api_auth_config():
+    google_client_id = Config.GOOGLE_CLIENT_ID
+    tripay_enabled = Config.PAYMENT_TRIPAY_ENABLED
+    paypal_enabled = Config.PAYMENT_PAYPAL_ENABLED
+    manual_enabled = Config.PAYMENT_MANUAL_ENABLED
+
+    try:
+        system_settings = db.get_system_settings()
+        if 'GOOGLE_CLIENT_ID' in system_settings and system_settings['GOOGLE_CLIENT_ID']:
+            google_client_id = system_settings['GOOGLE_CLIENT_ID']
+        if 'PAYMENT_TRIPAY_ENABLED' in system_settings:
+            tripay_enabled = system_settings['PAYMENT_TRIPAY_ENABLED'].lower() == 'true'
+        if 'PAYMENT_PAYPAL_ENABLED' in system_settings:
+            paypal_enabled = system_settings['PAYMENT_PAYPAL_ENABLED'].lower() == 'true'
+        if 'PAYMENT_MANUAL_ENABLED' in system_settings:
+            manual_enabled = system_settings['PAYMENT_MANUAL_ENABLED'].lower() == 'true'
+    except Exception as e:
+        logger.error(f"Error reading system settings in api_auth_config: {e}")
+
     return jsonify({
         'success': True,
-        'google_client_id': Config.GOOGLE_CLIENT_ID or '',
-        'payment_tripay_enabled': Config.PAYMENT_TRIPAY_ENABLED,
-        'payment_paypal_enabled': Config.PAYMENT_PAYPAL_ENABLED,
-        'payment_manual_enabled': Config.PAYMENT_MANUAL_ENABLED
+        'google_client_id': google_client_id or '',
+        'payment_tripay_enabled': tripay_enabled,
+        'payment_paypal_enabled': paypal_enabled,
+        'payment_manual_enabled': manual_enabled
     })
+
