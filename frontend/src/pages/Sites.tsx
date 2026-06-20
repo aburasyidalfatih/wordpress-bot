@@ -117,7 +117,18 @@ export default function Sites() {
       const res = await apiFetch(`/api/sites/${currentSite.id}/fetch-categories`, { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.success) {
-        setCurrentSite(prev => ({ ...prev, categories: data.categories }));
+        setCurrentSite(prev => {
+          const newCategories = data.categories || [];
+          const existingSelected = (prev.selected_categories || []).filter((sel: any) =>
+            newCategories.some((cat: any) => cat.id === sel.id)
+          );
+          const finalSelection = existingSelected.length === 0 ? newCategories : existingSelected;
+          return {
+            ...prev,
+            categories: newCategories,
+            selected_categories: finalSelection
+          };
+        });
         toast.success('Categories fetched successfully!');
         fetchSites(); // refresh global state
       } else {
@@ -235,6 +246,33 @@ export default function Sites() {
 
                           {currentSite.categories && currentSite.categories.length > 0 ? (
                             <div className="space-y-2 max-h-48 overflow-y-auto p-3 border rounded-xl bg-muted/30">
+                              <div className="flex items-center space-x-3 p-1 border-b pb-2 mb-2">
+                                <input
+                                  type="checkbox"
+                                  id="select_all_categories_checkbox"
+                                  checked={
+                                    currentSite.categories.length > 0 &&
+                                    (currentSite.selected_categories || []).length === currentSite.categories.length
+                                  }
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setCurrentSite({
+                                        ...currentSite,
+                                        selected_categories: [...(currentSite.categories || [])]
+                                      });
+                                    } else {
+                                      setCurrentSite({
+                                        ...currentSite,
+                                        selected_categories: []
+                                      });
+                                    }
+                                  }}
+                                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                                />
+                                <Label htmlFor="select_all_categories_checkbox" className="font-bold text-primary cursor-pointer text-xs uppercase tracking-wider">
+                                  Centang Semua
+                                </Label>
+                              </div>
                               {currentSite.categories.map((cat: any) => (
                                 <div key={cat.id} className="flex items-center space-x-3 p-1">
                                   <input
@@ -252,7 +290,7 @@ export default function Sites() {
                                     className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
                                   />
                                   <Label htmlFor={`cat_${cat.id}`} className="font-medium cursor-pointer">
-                                    {cat.name} <span className="text-xs text-muted-foreground ml-1">({cat.count} posts)</span>
+                                    {cat.name} <span className="text-xs text-muted-foreground ml-1">({cat.count !== undefined && cat.count !== null ? cat.count : 0} posts)</span>
                                   </Label>
                                 </div>
                               ))}

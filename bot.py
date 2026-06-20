@@ -768,7 +768,7 @@ class WordPressPublisher:
             
             if response.status_code == 200:
                 categories = response.json()
-                return [{'id': cat['id'], 'name': cat['name']} for cat in categories]
+                return [{'id': cat['id'], 'name': cat['name'], 'count': cat.get('count', 0)} for cat in categories]
             else:
                 logger.error(f"Failed to fetch categories: {response.status_code}")
                 return []
