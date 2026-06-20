@@ -56,6 +56,13 @@ def create_invoice(user_id):
     if credits_count <= 0:
         return jsonify({'success': False, 'error': 'Invalid credits count'}), 400
         
+    if payment_method == 'tripay' and not Config.PAYMENT_TRIPAY_ENABLED:
+        return jsonify({'success': False, 'error': 'Tripay payment method is currently disabled'}), 400
+    if payment_method == 'paypal' and not Config.PAYMENT_PAYPAL_ENABLED:
+        return jsonify({'success': False, 'error': 'PayPal payment method is currently disabled'}), 400
+    if payment_method == 'manual' and not Config.PAYMENT_MANUAL_ENABLED:
+        return jsonify({'success': False, 'error': 'Manual transfer payment method is currently disabled'}), 400
+        
     amount = credits_count * 2000 # Rp 2.000 per credit
     invoice_id = f"INV-{uuid.uuid4().hex[:8].upper()}-{int(datetime.now().timestamp())}"
     

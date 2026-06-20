@@ -35,6 +35,10 @@ class Config:
     WORDPRESS_RATE_LIMIT = 100
 
     # Payment Gateways (Tripay, Paypal, Manual)
+    PAYMENT_TRIPAY_ENABLED = os.getenv('PAYMENT_TRIPAY_ENABLED', 'true').lower() == 'true'
+    PAYMENT_PAYPAL_ENABLED = os.getenv('PAYMENT_PAYPAL_ENABLED', 'true').lower() == 'true'
+    PAYMENT_MANUAL_ENABLED = os.getenv('PAYMENT_MANUAL_ENABLED', 'true').lower() == 'true'
+    
     TRIPAY_API_KEY = os.getenv('TRIPAY_API_KEY', 'MOCK_TRIPAY_API_KEY')
     TRIPAY_PRIVATE_KEY = os.getenv('TRIPAY_PRIVATE_KEY', 'MOCK_TRIPAY_PRIVATE_KEY')
     TRIPAY_MERCHANT_CODE = os.getenv('TRIPAY_MERCHANT_CODE', 'MOCK_MERCHANT_CODE')

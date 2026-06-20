@@ -234,5 +234,8 @@ def api_auth_verify(user_id):
 def api_auth_config():
     return jsonify({
         'success': True,
-        'google_client_id': Config.GOOGLE_CLIENT_ID or ''
+        'google_client_id': Config.GOOGLE_CLIENT_ID or '',
+        'payment_tripay_enabled': Config.PAYMENT_TRIPAY_ENABLED,
+        'payment_paypal_enabled': Config.PAYMENT_PAYPAL_ENABLED,
+        'payment_manual_enabled': Config.PAYMENT_MANUAL_ENABLED
     })

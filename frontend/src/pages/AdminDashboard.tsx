@@ -480,7 +480,18 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div className="h-px bg-border my-2" />
-                <h4 className="font-semibold text-sm text-foreground/85">Tripay (IDR Gateway)</h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-sm text-foreground/85">Tripay (IDR Gateway)</h4>
+                  <button
+                    type="button"
+                    onClick={() => setConfig({ ...config, PAYMENT_TRIPAY_ENABLED: config.PAYMENT_TRIPAY_ENABLED !== false ? false : true })}
+                    className={`${config.PAYMENT_TRIPAY_ENABLED !== false ? 'bg-primary' : 'bg-muted'} relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                  >
+                    <span
+                      className={`${config.PAYMENT_TRIPAY_ENABLED !== false ? 'translate-x-4' : 'translate-x-0'} pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                    />
+                  </button>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="TRIPAY_MERCHANT_CODE">Merchant Code</Label>
@@ -521,7 +532,18 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div className="h-px bg-border my-2" />
-                <h4 className="font-semibold text-sm text-foreground/85">PayPal (USD Gateway)</h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-sm text-foreground/85">PayPal (USD Gateway)</h4>
+                  <button
+                    type="button"
+                    onClick={() => setConfig({ ...config, PAYMENT_PAYPAL_ENABLED: config.PAYMENT_PAYPAL_ENABLED !== false ? false : true })}
+                    className={`${config.PAYMENT_PAYPAL_ENABLED !== false ? 'bg-primary' : 'bg-muted'} relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                  >
+                    <span
+                      className={`${config.PAYMENT_PAYPAL_ENABLED !== false ? 'translate-x-4' : 'translate-x-0'} pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                    />
+                  </button>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="PAYPAL_API_URL">API URL</Label>
@@ -553,7 +575,18 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div className="h-px bg-border my-2" />
-                <h4 className="font-semibold text-sm text-foreground/85">Manual Bank Account (Local Gateway)</h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-sm text-foreground/85">Manual Bank Account (Local Gateway)</h4>
+                  <button
+                    type="button"
+                    onClick={() => setConfig({ ...config, PAYMENT_MANUAL_ENABLED: config.PAYMENT_MANUAL_ENABLED !== false ? false : true })}
+                    className={`${config.PAYMENT_MANUAL_ENABLED !== false ? 'bg-primary' : 'bg-muted'} relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                  >
+                    <span
+                      className={`${config.PAYMENT_MANUAL_ENABLED !== false ? 'translate-x-4' : 'translate-x-0'} pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                    />
+                  </button>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="MANUAL_BANK_NAME">Bank Name</Label>

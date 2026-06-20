@@ -39,22 +39,48 @@ export default function Billing() {
   const [processing, setProcessing] = useState<boolean>(false);
   const [activeInvoice, setActiveInvoice] = useState<InvoiceData | null>(null);
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [tripayEnabled, setTripayEnabled] = useState<boolean>(true);
+  const [paypalEnabled, setPaypalEnabled] = useState<boolean>(true);
+  const [manualEnabled, setManualEnabled] = useState<boolean>(true);
 
   const fetchBillingInfo = async () => {
     try {
-      const [profileRes, historyRes] = await Promise.all([
+      const [profileRes, historyRes, configRes] = await Promise.all([
         apiFetch('/api/profile'),
-        apiFetch('/api/payments/history')
+        apiFetch('/api/payments/history'),
+        apiFetch('/api/auth/config')
       ]);
       
       const profileData = await profileRes.json();
       const historyData = await historyRes.json();
+      const configData = await configRes.json();
 
       if (profileData.success) {
         setProfile(profileData.profile);
       }
       if (historyData.success) {
         setHistory(historyData.history);
+      }
+      if (configData.success) {
+        const isTripay = configData.payment_tripay_enabled !== false;
+        const isPaypal = configData.payment_paypal_enabled !== false;
+        const isManual = configData.payment_manual_enabled !== false;
+        
+        setTripayEnabled(isTripay);
+        setPaypalEnabled(isPaypal);
+        setManualEnabled(isManual);
+        
+        let defaultMethod = 'manual';
+        if (!isManual) {
+          if (isTripay) {
+            defaultMethod = 'tripay';
+          } else if (isPaypal) {
+            defaultMethod = 'paypal';
+          } else {
+            defaultMethod = '';
+          }
+        }
+        setPaymentMethod(defaultMethod);
       }
     } catch (e) {
       console.error(e);
@@ -277,58 +303,70 @@ export default function Billing() {
 
                 <div className="space-y-3">
                   <Label>Payment Method</Label>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <label className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${paymentMethod === 'manual' ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/40'}`}>
-                      <input 
-                        type="radio" 
-                        name="payment_method" 
-                        value="manual"
-                        checked={paymentMethod === 'manual'}
-                        onChange={() => setPaymentMethod('manual')}
-                        className="sr-only"
-                      />
-                      <Wallet className="h-5 w-5 text-indigo-500" />
-                      <div className="text-left">
-                        <p className="font-bold text-sm">Manual Transfer</p>
-                        <p className="text-xs text-muted-foreground">Mandiri / VA approval</p>
-                      </div>
-                    </label>
+                  {!manualEnabled && !tripayEnabled && !paypalEnabled ? (
+                    <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm text-center">
+                      Metode pembayaran tidak tersedia saat ini. Silakan hubungi admin.
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {manualEnabled && (
+                        <label className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${paymentMethod === 'manual' ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/40'}`}>
+                          <input 
+                            type="radio" 
+                            name="payment_method" 
+                            value="manual"
+                            checked={paymentMethod === 'manual'}
+                            onChange={() => setPaymentMethod('manual')}
+                            className="sr-only"
+                          />
+                          <Wallet className="h-5 w-5 text-indigo-500" />
+                          <div className="text-left">
+                            <p className="font-bold text-sm">Manual Transfer</p>
+                            <p className="text-xs text-muted-foreground">Mandiri / VA approval</p>
+                          </div>
+                        </label>
+                      )}
 
-                    <label className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${paymentMethod === 'tripay' ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/40'}`}>
-                      <input 
-                        type="radio" 
-                        name="payment_method" 
-                        value="tripay"
-                        checked={paymentMethod === 'tripay'}
-                        onChange={() => setPaymentMethod('tripay')}
-                        className="sr-only"
-                      />
-                      <CreditCard className="h-5 w-5 text-emerald-500" />
-                      <div className="text-left">
-                        <p className="font-bold text-sm">Tripay Gateway</p>
-                        <p className="text-xs text-muted-foreground">QRIS, VA, E-Wallet</p>
-                      </div>
-                    </label>
+                      {tripayEnabled && (
+                        <label className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${paymentMethod === 'tripay' ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/40'}`}>
+                          <input 
+                            type="radio" 
+                            name="payment_method" 
+                            value="tripay"
+                            checked={paymentMethod === 'tripay'}
+                            onChange={() => setPaymentMethod('tripay')}
+                            className="sr-only"
+                          />
+                          <CreditCard className="h-5 w-5 text-emerald-500" />
+                          <div className="text-left">
+                            <p className="font-bold text-sm">Tripay Gateway</p>
+                            <p className="text-xs text-muted-foreground">QRIS, VA, E-Wallet</p>
+                          </div>
+                        </label>
+                      )}
 
-                    <label className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${paymentMethod === 'paypal' ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/40'}`}>
-                      <input 
-                        type="radio" 
-                        name="payment_method" 
-                        value="paypal"
-                        checked={paymentMethod === 'paypal'}
-                        onChange={() => setPaymentMethod('paypal')}
-                        className="sr-only"
-                      />
-                      <CreditCard className="h-5 w-5 text-blue-500" />
-                      <div className="text-left">
-                        <p className="font-bold text-sm">PayPal Checkout</p>
-                        <p className="text-xs text-muted-foreground">USD / Credit Card</p>
-                      </div>
-                    </label>
-                  </div>
+                      {paypalEnabled && (
+                        <label className={`flex items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${paymentMethod === 'paypal' ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/40'}`}>
+                          <input 
+                            type="radio" 
+                            name="payment_method" 
+                            value="paypal"
+                            checked={paymentMethod === 'paypal'}
+                            onChange={() => setPaymentMethod('paypal')}
+                            className="sr-only"
+                          />
+                          <CreditCard className="h-5 w-5 text-blue-500" />
+                          <div className="text-left">
+                            <p className="font-bold text-sm">PayPal Checkout</p>
+                            <p className="text-xs text-muted-foreground">USD / Credit Card</p>
+                          </div>
+                        </label>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {paymentMethod === 'tripay' && (
+                {paymentMethod === 'tripay' && tripayEnabled && (
                   <div className="space-y-2">
                     <Label htmlFor="payment_code">Select Tripay Code</Label>
                     <select
@@ -346,7 +384,7 @@ export default function Billing() {
                   </div>
                 )}
 
-                <Button type="submit" disabled={processing} className="w-full bg-gradient-to-r from-primary to-indigo-600 hover:from-primary/95 hover:to-indigo-600/95 font-bold shadow-md py-6">
+                <Button type="submit" disabled={processing || (!manualEnabled && !tripayEnabled && !paypalEnabled)} className="w-full bg-gradient-to-r from-primary to-indigo-600 hover:from-primary/95 hover:to-indigo-600/95 font-bold shadow-md py-6">
                   {processing ? 'Processing Order...' : 'Generate Invoice'}
                 </Button>
               </form>

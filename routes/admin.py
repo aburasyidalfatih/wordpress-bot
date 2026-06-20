@@ -226,6 +226,9 @@ def get_admin_config(user_id):
             'MANUAL_BANK_ACCOUNT': Config.MANUAL_BANK_ACCOUNT,
             'MANUAL_BANK_HOLDER': Config.MANUAL_BANK_HOLDER,
             'ADMIN_WHATSAPP': Config.ADMIN_WHATSAPP,
+            'PAYMENT_TRIPAY_ENABLED': Config.PAYMENT_TRIPAY_ENABLED,
+            'PAYMENT_PAYPAL_ENABLED': Config.PAYMENT_PAYPAL_ENABLED,
+            'PAYMENT_MANUAL_ENABLED': Config.PAYMENT_MANUAL_ENABLED,
             # Gemini database-backed configs
             'gemini_api_key': db_config.get('gemini_api_key', ''),
             'gemini_model': db_config.get('gemini_model', 'gemini-2.5-pro'),
@@ -260,23 +263,28 @@ def update_admin_config(user_id):
         'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
         'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SENDER_EMAIL',
         'STARSENDER_API_KEY', 'STARSENDER_DEVICE_ID',
-        'MANUAL_BANK_NAME', 'MANUAL_BANK_ACCOUNT', 'MANUAL_BANK_HOLDER', 'ADMIN_WHATSAPP'
+        'MANUAL_BANK_NAME', 'MANUAL_BANK_ACCOUNT', 'MANUAL_BANK_HOLDER', 'ADMIN_WHATSAPP',
+        'PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED'
     ]
     
     updates = {}
     for k in keys:
         if k in data:
-            val = str(data[k]).strip()
+            val = data[k]
             if k == 'PAYMENT_USD_RATE':
                 try:
-                    val = float(val)
+                    val = float(str(val).strip())
                 except ValueError:
                     val = 16000.0
             elif k == 'SMTP_PORT':
                 try:
-                    val = int(val)
+                    val = int(str(val).strip())
                 except ValueError:
                     val = 587
+            elif k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
+                val = 'true' if val is True or str(val).lower() == 'true' else 'false'
+            else:
+                val = str(val).strip()
             updates[k] = val
 
     env_path = '.env'
@@ -299,7 +307,10 @@ def update_admin_config(user_id):
     for k, v in updates.items():
         env_vars[k] = str(v)
         os.environ[k] = str(v)
-        setattr(Config, k, v)
+        if k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
+            setattr(Config, k, v == 'true')
+        else:
+            setattr(Config, k, v)
         
     try:
         with open(env_path, 'w', encoding='utf-8') as f:
