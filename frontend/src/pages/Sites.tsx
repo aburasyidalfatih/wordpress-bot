@@ -192,11 +192,47 @@ export default function Sites() {
                       {currentSite.id && (
                         <div className="pt-4 border-t space-y-4">
                           <div className="flex justify-between items-center">
-                            <h3 className="font-medium">Categories</h3>
+                            <div className="flex items-center gap-3">
+                              <h3 className="font-medium">Categories</h3>
+                              {currentSite.categories && currentSite.categories.length > 0 && (
+                                <div className="flex items-center gap-2 border-l pl-3 ml-1">
+                                  <Button 
+                                    type="button" 
+                                    variant="link" 
+                                    size="xs"
+                                    className="p-0 text-xs font-bold text-primary hover:no-underline"
+                                    onClick={() => {
+                                      setCurrentSite({
+                                        ...currentSite,
+                                        selected_categories: [...(currentSite.categories || [])]
+                                      });
+                                    }}
+                                  >
+                                    Centang Semua
+                                  </Button>
+                                  <span className="text-muted-foreground/30 text-[10px]">|</span>
+                                  <Button 
+                                    type="button" 
+                                    variant="link" 
+                                    size="xs"
+                                    className="p-0 text-xs font-bold text-muted-foreground hover:no-underline"
+                                    onClick={() => {
+                                      setCurrentSite({
+                                        ...currentSite,
+                                        selected_categories: []
+                                      });
+                                    }}
+                                  >
+                                    Hapus Semua
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
                             <Button type="button" variant="outline" size="sm" onClick={handleFetchCategories}>
                               <RefreshCw className="h-4 w-4 mr-2" /> Fetch Categories
                             </Button>
                           </div>
+
                           {currentSite.categories && currentSite.categories.length > 0 ? (
                             <div className="space-y-2 max-h-48 overflow-y-auto p-3 border rounded-xl bg-muted/30">
                               {currentSite.categories.map((cat: any) => (
