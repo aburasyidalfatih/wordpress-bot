@@ -13,7 +13,7 @@ declare global {
   }
 }
 
-export default function Login({ setIsAuthenticated }: { setIsAuthenticated: (val: boolean) => void }) {
+export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthenticated: (val: boolean) => void; setUserRole: (val: string) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [googleClientId, setGoogleClientId] = useState('');
@@ -50,6 +50,9 @@ export default function Login({ setIsAuthenticated }: { setIsAuthenticated: (val
       if (data.success) {
         localStorage.setItem('token', data.token);
         setIsAuthenticated(true);
+        if (data.user && data.user.role) {
+          setUserRole(data.user.role);
+        }
         toast.success('Login Google berhasil!');
         navigate('/dashboard');
       } else {
@@ -114,6 +117,9 @@ export default function Login({ setIsAuthenticated }: { setIsAuthenticated: (val
       if (data.success) {
         localStorage.setItem('token', data.token);
         setIsAuthenticated(true);
+        if (data.user && data.user.role) {
+          setUserRole(data.user.role);
+        }
         toast.success('Simulasi login Google berhasil!');
         navigate('/dashboard');
       } else {
@@ -136,6 +142,9 @@ export default function Login({ setIsAuthenticated }: { setIsAuthenticated: (val
       if (data.success) {
         localStorage.setItem('token', data.token);
         setIsAuthenticated(true);
+        if (data.user && data.user.role) {
+          setUserRole(data.user.role);
+        }
         toast.success('Login Admin berhasil!');
         navigate('/dashboard');
       } else {

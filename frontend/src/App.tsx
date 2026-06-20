@@ -45,7 +45,7 @@ function App() {
         <Suspense fallback={<div className="flex h-screen items-center justify-center">Loading page...</div>}>
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Login setIsAuthenticated={setIsAuthenticated} />} />
+            <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Login setIsAuthenticated={setIsAuthenticated} setUserRole={setUserRole} />} />
             <Route path="/register" element={<Navigate to="/login" replace />} />
             
             {/* Authenticated Routes with Layout */}
