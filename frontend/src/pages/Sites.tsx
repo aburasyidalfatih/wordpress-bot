@@ -237,7 +237,15 @@ export default function Sites() {
                           <Label className="text-base font-semibold text-foreground">Website Status</Label>
                           <p className="text-sm text-muted-foreground">Turn this off to completely disable the bot for this website.</p>
                         </div>
-                        <input type="checkbox" name="is_active" checked={currentSite.is_active !== false} onChange={handleChange} className="h-5 w-5 rounded text-primary cursor-pointer" />
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, is_active: currentSite.is_active !== false ? false : true })}
+                          className={`${currentSite.is_active !== false ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.is_active !== false ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
                       </div>
                       
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
@@ -245,7 +253,15 @@ export default function Sites() {
                           <Label className="text-base font-semibold text-foreground">Auto Posting (Publishing)</Label>
                           <p className="text-sm text-muted-foreground">Automatically generate and publish posts based on schedule.</p>
                         </div>
-                        <input type="checkbox" name="auto_post" checked={currentSite.auto_post || false} onChange={handleChange} className="h-5 w-5 rounded text-primary cursor-pointer" />
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, auto_post: !currentSite.auto_post })}
+                          className={`${currentSite.auto_post ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.auto_post ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
                       </div>
 
 
@@ -300,9 +316,20 @@ export default function Sites() {
 
                   {activeTab === 'telegram' && (
                     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-                      <div className="flex items-center space-x-2">
-                        <input type="checkbox" id="telegram_enabled" name="telegram_enabled" checked={currentSite.telegram_enabled || false} onChange={handleChange} className="h-4 w-4 rounded text-primary" />
-                        <Label htmlFor="telegram_enabled" className="cursor-pointer font-semibold text-base">Enable Telegram Integration</Label>
+                      <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
+                        <div className="space-y-0.5">
+                          <Label className="text-base font-semibold text-foreground">Telegram Integration</Label>
+                          <p className="text-sm text-muted-foreground">Post articles automatically to Telegram channel or notify admin chat.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, telegram_enabled: !currentSite.telegram_enabled })}
+                          className={`${currentSite.telegram_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.telegram_enabled ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
                       </div>
                       {currentSite.telegram_enabled && (
                         <div className="space-y-4 pt-4 border-t border-border/50">
@@ -314,9 +341,20 @@ export default function Sites() {
                             <Label>Admin Chat ID (for notifications)</Label>
                             <Input name="telegram_chat_id" value={currentSite.telegram_chat_id || ''} onChange={handleChange} />
                           </div>
-                          <div className="flex items-center space-x-2 pt-2">
-                            <input type="checkbox" id="telegram_post_to_channel" name="telegram_post_to_channel" checked={currentSite.telegram_post_to_channel || false} onChange={handleChange} className="h-4 w-4 rounded text-primary" />
-                            <Label htmlFor="telegram_post_to_channel" className="cursor-pointer">Post articles to Telegram Channel</Label>
+                          <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/10">
+                            <div className="space-y-0.5">
+                              <Label className="font-semibold text-foreground">Post articles to Telegram Channel</Label>
+                              <p className="text-xs text-muted-foreground">Automatically forward newly published blog posts to a Telegram Channel.</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setCurrentSite({ ...currentSite, telegram_post_to_channel: !currentSite.telegram_post_to_channel })}
+                              className={`${currentSite.telegram_post_to_channel ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                            >
+                              <span
+                                className={`${currentSite.telegram_post_to_channel ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                              />
+                            </button>
                           </div>
                           {currentSite.telegram_post_to_channel && (
                             <div className="space-y-2 pl-6">
@@ -331,9 +369,20 @@ export default function Sites() {
 
                   {activeTab === 'facebook' && (
                     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-                      <div className="flex items-center space-x-2">
-                        <input type="checkbox" id="facebook_enabled" name="facebook_enabled" checked={currentSite.facebook_enabled || false} onChange={handleChange} className="h-4 w-4 rounded text-primary" />
-                        <Label htmlFor="facebook_enabled" className="cursor-pointer font-semibold text-base">Enable Facebook Page Posting</Label>
+                      <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
+                        <div className="space-y-0.5">
+                          <Label className="text-base font-semibold text-foreground">Facebook Page Posting</Label>
+                          <p className="text-sm text-muted-foreground">Automatically post new articles to your Facebook Page feed.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, facebook_enabled: !currentSite.facebook_enabled })}
+                          className={`${currentSite.facebook_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.facebook_enabled ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
                       </div>
                       {currentSite.facebook_enabled && (
                         <div className="space-y-4 pt-4 border-t border-border/50">
@@ -352,9 +401,20 @@ export default function Sites() {
 
                   {activeTab === 'twitter' && (
                     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-                      <div className="flex items-center space-x-2">
-                        <input type="checkbox" id="twitter_enabled" name="twitter_enabled" checked={currentSite.twitter_enabled || false} onChange={handleChange} className="h-4 w-4 rounded text-primary" />
-                        <Label htmlFor="twitter_enabled" className="cursor-pointer font-semibold text-base">Enable Twitter (X) Posting</Label>
+                      <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
+                        <div className="space-y-0.5">
+                          <Label className="text-base font-semibold text-foreground">Twitter (X) Posting</Label>
+                          <p className="text-sm text-muted-foreground">Automatically tweet links to your new articles on X/Twitter.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, twitter_enabled: !currentSite.twitter_enabled })}
+                          className={`${currentSite.twitter_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.twitter_enabled ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
                       </div>
                       {currentSite.twitter_enabled && (
                         <div className="space-y-4 pt-4 border-t border-border/50">
@@ -383,9 +443,20 @@ export default function Sites() {
 
                   {activeTab === 'threads' && (
                     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-                      <div className="flex items-center space-x-2">
-                        <input type="checkbox" id="threads_enabled" name="threads_enabled" checked={currentSite.threads_enabled || false} onChange={handleChange} className="h-4 w-4 rounded text-primary" />
-                        <Label htmlFor="threads_enabled" className="cursor-pointer font-semibold text-base">Enable Threads Posting</Label>
+                      <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
+                        <div className="space-y-0.5">
+                          <Label className="text-base font-semibold text-foreground">Threads Posting</Label>
+                          <p className="text-sm text-muted-foreground">Automatically post links to your new articles on Instagram Threads.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, threads_enabled: !currentSite.threads_enabled })}
+                          className={`${currentSite.threads_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.threads_enabled ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
                       </div>
                       {currentSite.threads_enabled && (
                         <div className="space-y-4 pt-4 border-t border-border/50">
