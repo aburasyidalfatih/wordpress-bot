@@ -1,9 +1,9 @@
 #!/bin/bash
 # Comprehensive health check script
 
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOT_URL="http://localhost:5000/health"
-LOG_FILE="/home/ubuntu/wordpress-bot/health_check.log"
-BOT_DIR="/home/ubuntu/wordpress-bot"
+LOG_FILE="$BOT_DIR/health_check.log"
 
 # Load env
 if [ -f "$BOT_DIR/.env" ]; then

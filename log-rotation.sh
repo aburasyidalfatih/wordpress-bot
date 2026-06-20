@@ -2,8 +2,9 @@
 # WordPress Bot Log Rotation Script
 # Runs daily to manage log files
 
-LOG_FILE="/home/ubuntu/wordpress-bot/bot.log"
-LOG_DIR="/home/ubuntu/wordpress-bot"
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$BOT_DIR/bot.log"
+LOG_DIR="$BOT_DIR"
 
 echo "[$(date)] Starting log rotation..."
 

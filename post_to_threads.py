@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Post last article to Threads"""
 
+import os
 import sys
-sys.path.insert(0, '/home/ubuntu/wordpress-bot')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from database import Database
 from app import load_config

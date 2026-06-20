@@ -5,6 +5,8 @@
 echo "🔍 Checking WordPress Bot Scheduler..."
 echo ""
 
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # Check if bot is running
 if lsof -i :5003 >/dev/null 2>&1; then
     PID=$(lsof -ti :5003)
@@ -13,7 +15,7 @@ if lsof -i :5003 >/dev/null 2>&1; then
 else
     echo "❌ Bot NOT running!"
     echo "   Restarting..."
-    cd /home/ubuntu/wordpress-bot
+    cd "$BOT_DIR"
     source venv/bin/activate
     nohup python app.py > dashboard.log 2>&1 &
     sleep 3
@@ -21,7 +23,7 @@ else
 fi
 
 # Check scheduler config
-cd /home/ubuntu/wordpress-bot
+cd "$BOT_DIR"
 source venv/bin/activate
 python3 << 'EOF'
 import sqlite3

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+import os
 import sys
-sys.path.insert(0, '/home/ubuntu/wordpress-bot')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import trending, db, load_config
 import logging

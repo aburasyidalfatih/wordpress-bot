@@ -1,14 +1,15 @@
 #!/bin/bash
 # Health check and monitoring script
 
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOT_URL="http://localhost:5000/health"
-LOG_FILE="/home/ubuntu/wordpress-bot/monitor.log"
+LOG_FILE="$BOT_DIR/monitor.log"
 TELEGRAM_BOT_TOKEN=""  # Will be read from .env
 TELEGRAM_CHAT_ID=""    # Will be read from .env
 
 # Load env variables
-if [ -f "/home/ubuntu/wordpress-bot/.env" ]; then
-    export $(cat /home/ubuntu/wordpress-bot/.env | grep -v '^#' | xargs)
+if [ -f "$BOT_DIR/.env" ]; then
+    export $(cat "$BOT_DIR/.env" | grep -v '^#' | xargs)
 fi
 
 # Check health endpoint
@@ -34,7 +35,7 @@ else
 fi
 
 # Check disk space
-DISK_USAGE=$(df -h /home/ubuntu/wordpress-bot | awk 'NR==2 {print $5}' | sed 's/%//')
+DISK_USAGE=$(df -h "$BOT_DIR" | awk 'NR==2 {print $5}' | sed 's/%//')
 if [ "$DISK_USAGE" -gt 80 ]; then
     echo "[$(date)] ⚠️ Disk usage high: ${DISK_USAGE}%" >> $LOG_FILE
 fi
