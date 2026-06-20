@@ -226,7 +226,8 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
             
             <div className="grid gap-3">
               <div className="grid gap-1.5">
-                <Label htmlFor="email" className="text-xs text-slate-400">Email Admin</Label>
+                <Label htmlFor="email" className="text-xs text-slate-400">Email</Label>
+
                 <Input
                   id="email"
                   type="email"
