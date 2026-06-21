@@ -157,6 +157,23 @@ def fetch_categories(user_id, site_id):
             
             if categories:
                 site.categories = categories
+                
+                # Sync descriptions and counts in selected_categories
+                selected_cats = site.selected_categories or []
+                updated_selected = []
+                for sel_cat in selected_cats:
+                    matching = next((c for c in categories if c['id'] == sel_cat['id']), None)
+                    if matching:
+                        updated_selected.append({
+                            'id': matching['id'],
+                            'name': matching['name'],
+                            'description': matching.get('description', ''),
+                            'count': matching.get('count', 0)
+                        })
+                    else:
+                        updated_selected.append(sel_cat)
+                
+                site.selected_categories = updated_selected
                 session.commit()
                 return jsonify({'success': True, 'categories': categories})
             else:
