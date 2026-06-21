@@ -400,8 +400,8 @@ export default function Queue() {
                     </div>
                     <h3 className="font-semibold text-lg">{item.title}</h3>
                     <p className="text-xs text-muted-foreground mt-2">Posted: {new Date(item.timestamp).toLocaleString()}</p>
-                    {item.success && item.image_failed && (
-                        <p className="text-xs text-red-500 mt-1">{item.result}</p>
+                    {(!item.success || item.image_failed) && (
+                        <p className="text-xs text-red-500 mt-1 bg-red-50 p-2 rounded border border-red-100">{item.result}</p>
                     )}
                   </div>
                   
