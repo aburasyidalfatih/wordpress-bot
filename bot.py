@@ -671,6 +671,9 @@ Style: Blog featured image."""
                     )
                 )
                 
+                if not hasattr(response, 'parts') or response.parts is None:
+                    raise Exception(f"Image generation failed, blocked by safety or missing parts. Raw response: {getattr(response, 'text', 'None')}")
+
                 for part in response.parts:
                     if part.inline_data is not None:
                         image_bytes = part.inline_data.data

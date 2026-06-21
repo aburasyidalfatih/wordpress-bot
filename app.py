@@ -419,6 +419,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         
         image_failed = False
         featured_image_id = None
+        image_data = None
         
         try:
             logger.info("Generating featured image...")
