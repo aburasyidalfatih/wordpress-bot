@@ -379,6 +379,12 @@ def get_payment_history(user_id):
                 'amount': tx.amount,
                 'status': tx.status,
                 'receipt_url': tx.receipt_url,
-                'created_at': tx.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                'created_at': tx.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'bank_details': {
+                    'bank_name': Config.MANUAL_BANK_NAME,
+                    'account_number': Config.MANUAL_BANK_ACCOUNT,
+                    'account_holder': Config.MANUAL_BANK_HOLDER,
+                    'whatsapp_number': Config.ADMIN_WHATSAPP
+                } if tx.payment_method == 'manual' else None
             })
         return jsonify({'success': True, 'history': history})

@@ -404,7 +404,7 @@ export default function Billing() {
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 space-y-3">
                       <h4 className="font-bold text-indigo-400">Manual Transfer Instructions</h4>
-                      <p className="text-sm">Please transfer exactly <b>Rp {cost.toLocaleString('id-ID')}</b> to the bank below:</p>
+                      <p className="text-sm">Please transfer exactly <b>Rp {(activeInvoice.amount || cost).toLocaleString('id-ID')}</b> to the bank below:</p>
                       <div className="grid gap-2 text-sm font-medium mt-2 bg-background/50 p-3 rounded-lg">
                         <div className="flex justify-between"><span>Bank:</span> <span>{activeInvoice.bank_details.bank_name}</span></div>
                         <div className="flex justify-between"><span>Account Number:</span> <span className="font-black text-indigo-300">{activeInvoice.bank_details.account_number}</span></div>
@@ -413,7 +413,7 @@ export default function Billing() {
                       {activeInvoice.bank_details.whatsapp_number && (
                         <div className="pt-2">
                           <a 
-                            href={`https://wa.me/${activeInvoice.bank_details.whatsapp_number.replace(/[^0-9]/g, '')}?text=Halo%20Admin,%20saya%20ingin%20konfirmasi%20pembayaran%20manual%20untuk%20Invoice%20${activeInvoice.invoice_id}%20sebesar%20Rp%20${cost.toLocaleString('id-ID')}`}
+                            href={`https://wa.me/${activeInvoice.bank_details.whatsapp_number.replace(/[^0-9]/g, '')}?text=Halo%20Admin,%20saya%20ingin%20konfirmasi%20pembayaran%20manual%20untuk%20Invoice%20${activeInvoice.invoice_id}%20sebesar%20Rp%20${(activeInvoice.amount || cost).toLocaleString('id-ID')}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl shadow-md transition-all"
@@ -527,20 +527,23 @@ export default function Billing() {
                   </td>
                   <td className="p-4 text-center">
                     {tx.status === 'pending' && tx.payment_method === 'manual' ? (
-                      <div className="flex flex-col items-center gap-1">
-                        <Input 
-                          type="file" 
-                          accept="image/*"
-                          className="h-7 text-xs w-44" 
-                          onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
-                        />
+                      <div className="flex justify-center">
                         <Button 
                           size="sm" 
                           variant="outline" 
-                          className="h-7 text-xs" 
-                          onClick={(e) => handleUploadReceipt(e, tx.invoice_id)}
+                          className="h-8 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200"
+                          onClick={() => {
+                            setCreditsCount(tx.credits_purchased);
+                            setActiveInvoice({
+                              invoice_id: tx.invoice_id,
+                              payment_method: tx.payment_method,
+                              amount: tx.amount,
+                              bank_details: tx.bank_details
+                            });
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
                         >
-                          Upload
+                          <Eye className="h-3 w-3 mr-1" /> View Invoice
                         </Button>
                       </div>
                     ) : tx.receipt_url ? (
