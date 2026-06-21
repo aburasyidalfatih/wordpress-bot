@@ -53,8 +53,8 @@ def create_invoice(user_id):
     payment_method = data.get('payment_method') # 'manual', 'tripay', 'paypal'
     payment_code = data.get('payment_code', '') # Tripay payment codes (e.g. 'BRIVA', 'QRIS2', etc.)
     
-    if credits_count <= 0:
-        return jsonify({'success': False, 'error': 'Invalid credits count'}), 400
+    if credits_count < 25:
+        return jsonify({'success': False, 'error': 'Minimal pembelian adalah 25 kredit'}), 400
         
     if payment_method == 'tripay' and not Config.PAYMENT_TRIPAY_ENABLED:
         return jsonify({'success': False, 'error': 'Tripay payment method is currently disabled'}), 400

@@ -31,7 +31,7 @@ interface InvoiceData {
 
 export default function Billing() {
   const [profile, setProfile] = useState<any>({});
-  const [creditsCount, setCreditsCount] = useState<number>(10);
+  const [creditsCount, setCreditsCount] = useState<number>(25);
   const [paymentMethod, setPaymentMethod] = useState<string>('manual');
   const [paymentCode, setPaymentCode] = useState<string>('QRIS2'); // Tripay default
   const [history, setHistory] = useState<any[]>([]);
@@ -285,9 +285,9 @@ export default function Billing() {
                     <Input
                       id="credits_count"
                       type="number"
-                      min="1"
+                      min="25"
                       value={creditsCount}
-                      onChange={(e) => setCreditsCount(Math.max(1, parseInt(e.target.value) || 0))}
+                      onChange={(e) => setCreditsCount(Math.max(25, parseInt(e.target.value) || 0))}
                       required
                     />
                   </div>
