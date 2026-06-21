@@ -181,9 +181,17 @@ class ArticleGenerator:
                 else:
                     seo_section += "\n💡 Pastikan artikel menjawab pertanyaan-pertanyaan ini secara lengkap!\n"
         
+        category_desc_text = ""
+        category_desc = kwargs.get('category_desc')
+        if category_desc:
+            if language == 'en':
+                category_desc_text = f"\n\n📂 CATEGORY DESCRIPTION / WRITING INSTRUCTIONS:\n{category_desc}\nFollow these category instructions and focus the article style and scope on this description."
+            else:
+                category_desc_text = f"\n\n📂 DESKRIPSI KATEGORI / PETUNJUK PENULISAN:\n{category_desc}\nIkuti petunjuk kategori ini dan fokuskan gaya serta ruang lingkup artikel pada deskripsi tersebut."
+
         if language == 'en':
             prompt = f"""Write a high-quality, SEO-optimized blog article for the website {target_site} about: {topic_focus}
-{existing_titles_text}{research_note}{seo_section}
+{existing_titles_text}{research_note}{seo_section}{category_desc_text}
 TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
 
@@ -337,7 +345,7 @@ IMPORTANT:
 """
         else:
             prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic_focus}
-{existing_titles_text}{research_note}{seo_section}
+{existing_titles_text}{research_note}{seo_section}{category_desc_text}
 TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
 
@@ -768,7 +776,7 @@ class WordPressPublisher:
             
             if response.status_code == 200:
                 categories = response.json()
-                return [{'id': cat['id'], 'name': cat['name'], 'count': cat.get('count', 0)} for cat in categories]
+                return [{'id': cat['id'], 'name': cat['name'], 'description': cat.get('description', ''), 'count': cat.get('count', 0)} for cat in categories]
             else:
                 logger.error(f"Failed to fetch categories: {response.status_code}")
                 return []

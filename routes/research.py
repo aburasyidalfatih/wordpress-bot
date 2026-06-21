@@ -186,6 +186,12 @@ def generate_titles(user_id, category):
             keywords = latest.keywords if latest and latest.keywords else []
             questions = latest.questions if latest and latest.questions else []
             site_name = site.site_name
+            
+            category_desc = ""
+            for cat in (site.categories or []):
+                if cat.get('name') == category:
+                    category_desc = cat.get('description', '')
+                    break
         
         # Use ArticleGenerator to suggest titles
         from bot import ArticleGenerator
@@ -195,8 +201,11 @@ def generate_titles(user_id, category):
             config.get('gemini_image_model', 'gemini-3.1-flash-image')
         )
         
+        category_desc_str = f"\nDeskripsi Kategori (Petunjuk Konten): {category_desc}" if category_desc else ""
+        
         # Prompt Gemini to generate titles
         prompt = f"""Buatlah {count} judul artikel blog yang sangat menarik, click-worthy, dan SEO-optimized untuk kategori "{category}" pada website {site_name}.
+{category_desc_str}
 Fokuskan pada audiens yang relevan.
 Tahun saat ini: 2026. Jangan gunakan tahun 2024 atau 2025.
 Kata kunci terkait: {', '.join(keywords[:5]) if keywords else category}

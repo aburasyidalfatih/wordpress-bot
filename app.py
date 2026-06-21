@@ -327,6 +327,14 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         
         custom_article_prompt = site_config.get('article_prompt') or None
         custom_image_prompt = site_config.get('image_prompt') or None
+        
+        # Get category description from site categories list
+        category_desc = ""
+        for cat in site_config.get('categories', []):
+            if cat.get('name') == category['name']:
+                category_desc = cat.get('description', '')
+                break
+                
         article = generator.generate_article(
             category['name'], 
             existing_titles, 
@@ -334,7 +342,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             seo_data,
             custom_prompt=custom_article_prompt,
             site_name=site_config.get('site_name'),
-            language=site_config.get('language', 'id')
+            language=site_config.get('language', 'id'),
+            category_desc=category_desc
         )
         
         # Check for duplicate or similar titles
@@ -389,7 +398,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 avoid_similar=True,
                 custom_prompt=custom_article_prompt,
                 site_name=site_config.get('site_name'),
-                language=site_config.get('language', 'id')
+                language=site_config.get('language', 'id'),
+                category_desc=category_desc
             )
         
         image_failed = False
