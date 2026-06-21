@@ -193,9 +193,9 @@ export default function Landing() {
             <div className="w-12 h-12 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
               <Search className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mt-4">Riset SEO Otomatis</h3>
+            <h3 className="text-lg font-bold text-white mt-4">Intelligence Hub & Riset SEO</h3>
             <p className="mt-2 text-slate-400 text-sm leading-relaxed">
-              Sistem secara berkala memindai Google Trends, menganalisis kompetitor, mencatat kata kunci populer, serta mengekstrak pertanyaan pengguna untuk diolah menjadi ide konten.
+              Sistem secara otomatis memindai kompetitor, mencatat tren kata kunci, mengekstrak pertanyaan pengguna, dan mengumpulkan video YouTube terpopuler untuk riset topik mendalam.
             </p>
           </div>
 
@@ -204,9 +204,9 @@ export default function Landing() {
             <div className="w-12 h-12 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
               <Sparkles className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mt-4">Penulis AI Gemini</h3>
+            <h3 className="text-lg font-bold text-white mt-4">Penulis AI Gemini & Bulk Generate</h3>
             <p className="mt-2 text-slate-400 text-sm leading-relaxed">
-              Menggunakan model tercanggih Gemini untuk menulis konten berkualitas tinggi, natural, ramah SEO, dan lengkap dengan meta description serta tag yang sesuai.
+              Menggunakan model AI Gemini untuk menghasilkan puluhan judul menarik secara massal, dan otomatis menulis konten SEO berkualitas tinggi lengkap dengan meta deskripsi.
             </p>
           </div>
 
@@ -237,9 +237,9 @@ export default function Landing() {
             <div className="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
               <ListTodo className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mt-4">Antrean & Perencana Konten</h3>
+            <h3 className="text-lg font-bold text-white mt-4">Antrean, Acak Judul & Riwayat</h3>
             <p className="mt-2 text-slate-400 text-sm leading-relaxed">
-              Kelola ide artikel secara manual di halaman Queue. Tambah antrean postingan, ubah judul target, atau hapus antrean sesuai kebutuhan editorial Anda.
+              Kelola ide artikel di antrean, gunakan fitur acak (shuffle) agar kategori postingan bervariasi, prioritas auto-posting, serta pantau semua riwayat artikel yang sukses rilis.
             </p>
           </div>
 
