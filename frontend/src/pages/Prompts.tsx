@@ -88,6 +88,12 @@ export default function Prompts() {
           current_prompt: currentPrompt
         })
       });
+      if (!res.ok) {
+        const errText = await res.text();
+        setMessage(`Server error (${res.status}): ${errText.substring(0, 150)}`);
+        setOptimizing(null);
+        return;
+      }
       const result = await res.json();
       if (result.success) {
         if (type === 'article') {
@@ -99,8 +105,8 @@ export default function Prompts() {
       } else {
         setMessage('Gagal mengoptimasi prompt: ' + result.error);
       }
-    } catch (err) {
-      setMessage('Network error saat optimasi prompt.');
+    } catch (err: any) {
+      setMessage(`Network error saat optimasi prompt: ${err.message}`);
     } finally {
       setOptimizing(null);
     }

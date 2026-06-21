@@ -151,19 +151,22 @@ def api_optimize_prompt(user_id):
         return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
         
     config = load_config(user_id) or {}
-    with db.get_session() as session:
-        from database import WordPressSite
-        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-        if not site:
-            return jsonify({'success': False, 'error': 'Site not found'}), 404
+    try:
+        with db.get_session() as session:
+            from database import WordPressSite
+            site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+            if not site:
+                return jsonify({'success': False, 'error': 'Site not found'}), 404
+                
+            site_name = site.site_name or ''
+            site_url = site.url or ''
+            tagline = site.tagline or ''
             
-        site_name = site.site_name or ''
-        site_url = site.url or ''
-        tagline = site.tagline or ''
-        categories = ", ".join([c.get('name', '') for c in (site.categories or [])])
-        
-        from bot import ArticleGenerator
-        try:
+            cats = site.categories or []
+            categories = ", ".join([c.get('name', '') if isinstance(c, dict) else str(c) for c in cats])
+            
+            from bot import ArticleGenerator
+            
             api_key = config.get('gemini_api_key')
             if not api_key:
                 return jsonify({'success': False, 'error': 'API Key Gemini belum diatur di menu Settings.'}), 400
@@ -208,7 +211,7 @@ Instruksi Revisi:
                     optimized_prompt = '\n'.join(lines[1:-1])
             
             return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
-        except Exception as e:
-            from core_extensions import logger
-            logger.error(f"Optimize prompt error: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        from core_extensions import logger
+        logger.error(f"Optimize prompt error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 400
