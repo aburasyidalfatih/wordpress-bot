@@ -14,6 +14,7 @@ export default function Research() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [researching, setResearching] = useState(false);
+  const [researchingCategory, setResearchingCategory] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -56,12 +57,14 @@ export default function Research() {
           if (result.status === 'finished') {
             clearInterval(interval);
             setResearching(false);
+            setResearchingCategory(null);
             setJobId(null);
             setMessage('Analysis complete! Reloading data...');
             setTimeout(loadData, 1000);
           } else if (result.status === 'failed') {
             clearInterval(interval);
             setResearching(false);
+            setResearchingCategory(null);
             setJobId(null);
             setMessage('Research job failed.');
           }
@@ -77,6 +80,7 @@ export default function Research() {
   const handleManualResearch = async (categoryName?: string) => {
     if (!selectedSiteId) return;
     setResearching(true);
+    setResearchingCategory(categoryName || 'all');
     setProgress(0);
     setMessage(categoryName ? `Initializing deep research for category "${categoryName}"...` : 'Initializing deep enterprise research...');
     try {
@@ -91,10 +95,12 @@ export default function Research() {
       } else {
         setMessage(result.error || 'Research failed to start.');
         setResearching(false);
+        setResearchingCategory(null);
       }
     } catch (err) {
       setMessage('Network error during research.');
       setResearching(false);
+      setResearchingCategory(null);
     }
   };
 
@@ -146,8 +152,8 @@ export default function Research() {
         </div>
         {selectedCategories.length > 0 && (
           <Button onClick={() => handleManualResearch()} disabled={researching} className="gap-2 shadow-lg hover:shadow-primary/25 transition-all bg-primary hover:bg-primary/95 text-primary-foreground font-semibold">
-            <RefreshCw className={`h-4 w-4 ${researching ? 'animate-spin' : ''}`} />
-            {researching ? 'Menganalisis...' : `Riset Semua Kategori (${selectedCategories.length} Kredit)`}
+            <RefreshCw className={`h-4 w-4 ${researching && researchingCategory === 'all' ? 'animate-spin' : ''}`} />
+            {researching && researchingCategory === 'all' ? 'Menganalisis...' : `Riset Semua Kategori (${selectedCategories.length} Kredit)`}
           </Button>
         )}
       </div>
@@ -199,7 +205,7 @@ export default function Research() {
                       disabled={researching} 
                       className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-md transition-all font-semibold"
                     >
-                      <RefreshCw className={`h-4 w-4 ${researching ? 'animate-spin' : ''}`} />
+                      <RefreshCw className={`h-4 w-4 ${researching && researchingCategory === cat ? 'animate-spin' : ''}`} />
                       Mulai Riset Kategori (1 Kredit)
                     </Button>
                   </div>
@@ -232,7 +238,7 @@ export default function Research() {
                           disabled={researching}
                           className="gap-1 border-primary/30 text-primary hover:bg-primary/5 hover:text-primary bg-background/50 font-semibold"
                         >
-                          <RefreshCw className={`h-3.5 w-3.5 ${researching ? 'animate-spin' : ''}`} />
+                          <RefreshCw className={`h-3.5 w-3.5 ${researching && researchingCategory === cat ? 'animate-spin' : ''}`} />
                           Riset Ulang (1 Kredit)
                         </Button>
                         <Button 
