@@ -159,8 +159,7 @@ def api_optimize_prompt(user_id):
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
                 
             site_name = site.site_name or ''
-            site_url = site.url or ''
-            tagline = site.tagline or ''
+            site_url = getattr(site, 'wordpress_url', '') or ''
             
             cats = site.categories or []
             categories = ", ".join([c.get('name', '') if isinstance(c, dict) else str(c) for c in cats])
@@ -182,7 +181,6 @@ def api_optimize_prompt(user_id):
 Informasi Website Pengguna:
 - Nama Website: {site_name}
 - URL: {site_url}
-- Tagline: {tagline}
 - Kategori Konten: {categories}
 
 Instruksi Revisi:
