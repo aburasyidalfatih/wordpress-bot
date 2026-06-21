@@ -678,10 +678,10 @@ export default function AdminDashboard() {
                       onChange={(e) => setConfig({ ...config, gemini_image_model: e.target.value })}
                       className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <option value="imagen-4.0-generate-001">Imagen 4.0 Generate (Recommended / API Key Compatible)</option>
-                      <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image (Requires OAuth 2.0)</option>
-                      <option value="gemini-3-pro-image">Gemini 3 Pro Image</option>
-                      <option value="gemini-3.1-flash-image-preview">Gemini 3.1 Flash Image Preview (Legacy)</option>
+                      <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image (Recommended / API Key Compatible)</option>
+                      <option value="gemini-3-pro-image">Gemini 3 Pro Image (High Quality)</option>
+                      <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image (Stable)</option>
+                      <option value="imagen-3.0-generate-001">Imagen 3.0 Generate (Legacy / OAuth 2.0 Only)</option>
                     </select>
                   </div>
                 </CardContent>
