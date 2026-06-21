@@ -670,8 +670,8 @@ Style: Blog featured image."""
             
             return None
         except Exception as e:
-            print(f"Error generating featured image: {e}")
-            return None
+            logger.error(f"Error generating featured image: {e}", exc_info=True)
+            raise Exception(f"Gemini image generation API error: {str(e)}")
 
 class WordPressPublisher:
     def __init__(self, url, username, password):
