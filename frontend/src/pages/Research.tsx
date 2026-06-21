@@ -197,7 +197,9 @@ export default function Research() {
                 <Card key={cat} className="overflow-hidden border-dashed border-2 border-border bg-muted/15 p-6 flex flex-col justify-between min-h-[220px] shadow-sm hover:border-primary/50 transition-all duration-300">
                   <div className="space-y-2">
                     <h3 className="text-xl font-bold capitalize text-muted-foreground/90">{cat}</h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed">Belum ada data riset intelijen untuk kategori ini. Mulai riset kategori ini secara terpisah untuk menemukan tren kata kunci kompetitor, tren sosial, dan video YouTube terpopuler.</p>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      {catObj.description || 'Belum ada data riset intelijen untuk kategori ini. Mulai riset kategori ini secara terpisah untuk menemukan tren kata kunci kompetitor, tren sosial, dan video YouTube terpopuler.'}
+                    </p>
                   </div>
                   <div className="pt-4 flex justify-start">
                     <Button 
