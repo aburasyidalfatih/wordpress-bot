@@ -57,6 +57,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [location.pathname]);
 
   useEffect(() => {
+    const handleRefresh = () => {
+      import('../lib/api').then(({ apiFetch }) => {
+        apiFetch('/api/profile')
+          .then(res => res.json())
+          .then(data => {
+            if (data.success && data.profile) {
+              setProfile(data.profile);
+            }
+          })
+          .catch(console.error);
+      });
+    };
+    window.addEventListener('refresh-profile', handleRefresh);
+    return () => window.removeEventListener('refresh-profile', handleRefresh);
+  }, []);
+
+  useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
       localStorage.setItem('theme', 'dark');

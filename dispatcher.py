@@ -85,7 +85,7 @@ def dispatch_jobs():
                         
                         if last_run != current_hour_str:
                             logger.info(f"Enqueueing deep_research_job for user_id={user_id}, site_id={site_id} (hour={current_hour} in {tz_name})")
-                            q.enqueue('app.deep_research_job', user_id, True, site_id)
+                            q.enqueue('app.deep_research_job', user_id, True, site_id, None, True)
                             redis_conn.set(lock_key, current_hour_str)
                     except Exception as e:
                         logger.error(f"Error checking auto research for site_id={site_id}: {e}")

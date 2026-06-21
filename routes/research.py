@@ -98,18 +98,65 @@ def suggest_topics(user_id):
 @require_jwt
 def manual_research(user_id):
     site_id = request.args.get('site_id')
+    category = request.args.get('category')
     if not site_id and request.is_json:
-        site_id = request.json.get('site_id')
+        data = request.json or {}
+        site_id = data.get('site_id')
+        category = data.get('category')
         
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
+    if category == "" or category == "all" or category == "All":
+        category = None
+        
     try:
-        job = q.enqueue('app.deep_research_job', user_id, True, site_id)
-        return jsonify({'success': True, 'job_id': job.id, 'message': 'Research queued'})
+        with db.get_session() as session:
+            from database import WordPressSite, User
+            site = session.query(WordPressSite).filter_by(id=int(site_id), user_id=user_id).first()
+            if not site:
+                return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
+                
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return jsonify({'success': False, 'error': 'User tidak ditemukan.'}), 404
+                
+            selected_categories = site.selected_categories or []
+            if not selected_categories:
+                return jsonify({'success': False, 'error': 'Silakan pilih kategori target terlebih dahulu di Pengaturan Website.'}), 400
+                
+            if category:
+                # verify category is selected
+                match = [cat for cat in selected_categories if cat['name'] == category]
+                if not match:
+                    return jsonify({'success': False, 'error': f'Kategori "{category}" tidak terpilih untuk website ini.'}), 400
+                required_credits = 1
+            else:
+                required_credits = len(selected_categories)
+                
+            user_credits = user.credits if user.credits is not None else 0
+            if user_credits < required_credits:
+                return jsonify({
+                    'success': False,
+                    'error': f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit, tetapi Anda hanya memiliki {user_credits} kredit.'
+                }), 400
+                
+            # Deduct credits
+            user.credits = max(0, user_credits - required_credits)
+            session.commit()
+            
+            # Enqueue job with category
+            job = q.enqueue('app.deep_research_job', user_id, True, site_id, category, False)
+            return jsonify({
+                'success': True, 
+                'job_id': job.id, 
+                'message': f'Riset berhasil masuk antrean. {required_credits} kredit didebit.',
+                'credits_deducted': required_credits,
+                'remaining_credits': user.credits
+            })
     except Exception as e:
         logger.error(f"Manual research error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @research_bp.route('/api/generate-titles/<category>', methods=['POST'])
 @require_jwt

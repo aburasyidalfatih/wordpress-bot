@@ -536,7 +536,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             pass
 
 
-def deep_research_job(user_id, force=True, site_id=None):
+def deep_research_job(user_id, force=True, site_id=None, category=None, is_auto=False):
     """Deep research job to find trending topics"""
     config = load_config(user_id)
     
@@ -545,27 +545,58 @@ def deep_research_job(user_id, force=True, site_id=None):
         return
         
     with db.get_session() as session:
-        from database import WordPressSite
+        from database import WordPressSite, User
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             logger.error(f"Site {site_id} not found")
             return
             
-        selected_categories = site.selected_categories
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            logger.error(f"User {user_id} not found")
+            return
+            
+        selected_categories = site.selected_categories or []
+        if category:
+            selected_categories = [cat for cat in selected_categories if cat['name'] == category]
+            
+        if not selected_categories:
+            logger.info(f"No categories to research for site {site.site_name}")
+            return
+            
+        # Deduct credits if this is an automatic scheduled run
+        if is_auto:
+            required_credits = len(selected_categories)
+            user_credits = user.credits if user.credits is not None else 0
+            if user_credits < required_credits:
+                logger.warning(f"User {user.email} has insufficient credits ({user_credits}) for scheduled auto-research. Required: {required_credits}")
+                site_config = {
+                    'telegram_enabled': site.telegram_enabled,
+                    'telegram_bot_token': site.telegram_bot_token,
+                    'telegram_chat_id': site.telegram_chat_id,
+                    'site_name': site.site_name
+                }
+                send_telegram_notification(site_config,
+                    f"⚠️ <b>Riset Otomatis Ditunda</b>\n\n"
+                    f"🌐 <b>Website:</b> {site.site_name}\n"
+                    f"Kredit Anda ({user_credits}) tidak mencukupi untuk melakukan riset otomatis harian ({required_credits} kategori). Silakan top up kredit Anda.")
+                return
+                
+            user.credits = max(0, user_credits - required_credits)
+            session.commit()
+            logger.info(f"Auto-research: Deducted {required_credits} credits from User {user.email}. Remaining: {user.credits}")
+            
         site_name = site.site_name
         telegram_enabled = site.telegram_enabled
         telegram_bot_token = site.telegram_bot_token
         telegram_chat_id = site.telegram_chat_id
         language = site.language or 'id'
-    
-    if not selected_categories:
-        logger.info(f"No categories selected for site {site_name}")
-        return
         
     site_config = {
         'telegram_enabled': telegram_enabled,
         'telegram_bot_token': telegram_bot_token,
-        'telegram_chat_id': telegram_chat_id
+        'telegram_chat_id': telegram_chat_id,
+        'site_name': site_name
     }
     
     try:
@@ -626,10 +657,11 @@ def deep_research_job(user_id, force=True, site_id=None):
             logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
         
         # Send notification
+        category_str = f"category '{category}'" if category else f"{len(selected_categories)} categories"
         send_telegram_notification(site_config,
-            f"🔍 <b>Daily Research Completed</b>\n\n"
+            f"🔍 <b>Research Completed</b>\n\n"
             f"🌐 <b>Website:</b> {site_name}\n"
-            f"✅ Researched {len(selected_categories)} categories\n"
+            f"✅ Researched {category_str}\n"
             f"📊 Trending topics saved for tomorrow's articles")
         
     except Exception as e:

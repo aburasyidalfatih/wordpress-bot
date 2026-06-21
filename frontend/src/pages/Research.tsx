@@ -74,16 +74,20 @@ export default function Research() {
     return () => clearInterval(interval);
   }, [jobId]);
 
-  const handleManualResearch = async () => {
+  const handleManualResearch = async (categoryName?: string) => {
     if (!selectedSiteId) return;
     setResearching(true);
     setProgress(0);
-    setMessage('Initializing deep enterprise research...');
+    setMessage(categoryName ? `Initializing deep research for category "${categoryName}"...` : 'Initializing deep enterprise research...');
     try {
-      const res = await apiFetch(`/manual-research?site_id=${selectedSiteId}`, { method: 'POST' });
+      const url = categoryName 
+        ? `/manual-research?site_id=${selectedSiteId}&category=${encodeURIComponent(categoryName)}`
+        : `/manual-research?site_id=${selectedSiteId}`;
+      const res = await apiFetch(url, { method: 'POST' });
       const result = await res.json();
       if (result.success && result.job_id) {
         setJobId(result.job_id);
+        window.dispatchEvent(new Event('refresh-profile'));
       } else {
         setMessage(result.error || 'Research failed to start.');
         setResearching(false);
@@ -129,7 +133,7 @@ export default function Research() {
   if (!selectedSiteId) return <EmptyState title="Intelligence Hub" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk memuat analisis kompetitor, tren sosial, dan topik terhangat." />;
 
   const researchData = data?.research_data || {};
-  const categories = Object.keys(researchData);
+  const selectedCategories = data?.categories || [];
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -140,10 +144,12 @@ export default function Research() {
           </h1>
           <p className="text-muted-foreground mt-1">Deep competitor analysis, social listening, and trend tracking.</p>
         </div>
-        <Button onClick={handleManualResearch} disabled={researching} className="gap-2 shadow-lg hover:shadow-primary/25 transition-all">
-          <RefreshCw className={`h-4 w-4 ${researching ? 'animate-spin' : ''}`} />
-          {researching ? 'Running Deep Analysis...' : 'Run Deep Analysis'}
-        </Button>
+        {selectedCategories.length > 0 && (
+          <Button onClick={() => handleManualResearch()} disabled={researching} className="gap-2 shadow-lg hover:shadow-primary/25 transition-all bg-primary hover:bg-primary/95 text-primary-foreground font-semibold">
+            <RefreshCw className={`h-4 w-4 ${researching ? 'animate-spin' : ''}`} />
+            {researching ? 'Menganalisis...' : `Riset Semua Kategori (${selectedCategories.length} Kredit)`}
+          </Button>
+        )}
       </div>
 
       {message && (
@@ -163,18 +169,44 @@ export default function Research() {
         </div>
       )}
 
-      {categories.length === 0 ? (
+      {selectedCategories.length === 0 ? (
         <Card className="border-dashed border-2">
           <CardContent className="py-16 text-center flex flex-col items-center">
             <Search className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p className="text-xl font-medium text-foreground mb-2">No intelligence data yet.</p>
-            <p className="text-sm text-muted-foreground max-w-md">Ensure you have selected target categories in Settings, then click "Run Deep Analysis" to fetch competitor and trend data.</p>
+            <p className="text-xl font-medium text-foreground mb-2">Belum ada kategori target.</p>
+            <p className="text-sm text-muted-foreground max-w-md">Silakan edit website ini di menu Websites, hubungkan kategori WordPress Anda, lalu pilih kategori target yang ingin dipantau.</p>
+            <Button onClick={() => navigate('/sites')} className="mt-4 gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">
+              Konfigurasi Website
+            </Button>
           </CardContent>
         </Card>
       ) : (
         <div className="grid gap-6 xl:grid-cols-2">
-          {categories.map((cat) => {
+          {selectedCategories.map((catObj: any) => {
+            const cat = catObj.name;
             const stats = researchData[cat];
+            
+            if (!stats) {
+              return (
+                <Card key={cat} className="overflow-hidden border-dashed border-2 border-border bg-muted/15 p-6 flex flex-col justify-between min-h-[220px] shadow-sm hover:border-primary/50 transition-all duration-300">
+                  <div className="space-y-2">
+                    <h3 className="text-xl font-bold capitalize text-muted-foreground/90">{cat}</h3>
+                    <p className="text-sm text-muted-foreground leading-relaxed">Belum ada data riset intelijen untuk kategori ini. Mulai riset kategori ini secara terpisah untuk menemukan tren kata kunci kompetitor, tren sosial, dan video YouTube terpopuler.</p>
+                  </div>
+                  <div className="pt-4 flex justify-start">
+                    <Button 
+                      onClick={() => handleManualResearch(cat)} 
+                      disabled={researching} 
+                      className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-md transition-all font-semibold"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${researching ? 'animate-spin' : ''}`} />
+                      Mulai Riset Kategori (1 Kredit)
+                    </Button>
+                  </div>
+                </Card>
+              );
+            }
+            
             const trendScore = stats.trend_score || 0;
             
             return (
@@ -192,18 +224,30 @@ export default function Research() {
                       <span className="text-xs text-muted-foreground bg-background/80 backdrop-blur-sm px-2.5 py-1 rounded-full border shadow-sm">
                         {stats.created_at}
                       </span>
-                      <Button 
-                        size="sm" 
-                        onClick={() => {
-                          setModalCategory(cat);
-                          setIsModalOpen(true);
-                        }} 
-                        disabled={generatingFor === cat}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm gap-1"
-                      >
-                        <Sparkles className={`h-3.5 w-3.5 ${generatingFor === cat ? 'animate-pulse' : ''}`} />
-                        {generatingFor === cat ? 'Thinking...' : 'Generate AI Titles'}
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button 
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleManualResearch(cat)}
+                          disabled={researching}
+                          className="gap-1 border-primary/30 text-primary hover:bg-primary/5 hover:text-primary bg-background/50 font-semibold"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${researching ? 'animate-spin' : ''}`} />
+                          Riset Ulang (1 Kredit)
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          onClick={() => {
+                            setModalCategory(cat);
+                            setIsModalOpen(true);
+                          }} 
+                          disabled={generatingFor === cat}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm gap-1"
+                        >
+                          <Sparkles className={`h-3.5 w-3.5 ${generatingFor === cat ? 'animate-pulse' : ''}`} />
+                          {generatingFor === cat ? 'Thinking...' : 'Generate AI Titles'}
+                        </Button>
+                      </div>
                     </div>
                   </div>
                   <div className="w-full bg-secondary rounded-full h-2 mt-4 overflow-hidden">
