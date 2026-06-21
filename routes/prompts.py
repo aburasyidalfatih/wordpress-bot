@@ -164,8 +164,12 @@ def api_optimize_prompt(user_id):
         
         from bot import ArticleGenerator
         try:
+            api_key = config.get('gemini_api_key')
+            if not api_key:
+                return jsonify({'success': False, 'error': 'API Key Gemini belum diatur di menu Settings.'}), 400
+                
             generator = ArticleGenerator(
-                config['gemini_api_key'], 
+                api_key, 
                 config.get('gemini_model', 'gemini-2.5-pro'),
                 config.get('gemini_image_model', 'gemini-3.1-flash-image')
             )
@@ -193,6 +197,9 @@ Instruksi Revisi:
                 ]
             )
             
+            if not response or not hasattr(response, 'text') or not response.text:
+                return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 500
+                
             optimized_prompt = response.text.strip()
             # Clean markdown codeblocks if any
             if optimized_prompt.startswith('```'):
