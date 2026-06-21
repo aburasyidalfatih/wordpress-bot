@@ -22,6 +22,8 @@ export default function Research() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalCategory, setModalCategory] = useState<string | null>(null);
   const [titleCount, setTitleCount] = useState<number>(5);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkCounts, setBulkCounts] = useState<Record<string, number>>({});
   const navigate = useNavigate();
 
   const loadData = () => {
@@ -129,6 +131,51 @@ export default function Research() {
     }
   };
 
+  const handleOpenBulkModal = () => {
+    if (!data?.categories) return;
+    const initialCounts: Record<string, number> = {};
+    data.categories.forEach((cat: any) => {
+      initialCounts[cat.name] = 5; // Default 5 per category
+    });
+    setBulkCounts(initialCounts);
+    setBulkModalOpen(true);
+  };
+
+  const handleExecuteBulkGenerate = async () => {
+    if (!selectedSiteId) return;
+    setResearching(true);
+    setMessage('Memulai proses generate judul massal...');
+    setBulkModalOpen(false);
+    
+    let totalGenerated = 0;
+    const categoriesToProcess = Object.entries(bulkCounts).filter(([_, count]) => count > 0);
+    
+    for (let i = 0; i < categoriesToProcess.length; i++) {
+      const [category, count] = categoriesToProcess[i];
+      setMessage(`Generating ${count} judul untuk ${category} (${i+1}/${categoriesToProcess.length})...`);
+      setProgress(Math.round(((i) / categoriesToProcess.length) * 100));
+      
+      try {
+        const res = await apiFetch(`/api/generate-titles/${encodeURIComponent(category)}?site_id=${selectedSiteId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count })
+        });
+        const result = await res.json();
+        if (result.success) {
+          totalGenerated += count;
+        }
+      } catch (err) {
+        console.error('Failed for', category, err);
+      }
+    }
+    
+    setProgress(100);
+    setMessage(`Selesai! ${totalGenerated} judul berhasil ditambahkan ke antrean.`);
+    setResearching(false);
+    setTimeout(() => navigate('/queue'), 2000);
+  };
+
   if (loading) return <div className="p-8 flex items-center justify-center min-h-[400px]">
     <div className="flex flex-col items-center gap-4 text-muted-foreground">
       <RefreshCw className="h-8 w-8 animate-spin text-primary" />
@@ -151,10 +198,16 @@ export default function Research() {
           <p className="text-muted-foreground mt-1">Deep competitor analysis, social listening, and trend tracking.</p>
         </div>
         {selectedCategories.length > 0 && (
-          <Button onClick={() => handleManualResearch()} disabled={researching} className="gap-2 shadow-lg hover:shadow-primary/25 transition-all bg-primary hover:bg-primary/95 text-primary-foreground font-semibold">
-            <RefreshCw className={`h-4 w-4 ${researching && researchingCategory === 'all' ? 'animate-spin' : ''}`} />
-            {researching && researchingCategory === 'all' ? 'Menganalisis...' : `Riset Semua Kategori (${selectedCategories.length} Kredit)`}
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={handleOpenBulkModal} disabled={researching} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-indigo-600 border-indigo-200 hover:bg-indigo-50">
+              <Sparkles className="h-4 w-4" />
+              Buat Judul Massal
+            </Button>
+            <Button onClick={() => handleManualResearch()} disabled={researching} className="gap-2 shadow-lg hover:shadow-primary/25 transition-all bg-primary hover:bg-primary/95 text-primary-foreground font-semibold">
+              <RefreshCw className={`h-4 w-4 ${researching && researchingCategory === 'all' ? 'animate-spin' : ''}`} />
+              {researching && researchingCategory === 'all' ? 'Menganalisis...' : `Riset Semua Kategori (${selectedCategories.length} Kredit)`}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -394,6 +447,52 @@ export default function Research() {
               <Button onClick={handleGenerateTitles} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
                 <Sparkles className="h-4 w-4" /> Generate Sekarang
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Bulk Generation Modal */}
+      {bulkModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-lg animate-in fade-in zoom-in-95 shadow-2xl border-0 max-h-[90vh] flex flex-col">
+            <CardHeader className="border-b bg-muted/20 shrink-0">
+              <CardTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-indigo-600" /> Buat Judul Massal
+              </CardTitle>
+              <CardDescription>Tentukan jumlah judul yang ingin Anda generate untuk masing-masing kategori.</CardDescription>
+            </CardHeader>
+            <CardContent className="p-6 overflow-y-auto">
+              <div className="space-y-4">
+                {selectedCategories.map((catObj: any) => (
+                  <div key={catObj.name} className="flex items-center justify-between gap-4 p-3 rounded-lg border bg-card">
+                    <div className="flex-1">
+                      <Label className="text-base font-semibold capitalize">{catObj.name}</Label>
+                    </div>
+                    <div className="flex items-center gap-2 w-32">
+                      <Input 
+                        type="number" 
+                        min="0" 
+                        max="50" 
+                        value={bulkCounts[catObj.name] || 0} 
+                        onChange={(e) => setBulkCounts(prev => ({ ...prev, [catObj.name]: parseInt(e.target.value) || 0 }))}
+                        className="text-right"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+            <div className="flex items-center p-6 justify-between bg-muted/20 border-t shrink-0 rounded-b-xl">
+              <div className="text-sm font-medium text-muted-foreground">
+                Total: <span className="text-indigo-600 font-bold">{Object.values(bulkCounts).reduce((a, b) => a + b, 0)} Judul</span>
+              </div>
+              <div className="flex gap-3">
+                <Button variant="outline" onClick={() => setBulkModalOpen(false)}>Batal</Button>
+                <Button onClick={handleExecuteBulkGenerate} disabled={Object.values(bulkCounts).reduce((a, b) => a + b, 0) === 0} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
+                  <Sparkles className="h-4 w-4" /> Generate Massal
+                </Button>
+              </div>
             </div>
           </Card>
         </div>
