@@ -150,7 +150,7 @@ def api_optimize_prompt(user_id):
     if not site_id or not current_prompt:
         return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
         
-    config = load_config(user_id)
+    config = load_config(user_id) or {}
     with db.get_session() as session:
         from database import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
@@ -198,7 +198,7 @@ Instruksi Revisi:
             )
             
             if not response or not hasattr(response, 'text') or not response.text:
-                return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 500
+                return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 400
                 
             optimized_prompt = response.text.strip()
             # Clean markdown codeblocks if any
@@ -211,4 +211,4 @@ Instruksi Revisi:
         except Exception as e:
             from core_extensions import logger
             logger.error(f"Optimize prompt error: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': str(e)}), 400
