@@ -119,6 +119,7 @@ def regenerate_image_job(user_id, log_id):
             wordpress_url = site.wordpress_url
             wordpress_username = site.wordpress_username
             wordpress_password = site.wordpress_password
+            site_name = site.site_name
             
         if not post_id:
             logger.error("No post ID found in post log")
@@ -138,7 +139,7 @@ def regenerate_image_job(user_id, log_id):
             title,
             "",
             custom_prompt=custom_image_prompt,
-            site_name=site.site_name
+            site_name=site_name
         )
         
         if image_data:
@@ -163,9 +164,23 @@ def regenerate_image_job(user_id, log_id):
                             log.result = "Article and Featured Image published successfully."
                             session.commit()
                     return
-        logger.error(f"Failed to regenerate image for post {post_id}")
+                else:
+                    raise Exception(f"WordPress attach media failed ({response.status_code}): {response.text}")
+            else:
+                raise Exception("WordPress image upload failed (check credentials or media library size)")
+        else:
+            raise Exception("Gemini image model failed to generate image data (verify API Key / Image Model)")
+            
     except Exception as e:
         logger.error(f"Error in regenerate_image_job: {e}", exc_info=True)
+        try:
+            with db.get_session() as session:
+                log = session.query(PostLog).filter_by(id=log_id).first()
+                if log:
+                    log.result = f"Image regeneration failed: {str(e)}"
+                    session.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to save error status: {db_err}")
 
 
 def generate_and_post(user_id, item_id=None, site_id=None):
