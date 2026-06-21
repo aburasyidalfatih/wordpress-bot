@@ -67,7 +67,7 @@ STRUKTUR ARTIKEL (2000-2500 KATA):
      Format: "Quote," ujar Nama Lengkap, Kepala Sekolah X di Kota Y.
 
    H2: Tips & Best Practices (300 kata)
-   - Do's and Don'ts dalam format HTML table
+   - Analisis Perbandingan (Do's and Don'ts atau Mitos vs Fakta) dalam format HTML table
    - Common mistakes yang harus dihindari
    - Quick wins yang bisa langsung diterapkan
 
@@ -78,12 +78,14 @@ STRUKTUR ARTIKEL (2000-2500 KATA):
 5. FAQ (150 kata):
    - 3-5 pertanyaan umum dengan jawaban singkat
 
-GAYA PENULISAN:
+GAYA PENULISAN (SANGAT PENTING):
 ✓ Tone: Profesional tapi approachable, gunakan "Anda"
-✓ Variasikan panjang kalimat untuk rhythm natural
+✓ Pendekatan Personal (Experience/E-E-A-T): Sesekali gunakan sudut pandang "kami" atau "tim kami" saat membagikan opini/tips agar terasa seperti ditulis oleh praktisi asli.
+✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci di setiap paragraf.
+✓ Variasikan panjang kalimat untuk rhythm natural (kombinasi kalimat sangat pendek dan panjang)
 ✓ Contoh selalu dari konteks Indonesia
 ✓ Transisi natural: "Hasilnya?", "Yang terjadi?", "Faktanya:"
-✗ Hindari: "Dengan demikian", "Oleh karena itu", "Pada akhirnya"
+✗ Hindari: "Dengan demikian", "Oleh karena itu", "Pada akhirnya", "Kesimpulannya"
 ✗ Hindari: "Penting untuk dicatat bahwa...", "Perlu diingat bahwa..."
 ✗ JANGAN gunakan ASCII art atau Unicode box drawing
 ✗ Gunakan HTML table (<table>) untuk tabel, BUKAN ASCII art
