@@ -341,13 +341,13 @@ export default function Queue() {
             className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'queue' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
             onClick={() => setActiveTab('queue')}
           >
-            Pending / Draft
+            Pending / Draft ({items.length})
           </button>
           <button 
             className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
             onClick={() => setActiveTab('history')}
           >
-            History
+            History ({historyItems.length})
           </button>
         </div>
         {activeTab === 'queue' && (
