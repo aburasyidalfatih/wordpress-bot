@@ -35,15 +35,23 @@ def api_dashboard(user_id):
                 hours_list = sorted([int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()])
                 if hours_list:
                     from datetime import datetime, timedelta
-                    now = datetime.now()
+                    import pytz
+                    
+                    tz_name = site.timezone or 'Asia/Jakarta'
+                    try:
+                        local_tz = pytz.timezone(tz_name)
+                    except Exception:
+                        local_tz = pytz.timezone('Asia/Jakarta')
+                        
+                    now_local = datetime.now(local_tz)
                     next_time = None
                     for hour in hours_list:
-                        candidate = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-                        if candidate > now:
+                        candidate = now_local.replace(hour=hour, minute=0, second=0, microsecond=0)
+                        if candidate > now_local:
                             next_time = candidate
                             break
                     if not next_time:
-                        next_time = (now + timedelta(days=1)).replace(hour=hours_list[0], minute=0, second=0, microsecond=0)
+                        next_time = (now_local + timedelta(days=1)).replace(hour=hours_list[0], minute=0, second=0, microsecond=0)
                     next_post_time = next_time
             except Exception as e:
                 from core_extensions import logger
