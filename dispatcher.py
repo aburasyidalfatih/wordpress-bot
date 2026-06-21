@@ -75,8 +75,23 @@ def dispatch_jobs():
                         
                         if last_run != current_hour_str:
                             delay_minutes = random.randint(0, 50)
-                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
-                            q.enqueue_in(timedelta(minutes=delay_minutes), 'app.generate_and_post', user_id, None, site_id)
+                            
+                            # Check if there is a pending item in ContentQueue (pick top/newest)
+                            from database import ContentQueue
+                            queue_item = session.query(ContentQueue).filter_by(
+                                user_id=user_id, 
+                                site_id=site_id, 
+                                status='pending'
+                            ).order_by(ContentQueue.created_at.desc()).first()
+                            
+                            item_id = None
+                            if queue_item:
+                                item_id = queue_item.id
+                                queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
+                                session.commit()
+                            
+                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
+                            q.enqueue_in(timedelta(minutes=delay_minutes), 'app.generate_and_post', user_id, item_id, site_id)
                             redis_conn.set(lock_key, current_hour_str)
                 except Exception as e:
                     logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
