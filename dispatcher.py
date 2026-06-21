@@ -82,7 +82,7 @@ def dispatch_jobs():
                                 user_id=user_id, 
                                 site_id=site_id, 
                                 status='pending'
-                            ).order_by(ContentQueue.created_at.desc()).first()
+                            ).order_by(ContentQueue.created_at.asc()).first()
                             
                             item_id = None
                             if queue_item:
