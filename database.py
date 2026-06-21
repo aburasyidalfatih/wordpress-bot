@@ -538,6 +538,11 @@ class Database:
                         session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
                         session.commit()
                         logger.info("Added column 'gemini_image_model' to 'config' table in PostgreSQL")
+                        
+                    # Auto-migrate old imagen models to gemini-3.1-flash-image
+                    session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
+                    session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
+                    session.commit()
                 else:
                     res = session.execute(text("PRAGMA table_info(users)")).fetchall()
                     cols = [col[1] for col in res]
@@ -558,6 +563,11 @@ class Database:
                         session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
                         session.commit()
                         logger.info("Added column 'gemini_image_model' to 'config' table in SQLite")
+                        
+                    # Auto-migrate old imagen models to gemini-3.1-flash-image
+                    session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
+                    session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
+                    session.commit()
             except Exception as e:
                 logger.warning(f"Credit system user/config migration warning: {e}")
     
@@ -569,14 +579,14 @@ class Database:
                     user_id=user_id,
                     gemini_api_key='',
                     gemini_model='gemini-2.5-pro',
-                    gemini_image_model='imagen-4.0-generate-001'
+                    gemini_image_model='gemini-3.1-flash-image'
                 )
                 session.add(config)
                 session.commit()
             return {
                 'gemini_api_key': config.gemini_api_key or '',
                 'gemini_model': config.gemini_model or 'gemini-2.5-pro',
-                'gemini_image_model': config.gemini_image_model or 'imagen-4.0-generate-001'
+                'gemini_image_model': config.gemini_image_model or 'gemini-3.1-flash-image'
             }
     
     def save_config(self, user_id, data):
@@ -588,7 +598,7 @@ class Database:
             
             config.gemini_api_key = data.get('gemini_api_key', '')
             config.gemini_model = data.get('gemini_model', 'gemini-2.5-pro')
-            config.gemini_image_model = data.get('gemini_image_model', 'imagen-4.0-generate-001')
+            config.gemini_image_model = data.get('gemini_image_model', 'gemini-3.1-flash-image')
     
     def get_system_settings(self):
         with self.get_session() as session:
