@@ -72,7 +72,7 @@ export default function Queue() {
       return;
     }
     if (!silent) setLoading(true);
-    apiFetch(`/api/queue?site_id=${selectedSiteId}`)
+    apiFetch(`/api/queue?site_id=${selectedSiteId}&t=${Date.now()}`)
       .then(res => {
         if (!res.ok) throw new Error('API Error');
         return res.json();

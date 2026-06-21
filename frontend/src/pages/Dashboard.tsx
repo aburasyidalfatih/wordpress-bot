@@ -17,7 +17,7 @@ export default function Dashboard() {
       return;
     }
     setLoading(true);
-    apiFetch(`/api/dashboard?site_id=${selectedSiteId}`)
+    apiFetch(`/api/dashboard?site_id=${selectedSiteId}&t=${Date.now()}`)
       .then(res => res.json())
       .then(d => {
         setData(d);
