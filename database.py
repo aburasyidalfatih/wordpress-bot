@@ -672,7 +672,7 @@ class Database:
                 'success': log.success,
                 'image_failed': log.image_failed,
                 'result': log.result,
-                'timestamp': log.created_at.isoformat(),
+                'timestamp': log.created_at.isoformat() + ('Z' if log.created_at.tzinfo is None else ''),
                 'views': log.views,
                 'comments': log.comments,
                 'engagement_score': round(log.engagement_score, 2)
@@ -739,7 +739,7 @@ class Database:
                 'engagement_score': round(log.engagement_score, 2),
                 'views': log.views,
                 'comments': log.comments,
-                'created_at': log.created_at.isoformat()
+                'created_at': log.created_at.isoformat() + ('Z' if log.created_at.tzinfo is None else '')
             } for log in logs]
     
     def get_existing_titles(self, user_id, site_id=None, category_name=None, limit=50):

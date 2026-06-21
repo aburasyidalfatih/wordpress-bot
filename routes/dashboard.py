@@ -55,7 +55,7 @@ def api_dashboard(user_id):
             'stats': stats,
             'insights': insights,
             'performance': performance if performance else [],
-            'next_post_time': next_post_time.isoformat() if next_post_time else None
+            'next_post_time': next_post_time.isoformat() + ('Z' if next_post_time.tzinfo is None else '') if next_post_time else None
         })
 
 @dashboard_bp.route("/sync-engagement", methods=["POST"])

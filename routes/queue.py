@@ -21,7 +21,7 @@ def api_queue(user_id):
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
             
         queue = session.query(ContentQueue).filter_by(user_id=user_id, site_id=site_id).order_by(ContentQueue.created_at.desc()).all()
-        queue_data = [{'id': q.id, 'title': q.title, 'category': q.category, 'status': q.status, 'created_at': q.created_at.isoformat()} for q in queue]
+        queue_data = [{'id': q.id, 'title': q.title, 'category': q.category, 'status': q.status, 'created_at': q.created_at.isoformat() + ('Z' if q.created_at.tzinfo is None else '')} for q in queue]
         categories = site.selected_categories or []
     
     history_data = db.get_logs(user_id, site_id=site_id, limit=50)
