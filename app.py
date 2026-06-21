@@ -536,7 +536,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             pass
 
 
-def deep_research_job(user_id, force=True, site_id=None, category=None, is_auto=False):
+def deep_research_job(user_id, force=True, site_id=None, category=None):
     """Deep research job to find trending topics"""
     config = load_config(user_id)
     
@@ -545,15 +545,10 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, is_auto=
         return
         
     with db.get_session() as session:
-        from database import WordPressSite, User
+        from database import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             logger.error(f"Site {site_id} not found")
-            return
-            
-        user = session.query(User).filter_by(id=user_id).first()
-        if not user:
-            logger.error(f"User {user_id} not found")
             return
             
         selected_categories = site.selected_categories or []
@@ -563,28 +558,6 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, is_auto=
         if not selected_categories:
             logger.info(f"No categories to research for site {site.site_name}")
             return
-            
-        # Deduct credits if this is an automatic scheduled run
-        if is_auto:
-            required_credits = len(selected_categories)
-            user_credits = user.credits if user.credits is not None else 0
-            if user_credits < required_credits:
-                logger.warning(f"User {user.email} has insufficient credits ({user_credits}) for scheduled auto-research. Required: {required_credits}")
-                site_config = {
-                    'telegram_enabled': site.telegram_enabled,
-                    'telegram_bot_token': site.telegram_bot_token,
-                    'telegram_chat_id': site.telegram_chat_id,
-                    'site_name': site.site_name
-                }
-                send_telegram_notification(site_config,
-                    f"⚠️ <b>Riset Otomatis Ditunda</b>\n\n"
-                    f"🌐 <b>Website:</b> {site.site_name}\n"
-                    f"Kredit Anda ({user_credits}) tidak mencukupi untuk melakukan riset otomatis harian ({required_credits} kategori). Silakan top up kredit Anda.")
-                return
-                
-            user.credits = max(0, user_credits - required_credits)
-            session.commit()
-            logger.info(f"Auto-research: Deducted {required_credits} credits from User {user.email}. Remaining: {user.credits}")
             
         site_name = site.site_name
         telegram_enabled = site.telegram_enabled

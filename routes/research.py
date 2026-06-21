@@ -146,7 +146,7 @@ def manual_research(user_id):
             session.commit()
             
             # Enqueue job with category
-            job = q.enqueue('app.deep_research_job', user_id, True, site_id, category, False)
+            job = q.enqueue('app.deep_research_job', user_id, True, site_id, category)
             return jsonify({
                 'success': True, 
                 'job_id': job.id, 

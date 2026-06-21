@@ -74,21 +74,7 @@ def dispatch_jobs():
                 except Exception as e:
                     logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
             
-            # 2. Check auto research (runs daily at 00:00)
-            if site.auto_research_enabled:
-                if current_hour == 0:
-                    try:
-                        lock_key = f"scheduler:last_run_research:{site_id}"
-                        last_run = redis_conn.get(lock_key)
-                        if last_run:
-                            last_run = last_run.decode('utf-8')
-                        
-                        if last_run != current_hour_str:
-                            logger.info(f"Enqueueing deep_research_job for user_id={user_id}, site_id={site_id} (hour={current_hour} in {tz_name})")
-                            q.enqueue('app.deep_research_job', user_id, True, site_id, None, True)
-                            redis_conn.set(lock_key, current_hour_str)
-                    except Exception as e:
-                        logger.error(f"Error checking auto research for site_id={site_id}: {e}")
+            # Auto research scheduler check removed since manual research is used instead.
 
 if __name__ == '__main__':
     logger.info("Dispatcher started.")
