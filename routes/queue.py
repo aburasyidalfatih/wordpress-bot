@@ -58,6 +58,41 @@ def add_queue_api(user_id):
         session.commit()
     return jsonify({'success': True})
 
+@queue_bp.route('/api/queue/shuffle', methods=['POST'])
+@require_jwt
+def shuffle_queue(user_id):
+    import random
+    from database import ContentQueue
+    data = request.json
+    site_id = data.get('site_id')
+    if not site_id:
+        return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
+        
+    with db.get_session() as session:
+        items = session.query(ContentQueue).filter_by(
+            user_id=user_id, 
+            site_id=site_id, 
+            status='pending'
+        ).order_by(ContentQueue.created_at.asc()).all()
+        
+        if len(items) <= 1:
+            return jsonify({'success': True, 'message': 'Not enough items to shuffle'})
+            
+        # Extract existing created_at values
+        timestamps = [item.created_at for item in items]
+        
+        # Shuffle items
+        shuffled_items = list(items)
+        random.shuffle(shuffled_items)
+        
+        # Re-assign timestamps to change their order
+        for i, item in enumerate(shuffled_items):
+            item.created_at = timestamps[i]
+            
+        session.commit()
+        
+    return jsonify({'success': True, 'message': 'Antrean berhasil diacak!'})
+
 @queue_bp.route('/api/queue', methods=['DELETE'])
 @require_jwt
 def delete_queue_api(user_id):

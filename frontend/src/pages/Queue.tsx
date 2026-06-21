@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { RefreshCw, Plus, LayoutList, Eye, AlertCircle } from 'lucide-react';
+import { RefreshCw, Plus, LayoutList, Eye, AlertCircle, Shuffle } from 'lucide-react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableQueueItem } from './SortableQueueItem';
@@ -34,6 +34,7 @@ export default function Queue() {
   const [editTitle, setEditTitle] = useState('');
   const [editKeywords, setEditKeywords] = useState('');
   const [regeneratingIds, setRegeneratingIds] = useState<Record<number, boolean>>({});
+  const [shuffling, setShuffling] = useState(false);
   const pollingDelayRef = useRef(3000);
   const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post', id: number} | null>(null);
 
@@ -199,6 +200,30 @@ export default function Queue() {
     }
   };
 
+  const handleShuffle = async () => {
+    if (!selectedSiteId || items.length <= 1) return;
+    setShuffling(true);
+    try {
+      const res = await apiFetch('/api/queue/shuffle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: selectedSiteId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message || 'Antrean berhasil diacak!');
+        loadQueue(true);
+      } else {
+        toast.error('Gagal mengacak: ' + (data.error || 'Server error'));
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Network error');
+    } finally {
+      setShuffling(false);
+    }
+  };
+
   const handlePostNow = (id: number) => {
     setConfirmAction({ type: 'post', id });
   };
@@ -310,19 +335,27 @@ export default function Queue() {
         </CardContent>
       </Card>
 
-      <div className="flex border-b border-muted">
-        <button 
-          className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'queue' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-          onClick={() => setActiveTab('queue')}
-        >
-          Pending / Draft
-        </button>
-        <button 
-          className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-          onClick={() => setActiveTab('history')}
-        >
-          History
-        </button>
+      <div className="flex justify-between items-center border-b border-muted">
+        <div className="flex">
+          <button 
+            className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'queue' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setActiveTab('queue')}
+          >
+            Pending / Draft
+          </button>
+          <button 
+            className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+            onClick={() => setActiveTab('history')}
+          >
+            History
+          </button>
+        </div>
+        {activeTab === 'queue' && (
+          <Button variant="outline" size="sm" onClick={handleShuffle} disabled={shuffling || items.length <= 1} className="mb-2">
+            <Shuffle className={`h-4 w-4 mr-2 ${shuffling ? 'animate-spin' : ''}`} />
+            Acak Urutan
+          </Button>
+        )}
       </div>
 
       {activeTab === 'queue' ? (
