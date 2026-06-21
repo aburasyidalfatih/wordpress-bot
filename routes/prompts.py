@@ -136,3 +136,70 @@ def save_prompts(user_id):
         session.commit()
         
     return jsonify({'success': True, 'message': 'Prompts saved!'})
+
+@prompts_bp.route('/api/optimize-prompt', methods=['POST'])
+@require_jwt
+def api_optimize_prompt(user_id):
+    data = request.json or {}
+    site_id = data.get('site_id')
+    prompt_type = data.get('prompt_type', 'article')
+    current_prompt = data.get('current_prompt')
+    
+    if not site_id or not current_prompt:
+        return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
+        
+    config = load_config(user_id)
+    with db.get_session() as session:
+        from database import WordPressSite
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            return jsonify({'success': False, 'error': 'Site not found'}), 404
+            
+        site_name = site.site_name or ''
+        site_url = site.url or ''
+        tagline = site.tagline or ''
+        categories = ", ".join([c.get('name', '') for c in (site.categories or [])])
+        
+        from bot import ArticleGenerator
+        try:
+            generator = ArticleGenerator(
+                config['gemini_api_key'], 
+                config.get('gemini_model', 'gemini-2.5-pro'),
+                config.get('gemini_image_model', 'gemini-3.1-flash-image')
+            )
+            
+            sys_prompt = f"""Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna, TANPA mengubah struktur teknis atau format output (JSON) dari prompt aslinya.
+
+Informasi Website Pengguna:
+- Nama Website: {site_name}
+- URL: {site_url}
+- Tagline: {tagline}
+- Kategori Konten: {categories}
+
+Instruksi Revisi:
+1. Ganti nama website, target audience, atau konteks niche (misalnya jika ada kata 'kelasmaster.id' atau 'pendidikan' di prompt asli) menjadi sesuai dengan Informasi Website Pengguna di atas.
+2. Pertahankan semua variabel placeholder seperti {{topic}}, {{existing_titles}}, {{title}}, dll persis seperti aslinya.
+3. Pertahankan semua instruksi format teknis, peringatan tahun 2026, dan format JSON output.
+4. Sesuaikan contoh-contoh di Hook Pembuka atau Studi Kasus (jika ada) dengan niche website pengguna secara kreatif.
+5. Kembalikan HASIL AKHIR berupa teks prompt yang siap pakai, tanpa tambahan teks penjelasan apapun di luar prompt tersebut."""
+
+            response = generator.client.models.generate_content(
+                model=generator.model,
+                contents=[
+                    sys_prompt,
+                    f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}"
+                ]
+            )
+            
+            optimized_prompt = response.text.strip()
+            # Clean markdown codeblocks if any
+            if optimized_prompt.startswith('```'):
+                lines = optimized_prompt.split('\n')
+                if len(lines) > 2:
+                    optimized_prompt = '\n'.join(lines[1:-1])
+            
+            return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
+        except Exception as e:
+            from core_extensions import logger
+            logger.error(f"Optimize prompt error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500

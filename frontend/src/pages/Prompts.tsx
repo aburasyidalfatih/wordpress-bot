@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText } from 'lucide-react';
+import { Sparkles, FileText } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ export default function Prompts() {
 
   const [articlePrompt, setArticlePrompt] = useState('');
   const [imagePrompt, setImagePrompt] = useState('');
+  const [optimizing, setOptimizing] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedSiteId) {
@@ -70,6 +71,41 @@ export default function Prompts() {
     setter((prev: string) => prev + ` {${variable}}`);
   };
 
+  const handleOptimizePrompt = async (type: 'article' | 'image') => {
+    if (!selectedSiteId) return;
+    setOptimizing(type);
+    setMessage('');
+    
+    const currentPrompt = type === 'article' ? (articlePrompt || data?.default_article_prompt) : (imagePrompt || data?.default_image_prompt);
+    
+    try {
+      const res = await apiFetch('/api/optimize-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          site_id: selectedSiteId,
+          prompt_type: type,
+          current_prompt: currentPrompt
+        })
+      });
+      const result = await res.json();
+      if (result.success) {
+        if (type === 'article') {
+          setArticlePrompt(result.optimized_prompt);
+        } else {
+          setImagePrompt(result.optimized_prompt);
+        }
+        setMessage('Prompt berhasil disesuaikan dengan niche Anda oleh AI!');
+      } else {
+        setMessage('Gagal mengoptimasi prompt: ' + result.error);
+      }
+    } catch (err) {
+      setMessage('Network error saat optimasi prompt.');
+    } finally {
+      setOptimizing(null);
+    }
+  };
+
   if (!selectedSiteId) return <EmptyState title="Pengaturan Prompt AI" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk menyesuaikan instruksi penulisan artikel dan gambar AI." />;
   if (loading) return <div className="p-8">Loading prompts...</div>;
 
@@ -85,16 +121,24 @@ export default function Prompts() {
       <form onSubmit={handleSubmit} className="space-y-6">
         <Card className="border-border/50 shadow-md">
           <CardHeader>
-            <CardTitle>Article Generation Prompt</CardTitle>
-            <CardDescription>
-              Custom instructions for Gemini AI when generating articles. Available variables: <br/>
-              <div className="mt-2 flex gap-2 flex-wrap">
-                <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'topic')}>&#123;topic&#125;</Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'existing_titles')}>&#123;existing_titles&#125;</Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'research_note')}>&#123;research_note&#125;</Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'seo_section')}>&#123;seo_section&#125;</Button>
+            <div className="flex justify-between items-start">
+              <div>
+                <CardTitle>Article Generation Prompt</CardTitle>
+                <CardDescription>
+                  Custom instructions for Gemini AI when generating articles. Available variables: <br/>
+                  <div className="mt-2 flex gap-2 flex-wrap">
+                    <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'topic')}>&#123;topic&#125;</Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'existing_titles')}>&#123;existing_titles&#125;</Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'research_note')}>&#123;research_note&#125;</Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setArticlePrompt, 'seo_section')}>&#123;seo_section&#125;</Button>
+                  </div>
+                </CardDescription>
               </div>
-            </CardDescription>
+              <Button type="button" variant="outline" onClick={() => handleOptimizePrompt('article')} disabled={optimizing !== null} className="gap-2 border-indigo-200 text-indigo-600 hover:bg-indigo-50 shrink-0">
+                <Sparkles className={`h-4 w-4 ${optimizing === 'article' ? 'animate-pulse' : ''}`} />
+                {optimizing === 'article' ? 'Menyesuaikan...' : 'Sesuaikan dengan Niche (AI)'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
@@ -113,13 +157,21 @@ export default function Prompts() {
 
         <Card className="border-border/50 shadow-md">
           <CardHeader>
-            <CardTitle>Featured Image Prompt</CardTitle>
-            <CardDescription>
-              Instructions for image generation. Available variable: <br/>
-              <div className="mt-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setImagePrompt, 'topic')}>&#123;topic&#125;</Button>
+            <div className="flex justify-between items-start">
+              <div>
+                <CardTitle>Featured Image Prompt</CardTitle>
+                <CardDescription>
+                  Instructions for image generation. Available variable: <br/>
+                  <div className="mt-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => insertVariable(setImagePrompt, 'topic')}>&#123;topic&#125;</Button>
+                  </div>
+                </CardDescription>
               </div>
-            </CardDescription>
+              <Button type="button" variant="outline" onClick={() => handleOptimizePrompt('image')} disabled={optimizing !== null} className="gap-2 border-indigo-200 text-indigo-600 hover:bg-indigo-50 shrink-0">
+                <Sparkles className={`h-4 w-4 ${optimizing === 'image' ? 'animate-pulse' : ''}`} />
+                {optimizing === 'image' ? 'Menyesuaikan...' : 'Sesuaikan dengan Niche (AI)'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
