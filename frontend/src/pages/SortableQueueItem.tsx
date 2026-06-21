@@ -88,13 +88,13 @@ export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNo
                   <Eye className="h-4 w-4" />
                 </Button>
               )}
-              <Button variant="outline" size="icon" disabled={item.status === 'posting'} onClick={() => handlePostNow(item.id)} className="text-green-600 hover:text-green-700 hover:bg-green-50 z-20" title="Post Now">
+              <Button variant="outline" size="icon" onClick={() => handlePostNow(item.id)} className="text-green-600 hover:text-green-700 hover:bg-green-50 z-20" title={item.status === 'posting' ? "Retry Post" : "Post Now"}>
                 <Play className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="icon" disabled={item.status === 'posting'} onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 z-20" title="Edit">
+              <Button variant="outline" size="icon" onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 z-20" title="Edit">
                 <Pencil className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="icon" disabled={item.status === 'posting'} onClick={() => handleDelete(item.id)} className="text-red-500 hover:text-red-600 hover:bg-red-50 z-20" title="Delete">
+              <Button variant="outline" size="icon" onClick={() => handleDelete(item.id)} className="text-red-500 hover:text-red-600 hover:bg-red-50 z-20" title="Delete">
                 <Trash2 className="h-4 w-4" />
               </Button>
             </div>

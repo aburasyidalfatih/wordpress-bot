@@ -531,17 +531,20 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         log_title = custom_topic if 'custom_topic' in locals() and custom_topic else "Unknown Title"
         
         # Add to history so user sees the failure
-        db.add_log(
-            user_id=user_id,
-            site_id=site_id,
-            category_id=log_category_id,
-            category_name=log_category_name,
-            title=f"ERROR: {log_title}",
-            success=False,
-            result=f"Sistem Berhenti Tiba-tiba: {error_msg}",
-            post_id=None,
-            post_url=None
-        )
+        try:
+            db.add_log(
+                user_id=user_id,
+                site_id=site_id,
+                category_id=log_category_id,
+                category_name=log_category_name,
+                title=f"ERROR: {log_title}"[:500],
+                success=False,
+                result=f"Sistem Berhenti Tiba-tiba: {error_msg}"[:500],
+                post_id=None,
+                post_url=None
+            )
+        except Exception as log_e:
+            logger.error(f"Failed to save error log: {log_e}")
         
         if item_id:
             try:
