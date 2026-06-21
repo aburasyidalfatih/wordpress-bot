@@ -24,17 +24,24 @@ q = Queue('default', connection=redis_conn)
 db_url = os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db')
 db = Database(db_url)
 
+from sqlalchemy.orm import joinedload # Removing this later
+
 def dispatch_jobs():
     with db.get_session() as session:
         # Get all active WordPress sites
         sites = session.query(WordPressSite).filter_by(is_active=True).all()
         
+        # Batch load users to prevent N+1 queries
+        user_ids = list(set([site.user_id for site in sites]))
+        users = session.query(User).filter(User.id.in_(user_ids)).all()
+        users_dict = {user.id: user for user in users}
+        
         for site in sites:
             user_id = site.user_id
             site_id = site.id
+            user = users_dict.get(user_id)
             
             # Check user credits
-            user = session.query(User).filter_by(id=user_id).first()
             if not user or (user.credits or 0) <= 0:
                 # Log only once every hour to avoid spamming the log
                 lock_key_log = f"scheduler:log_credit_warning:{site_id}"
