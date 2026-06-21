@@ -45,7 +45,7 @@ class Config(Base):
     user_id = Column(Integer, index=True)
     _gemini_api_key = Column('gemini_api_key', String(500))
     gemini_model = Column(String(100), default='gemini-2.5-pro')
-    gemini_image_model = Column(String(100), default='gemini-3.1-flash-image')
+    gemini_image_model = Column(String(100), default='imagen-3.0-generate-002')
     
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -569,14 +569,14 @@ class Database:
                     user_id=user_id,
                     gemini_api_key='',
                     gemini_model='gemini-2.5-pro',
-                    gemini_image_model='gemini-3.1-flash-image'
+                    gemini_image_model='imagen-3.0-generate-002'
                 )
                 session.add(config)
                 session.commit()
             return {
                 'gemini_api_key': config.gemini_api_key or '',
                 'gemini_model': config.gemini_model or 'gemini-2.5-pro',
-                'gemini_image_model': config.gemini_image_model or 'gemini-3.1-flash-image'
+                'gemini_image_model': config.gemini_image_model or 'imagen-3.0-generate-002'
             }
     
     def save_config(self, user_id, data):
@@ -588,7 +588,7 @@ class Database:
             
             config.gemini_api_key = data.get('gemini_api_key', '')
             config.gemini_model = data.get('gemini_model', 'gemini-2.5-pro')
-            config.gemini_image_model = data.get('gemini_image_model', 'gemini-3.1-flash-image')
+            config.gemini_image_model = data.get('gemini_image_model', 'imagen-3.0-generate-002')
     
     def get_system_settings(self):
         with self.get_session() as session:

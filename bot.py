@@ -640,38 +640,59 @@ Style: Blog featured image."""
                 prompt = custom_prompt.replace('{topic}', topic).replace('{title}', title).replace('{site_name}', target_site)
 
             # Use configured image model for image generation
-            response = self.client.models.generate_content(
-                model=self.image_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=['IMAGE'],
-                    image_config=types.ImageConfig(
-                        aspect_ratio='16:9'  # Landscape for featured image
+            if self.image_model.startswith('imagen-'):
+                response = self.client.models.generate_images(
+                    model=self.image_model,
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio='16:9',
+                        output_mime_type='image/webp'
                     )
                 )
-            )
-            
-            for part in response.parts:
-                if part.inline_data is not None:
-                    image_bytes = part.inline_data.data
-                    
-                    # Convert to WebP for better compression
+                for generated_image in response.generated_images:
+                    image_bytes = generated_image.image.image_bytes
                     img = Image.open(BytesIO(image_bytes))
-                    
-                    # Convert RGBA to RGB if needed
                     if img.mode != 'RGB':
                         img = img.convert('RGB')
-                    
-                    # Save as WebP with high quality
                     output = BytesIO()
                     img.save(output, format='WEBP', quality=85)
                     output.seek(0)
                     return output
+            else:
+                response = self.client.models.generate_content(
+                    model=self.image_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_modalities=['IMAGE'],
+                        image_config=types.ImageConfig(
+                            aspect_ratio='16:9'  # Landscape for featured image
+                        )
+                    )
+                )
+                
+                for part in response.parts:
+                    if part.inline_data is not None:
+                        image_bytes = part.inline_data.data
+                        
+                        # Convert to WebP for better compression
+                        img = Image.open(BytesIO(image_bytes))
+                        
+                        # Convert RGBA to RGB if needed
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        # Save as WebP with high quality
+                        output = BytesIO()
+                        img.save(output, format='WEBP', quality=85)
+                        output.seek(0)
+                        return output
             
             return None
         except Exception as e:
             logger.error(f"Error generating featured image: {e}", exc_info=True)
             raise Exception(f"Gemini image generation API error: {str(e)}")
+
 
 class WordPressPublisher:
     def __init__(self, url, username, password):
