@@ -9,16 +9,6 @@ from config import Config
 
 auth_bp = Blueprint('auth', __name__)
 
-def verify_google_token(token):
-    if token.startswith("mock_token_for_"):
-        email = token.replace("mock_token_for_", "").strip()
-        if "@" not in email:
-            email = f"{email}@gmail.com"
-        return {
-            'email': email,
-            'sub': f"mock_google_id_{email.split('@')[0]}",
-            'name': email.split('@')[0].capitalize()
-        }
     try:
         resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={token}", timeout=10)
         if resp.status_code == 200:
@@ -29,64 +19,7 @@ def verify_google_token(token):
 
 @auth_bp.route('/api/register', methods=['POST'])
 def api_auth_register():
-    data = request.json or {}
-    email = data.get('email', '').strip()
-    password = data.get('password', '')
-    name = data.get('name', '').strip() or email.split('@')[0]
-    
-    if not email or not password:
-        return jsonify({'success': False, 'error': 'Email and password are required'}), 400
-        
-    with db.get_session() as session:
-        from database import User
-        existing = session.query(User).filter_by(email=email).first()
-        if existing:
-            return jsonify({'success': False, 'error': 'Email already registered'}), 400
-            
-        user_count = session.query(User).count()
-        role = 'admin' if user_count == 0 else 'user'
-        
-        user = User(
-            email=email,
-            name=name,
-            password_hash=generate_password_hash(password),
-            role=role,
-            tier='free',
-            credits=5,
-            is_active=True
-        )
-        session.add(user)
-        session.commit()
-        
-        from database import Config as DBConfig
-        config = DBConfig(user_id=user.id, gemini_api_key='', gemini_model='gemini-3.5-flash')
-        session.add(config)
-        session.commit()
-        
-        logger.info(f"Registered new user manually: {email} with role {role}")
-        
-        # Send notifications
-        try:
-            import threading
-            
-            # Welcome email to user
-            welcome_subj = "Welcome to AutoWP!"
-            welcome_body = f"Hello {name},\n\nThank you for registering on AutoWP! Your account has been initialized with 5 free credits."
-            threading.Thread(target=send_email_notification, args=(email, welcome_subj, welcome_body)).start()
-            
-            # WhatsApp/Email alert to Admin
-            admin_subj = "AutoWP - New User Registered"
-            admin_body = f"Halo Admin,\n\nUser baru telah mendaftar di AutoWP:\n- Nama: {name}\n- Email: {email}\n- Role: {role}\n\nSilakan periksa dashboard admin untuk detailnya."
-            
-            admin_email = Config.SMTP_SENDER_EMAIL or Config.SMTP_USER
-            if admin_email:
-                threading.Thread(target=send_email_notification, args=(admin_email, admin_subj, admin_body)).start()
-            if Config.STARSENDER_DEVICE_ID:
-                threading.Thread(target=send_whatsapp_notification, args=(Config.STARSENDER_DEVICE_ID, admin_body)).start()
-        except Exception as ex:
-            logger.error(f"Error launching registration notification threads: {ex}")
-            
-        return jsonify({'success': True, 'message': 'Registration successful! Please login.'})
+    return jsonify({'success': False, 'error': 'Pendaftaran manual dinonaktifkan. Silakan mendaftar menggunakan Google Login.'}), 403
 
 @auth_bp.route('/api/auth/google', methods=['POST'])
 def api_auth_google():
