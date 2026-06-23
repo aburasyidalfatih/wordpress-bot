@@ -816,6 +816,26 @@ class WordPressPublisher:
                 media_data = response.json()
                 media_id = media_data['id']
                 logger.info(f"Image uploaded successfully via REST API: {media_id}")
+                
+                # Update SEO metadata (Alt Text, Description, Title)
+                try:
+                    update_headers = self._get_auth()
+                    update_headers['Content-Type'] = 'application/json'
+                    metadata_payload = {
+                        'title': title,
+                        'alt_text': title,
+                        'description': f"Illustration for article about: {title}"
+                    }
+                    requests.post(
+                        f"{self.api_url}/media/{media_id}",
+                        headers=update_headers,
+                        json=metadata_payload,
+                        timeout=30
+                    )
+                    logger.info(f"Image SEO metadata updated for media ID: {media_id}")
+                except Exception as meta_e:
+                    logger.error(f"Failed to update image metadata: {meta_e}")
+                    
                 return media_id
             else:
                 logger.error(f"Failed to upload image: {response.status_code} - {response.text}")
