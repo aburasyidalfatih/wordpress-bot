@@ -43,12 +43,17 @@ STRUKTUR ARTIKEL (2000-2500 KATA):
    ✓ Akhiri dengan promise: "Artikel ini akan memandu Anda..."
    ✗ JANGAN selalu mulai dengan "Data internal kami di KelasMaster..."
 
-2. CONTEXT (200 kata):
+2. RINGKASAN EKSEKUTIF / TL;DR (Kotak AEO untuk Google AI Overviews):
+   - WAJIB buat kotak <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
+   - Berisi 3 poin bullet (<ul>) yang menjawab inti topik secara langsung.
+   - Ini krusial untuk fitur Answer Engine Optimization 2026.
+
+3. CONTEXT (200 kata):
    - Situasi pendidikan Indonesia saat ini terkait topik
    - Mengapa topik ini urgent dan penting
    - Siapa yang paling membutuhkan solusi ini
 
-3. KONTEN UTAMA (1500-1700 kata):
+4. KONTEN UTAMA (1500-1700 kata):
    H2: Konsep Dasar & Pentingnya (300 kata)
    - Definisi clear dengan bahasa praktis
    - Mengapa ini critical untuk lembaga pendidikan
@@ -78,10 +83,11 @@ STRUKTUR ARTIKEL (2000-2500 KATA):
 5. FAQ (150 kata):
    - 3-5 pertanyaan umum dengan jawaban singkat
 
-GAYA PENULISAN (SANGAT PENTING):
+GAYA PENULISAN & SEO 2026 (SANGAT PENTING):
 ✓ Tone: Profesional tapi approachable, gunakan "Anda"
-✓ Pendekatan Personal (Experience/E-E-A-T): Sesekali gunakan sudut pandang "kami" atau "tim kami" saat membagikan opini/tips agar terasa seperti ditulis oleh praktisi asli.
-✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci di setiap paragraf.
+✓ Pendekatan Personal (Experience/E-E-A-T): Mulailah salah satu paragraf (misal di Context atau Kesimpulan) dengan "Berdasarkan pengalaman tim praktisi kami..." untuk mensimulasikan Kredensial Penulis (Authoritativeness).
+✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci.
+✓ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Hindari pengulangan keyword utama (keyword stuffing). Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam.
 ✓ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
   - VARIASIKAN panjang kalimat secara drastis untuk ritme natural (Burstiness).
   - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional.

@@ -215,7 +215,12 @@ ARTICLE STRUCTURE (2000-2500 WORDS):
    ✗ DO NOT always start with the same pattern
    ✗ DO NOT use the same opening pattern as previous articles
 
-2. CONTEXT (200 words):
+2. EXECUTIVE SUMMARY / TL;DR (AEO Box for Google AI Overviews):
+   - MUST create a box `<div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">`
+   - Contains 3 bullet points (`<ul>`) answering the core topic directly.
+   - This is crucial for Answer Engine Optimization 2026.
+
+3. CONTEXT (200 words):
    - Current global or relevant regional situation related to the topic
    - Why this topic is urgent and important
    - Who needs this solution the most
@@ -369,7 +374,12 @@ STRUKTUR ARTIKEL (2000-2500 KATA):
    ✗ JANGAN selalu mulai dengan "Data internal kami di KelasMaster..."
    ✗ JANGAN gunakan pola yang sama dengan artikel sebelumnya
 
-2. CONTEXT (200 kata):
+2. RINGKASAN EKSEKUTIF / TL;DR (Kotak AEO untuk Google AI Overviews):
+   - WAJIB buat kotak `<div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">`
+   - Berisi 3 poin bullet (`<ul>`) yang menjawab inti topik secara langsung.
+   - Ini krusial untuk fitur Answer Engine Optimization 2026.
+
+3. CONTEXT (200 kata):
    - Situasi pendidikan Indonesia saat ini terkait topik
    - Mengapa topik ini urgent dan penting
    - Siapa yang paling membutuhkan solusi ini
@@ -428,6 +438,7 @@ GAYA PENULISAN:
   - Kalimat sedang (15-20 kata): Untuk penjelasan standar.
   - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
   - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
+✓ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam. JANGAN keyword stuffing.
 ✓ Paragraf: 3-4 kalimat maksimal, variasikan panjangnya
 ✓ Contoh: Selalu dari konteks Indonesia dengan nama sekolah/kota spesifik
 ✓ Data: Sertakan statistik/angka yang relevan (tapi VARIASIKAN sumbernya)
