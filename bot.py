@@ -271,12 +271,17 @@ E-E-A-T SIGNALS (MUST):
 ✓ Trustworthiness: Transparency (pros & cons), update date
 ✓ Current: Use the year 2026 for current context
 
-WRITING STYLE:
+WRITING STYLE & SEO 2026:
 ✓ Tone: Professional but approachable, use "you"
-✓ Sentences: VARY length for natural rhythm
-  - Short sentences (5-10 words): For emphasis and impact
-  - Medium sentences (15-20 words): For standard explanations
-  - Long sentences (25-35 words): For details and context
+✓ Personal Approach (E-E-A-T): Start a paragraph with "Based on our practitioners' experience..." to simulate Authoritativeness.
+✓ Text Emphasis (Scannability): MUST use bold text (<strong>) on core concepts, important metrics/numbers, or key terms.
+✓ Semantic SEO (Entities): Use LSI Keywords and Semantic Entities naturally. Insert specific technical terms that prove deep expertise. DO NOT keyword stuff.
+✓ Sentences (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
+  - VARY sentence length drastically for a natural rhythm (Burstiness).
+  - Very short sentences (2-5 words): For emotional emphasis/surprise. "That's wrong." "The opposite is true."
+  - Medium sentences (15-20 words): For standard explanations.
+  - Long sentences (25-35 words): To string together deep logic and details.
+  - Use unpredictable word choices (High Perplexity) but keep it natural. Avoid clichés.
 ✓ Paragraphs: 3-4 sentences maximum, vary their length
 ✓ Examples: Always from a realistic context with specific names
 ✓ Data: Include relevant statistics/numbers (but VARY the sources)
