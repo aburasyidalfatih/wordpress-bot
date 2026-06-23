@@ -9,6 +9,7 @@ from config import Config
 
 auth_bp = Blueprint('auth', __name__)
 
+def verify_google_token(token):
     try:
         resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={token}", timeout=10)
         if resp.status_code == 200:
