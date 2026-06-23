@@ -80,28 +80,90 @@ class SEOResearch:
         return suggestions
 
     def get_related_questions(self, keyword, limit=10, language='id'):
-        """Generate related questions"""
+        """Generate related questions dynamically via Google Autocomplete using question modifiers"""
+        questions = []
+        if language == 'en':
+            modifiers = ["how to", "what is", "why does", "can you"]
+        else:
+            modifiers = ["bagaimana cara", "apa itu", "kenapa", "apakah"]
+            
+        try:
+            url = "http://suggestqueries.google.com/complete/search"
+            hl = 'en' if language == 'en' else 'id'
+            for mod in modifiers:
+                query = f"{mod} * {keyword}"
+                params = {'client': 'firefox', 'q': query, 'hl': hl}
+                response = requests.get(url, params=params, headers=self.headers, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    if len(data) > 1:
+                        # Add valid questions that aren't too short
+                        questions.extend([q for q in data[1] if len(q.split()) > 3])
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_questions = []
+            for q in questions:
+                if q not in seen:
+                    seen.add(q)
+                    unique_questions.append(q)
+                    
+            if unique_questions:
+                return unique_questions[:limit]
+        except Exception as e:
+            logger.error(f"Error getting dynamic related questions: {e}")
+            
+        # Fallback to standard hardcoded patterns if API fails or returns nothing
         if language == 'en':
             patterns = [
                 f"What is {keyword}?",
                 f"How to {keyword}?",
-                f"What are the benefits of {keyword}?",
-                f"What types of {keyword} are there?",
-                f"How much does {keyword} cost?",
-                f"What are the pros and cons of {keyword}?",
-                f"Tips for {keyword}?"
+                f"What are the benefits of {keyword}?"
             ]
         else:
             patterns = [
                 f"Apa itu {keyword}?",
                 f"Bagaimana cara {keyword}?",
-                f"Apa manfaat {keyword}?",
-                f"Apa saja jenis {keyword}?",
-                f"Berapa biaya {keyword}?",
-                f"Apa kelebihan dan kekurangan {keyword}?",
-                f"Bagaimana tips {keyword}?"
+                f"Apa manfaat {keyword}?"
             ]
         return patterns[:limit]
+
+    def get_wikipedia_context(self, keyword, language='id'):
+        """Extract semantic entities and context from Wikipedia API"""
+        try:
+            wiki_lang = 'en' if language == 'en' else 'id'
+            url = f"https://{wiki_lang}.wikipedia.org/w/api.php"
+            params = {
+                'action': 'query',
+                'format': 'json',
+                'prop': 'extracts',
+                'exintro': True,
+                'explaintext': True,
+                'exsentences': 3,
+                'titles': keyword
+            }
+            response = requests.get(url, params=params, headers=self.headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                pages = data.get('query', {}).get('pages', {})
+                for page_id, page_data in pages.items():
+                    if page_id != "-1" and 'extract' in page_data:
+                        return page_data['extract']
+        except Exception as e:
+            logger.error(f"Error getting Wikipedia context: {e}")
+        return ""
+
+    def get_latest_news(self, keyword, limit=3):
+        """Get latest news headlines using DuckDuckGo News"""
+        news_headlines = []
+        if self.ddgs:
+            try:
+                results = self.ddgs.news(keyword, max_results=limit)
+                for res in results:
+                    news_headlines.append(f"{res.get('title', '')} - {res.get('source', '')}")
+            except Exception as e:
+                logger.error(f"Error getting DDG News: {e}")
+        return news_headlines
 
     def get_trend_score(self, keyword, language='id'):
         """Get interest score from Google Trends using pytrends"""
@@ -368,6 +430,11 @@ class SEOResearch:
         # 6. Questions
         questions = self.get_related_questions(category_name, limit=10, language=language)
         
+        update_progress(95, f'Extracting Semantic Entities and News for {category_name}...')
+        # 7. Wikipedia & News
+        semantic_context = self.get_wikipedia_context(category_name, language=language)
+        news_insights = self.get_latest_news(category_name, limit=3)
+        
         result = {
             'category': category_name,
             'suggestions': suggestions,
@@ -376,6 +443,8 @@ class SEOResearch:
             'social_insights': social_insights,
             'youtube_insights': youtube_insights,
             'questions': questions,
+            'semantic_context': semantic_context,
+            'news_insights': news_insights,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
         }
         

@@ -160,7 +160,23 @@ class ArticleGenerator:
         if seo_data:
             keywords = seo_data.get('keywords', [])
             questions = seo_data.get('questions', [])
+            semantic_context = seo_data.get('semantic_context', "")
+            news_insights = seo_data.get('news_insights', [])
             
+            if semantic_context:
+                if language == 'en':
+                    seo_section += f"\n\n📚 SEMANTIC CONTEXT (Wikipedia Background):\n{semantic_context}\n"
+                else:
+                    seo_section += f"\n\n📚 KONTEKS SEMANTIK (Latar Belakang Wikipedia):\n{semantic_context}\n"
+                    
+            if news_insights:
+                if language == 'en':
+                    seo_section += f"\n\n📰 LATEST NEWS (Incorporate these current events as 'Angle'):\n"
+                else:
+                    seo_section += f"\n\n📰 BERITA TERKINI (Gunakan sebagai 'Angle' Kekinian):\n"
+                for news in news_insights:
+                    seo_section += f"- {news}\n"
+                    
             if keywords:
                 if language == 'en':
                     seo_section += f"\n\n🔑 RELATED KEYWORDS (use naturally in the article):\n"
