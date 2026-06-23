@@ -422,11 +422,12 @@ E-E-A-T SIGNALS (WAJIB):
 
 GAYA PENULISAN:
 ✓ Tone: Profesional tapi approachable, gunakan "Anda"
-✓ Kalimat: VARIASIKAN panjang untuk rhythm natural
-  - Kalimat pendek (5-10 kata): Untuk emphasis dan impact
-  - Kalimat sedang (15-20 kata): Untuk penjelasan standar
-  - Kalimat panjang (25-35 kata): Untuk detail dan konteks
-  - Contoh: "Masalahnya jelas. Sekolah butuh dana lebih. Tapi menaikkan SPP bukan solusi jangka panjang karena akan menurunkan daya saing dan membuat orang tua mencari alternatif lain."
+✓ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
+  - VARIASIKAN panjang kalimat secara drastis untuk ritme natural (Burstiness).
+  - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional. "Itu salah." "Faktanya sebaliknya."
+  - Kalimat sedang (15-20 kata): Untuk penjelasan standar.
+  - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
+  - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
 ✓ Paragraf: 3-4 kalimat maksimal, variasikan panjangnya
 ✓ Contoh: Selalu dari konteks Indonesia dengan nama sekolah/kota spesifik
 ✓ Data: Sertakan statistik/angka yang relevan (tapi VARIASIKAN sumbernya)
@@ -506,7 +507,11 @@ PENTING:
 
         response = self.client.models.generate_content(
             model=self.model,
-            contents=prompt
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.85,
+                top_p=0.9
+            )
         )
         
         # Clean response text

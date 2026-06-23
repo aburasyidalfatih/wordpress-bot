@@ -82,7 +82,11 @@ GAYA PENULISAN (SANGAT PENTING):
 ✓ Tone: Profesional tapi approachable, gunakan "Anda"
 ✓ Pendekatan Personal (Experience/E-E-A-T): Sesekali gunakan sudut pandang "kami" atau "tim kami" saat membagikan opini/tips agar terasa seperti ditulis oleh praktisi asli.
 ✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci di setiap paragraf.
-✓ Variasikan panjang kalimat untuk rhythm natural (kombinasi kalimat sangat pendek dan panjang)
+✓ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
+  - VARIASIKAN panjang kalimat secara drastis untuk ritme natural (Burstiness).
+  - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional.
+  - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
+  - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
 ✓ Contoh selalu dari konteks Indonesia
 ✓ Transisi natural: "Hasilnya?", "Yang terjadi?", "Faktanya:"
 ✗ Hindari: "Dengan demikian", "Oleh karena itu", "Pada akhirnya", "Kesimpulannya"
