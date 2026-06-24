@@ -21,6 +21,7 @@ def api_dashboard(user_id):
         site_auto_post = site.auto_post
         site_selected_categories = site.selected_categories
         site_schedule_hours = site.schedule_hours
+        site_timezone = site.timezone
             
         logs = db.get_logs(user_id, site_id=site_id, limit=20)
         stats = db.get_stats(user_id, site_id=site_id)
@@ -37,7 +38,7 @@ def api_dashboard(user_id):
                     from datetime import datetime, timedelta
                     from zoneinfo import ZoneInfo
                     
-                    tz_name = site.timezone or 'Asia/Jakarta'
+                    tz_name = site_timezone or 'Asia/Jakarta'
                     try:
                         local_tz = ZoneInfo(tz_name)
                     except Exception:

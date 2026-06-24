@@ -199,7 +199,7 @@ export default function Dashboard() {
                       {log.title}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      📂 {log.category_name} • {new Date(log.created_at).toLocaleString()}
+                      📂 {log.category} • {new Date(log.timestamp).toLocaleString()}
                     </p>
                   </div>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 shadow-sm border ${
