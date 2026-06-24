@@ -35,13 +35,13 @@ def api_dashboard(user_id):
                 hours_list = sorted([int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()])
                 if hours_list:
                     from datetime import datetime, timedelta
-                    import pytz
+                    from zoneinfo import ZoneInfo
                     
                     tz_name = site.timezone or 'Asia/Jakarta'
                     try:
-                        local_tz = pytz.timezone(tz_name)
+                        local_tz = ZoneInfo(tz_name)
                     except Exception:
-                        local_tz = pytz.timezone('Asia/Jakarta')
+                        local_tz = ZoneInfo('Asia/Jakarta')
                         
                     now_local = datetime.now(local_tz)
                     next_time = None
