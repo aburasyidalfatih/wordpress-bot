@@ -24,6 +24,27 @@ def api_dashboard(user_id):
         site_timezone = site.timezone
             
         logs = db.get_logs(user_id, site_id=site_id, limit=20)
+        
+        from database import ContentQueue
+        active_queue = session.query(ContentQueue).filter_by(
+            user_id=user_id, site_id=site_id, status='posting'
+        ).order_by(ContentQueue.created_at.desc()).all()
+        
+        for q in active_queue:
+            logs.insert(0, {
+                'id': f"q_{q.id}",
+                'post_id': None,
+                'post_url': None,
+                'category': q.category,
+                'title': q.title,
+                'success': 'pending',
+                'image_failed': False,
+                'result': 'Menunggu jadwal / Proses pembuatan',
+                'timestamp': q.created_at.isoformat() + ('Z' if q.created_at.tzinfo is None else ''),
+                'views': 0,
+                'comments': 0,
+                'engagement_score': 0
+            })
         stats = db.get_stats(user_id, site_id=site_id)
         insights = optimizer.get_content_recommendations(user_id, site_id=site_id) 
         performance = db.get_category_performance(user_id, site_id=site_id)

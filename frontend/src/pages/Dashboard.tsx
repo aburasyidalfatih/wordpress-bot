@@ -203,11 +203,13 @@ export default function Dashboard() {
                     </p>
                   </div>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 shadow-sm border ${
-                    log.success 
-                      ? 'bg-green-500/10 border-green-500/20 text-green-700 dark:text-green-400' 
-                      : 'bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400'
+                    log.success === 'pending'
+                      ? 'bg-amber-500/10 border-amber-500/20 text-amber-700 dark:text-amber-400 animate-pulse'
+                      : log.success 
+                        ? 'bg-green-500/10 border-green-500/20 text-green-700 dark:text-green-400' 
+                        : 'bg-red-500/10 border-red-500/20 text-red-700 dark:text-red-400'
                   }`}>
-                    {log.success ? 'Success' : 'Failed'}
+                    {log.success === 'pending' ? 'Proses / Menunggu' : log.success ? 'Success' : 'Failed'}
                   </span>
                 </div>
               )) : (
