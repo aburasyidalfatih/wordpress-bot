@@ -201,17 +201,36 @@ def generate_titles(user_id, category):
             config.get('gemini_image_model', 'gemini-3.1-flash-image')
         )
         
-        # Prompt Gemini to generate titles with strict quality and style rules
-        prompt = f"""Buatlah {count} judul artikel blog yang sangat menarik, natural (seperti ditulis oleh jurnalis atau blogger profesional), click-worthy (High CTR), dan SEO-optimized untuk kategori "{category}" pada website {site_name}.
+        language = site.language or 'id'
+        
+        if language == 'en':
+            prompt = f"""Create {count} highly engaging, natural (like written by a professional journalist or blogger), click-worthy (High CTR), and SEO-optimized blog article titles for the category "{category}" on the website {site_name}. All titles MUST BE IN ENGLISH.
+
+TITLE WRITING GUIDELINES (CRITICAL):
+1. DO NOT use repetitive robotic formula formats like "[Keyword]: [Subtitle]". Create natural flowing sentences.
+2. DO NOT use AI cliché words like: "Complete Guide", "Smart Solution", "Effective Strategy", "Must Know", "In the Digital Era", "Towards the Future".
+3. DO NOT create titles that just define the category name itself.
+4. Create titles that evoke curiosity (curiosity gap), solve practical problems, or discuss hot trends with a fresh human perspective.
+
+Additional Context:
+- Category Description: {category_desc if category_desc else 'Write about specific and hot topics in this field.'}
+- Current year: 2026 (use this year naturally if relevant).
+- Related keywords: {', '.join(keywords[:5]) if keywords else category}
+- Frequently asked questions: {', '.join(questions[:3]) if questions else ''}
+
+Output format must be a JSON list of strings without markdown formatting like this:
+["Article Title 1", "Article Title 2", "Article Title 3"]"""
+        else:
+            prompt = f"""Buatlah {count} judul artikel blog berbahasa INDONESIA yang sangat menarik, natural (seperti ditulis oleh jurnalis atau blogger profesional), click-worthy (High CTR), dan SEO-optimized untuk kategori "{category}" pada website {site_name}.
 
 PANDUAN GAYA PENULISAN JUDUL (SANGAT PENTING):
-1. JANGAN gunakan format formula robotik berulang seperti "[Kata Kunci]: [Sub-judul]" (Contoh buruk yang HARUS DIHINDARI: "Digitalisasi Pendidikan: Solusi Cerdas...", "Manfaat Mengikuti Hot News..."). Buatlah kalimat mengalir yang natural.
-2. JANGAN gunakan kata-kata klise AI/robotik berikut: "Panduan Lengkap", "Solusi Cerdas", "Strategi Efektif", "Era 2026" (tulis "Tahun 2026" secara alami jika perlu, tapi jangan klise "Era 2026"), "Wajib Diketahui", "Meningkatkan Kualitas", "Di Era Digital", "Menuju Masa Depan".
-3. JANGAN membuat judul berupa definisi dari nama kategori itu sendiri (Contoh buruk: "Apa Itu Hot News Pendidikan?"). Kategori berita/update harus membahas isu/kejadian nyata (seperti kebijakan baru, kurikulum, gaji guru, pendaftaran beasiswa), bukan mendefinisikan istilah "Hot News".
+1. JANGAN gunakan format formula robotik berulang seperti "[Kata Kunci]: [Sub-judul]". Buatlah kalimat mengalir yang natural.
+2. JANGAN gunakan kata-kata klise AI/robotik berikut: "Panduan Lengkap", "Solusi Cerdas", "Strategi Efektif", "Era 2026", "Wajib Diketahui", "Meningkatkan Kualitas", "Di Era Digital", "Menuju Masa Depan".
+3. JANGAN membuat judul berupa definisi dari nama kategori itu sendiri.
 4. Buatlah judul yang mengundang rasa ingin tahu (curiosity gap), memecahkan masalah praktis, atau membahas tren hangat dengan sudut pandang manusiawi yang segar.
 
 Konteks Tambahan:
-- Deskripsi Kategori (Gunakan ini sebagai arah topik utama): {category_desc if category_desc else 'Tulis tentang topik-topik spesifik dan hangat di bidang ini.'}
+- Deskripsi Kategori: {category_desc if category_desc else 'Tulis tentang topik-topik spesifik dan hangat di bidang ini.'}
 - Tahun saat ini: 2026 (gunakan tahun ini secara natural jika relevan). Jangan gunakan tahun 2024 atau 2025.
 - Kata kunci terkait: {', '.join(keywords[:5]) if keywords else category}
 - Isu/pertanyaan yang sering dicari: {', '.join(questions[:3]) if questions else ''}
