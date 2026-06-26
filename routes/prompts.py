@@ -160,6 +160,12 @@ def api_optimize_prompt(user_id):
     if not site_id or not current_prompt:
         return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
         
+    if prompt_type == 'image':
+        if "FORMAT OUTPUT (JSON valid):" in current_prompt:
+            current_prompt = current_prompt.split("FORMAT OUTPUT (JSON valid):")[0].strip()
+        elif "FORMAT OUTPUT" in current_prompt:
+            current_prompt = current_prompt.split("FORMAT OUTPUT")[0].strip()
+        
     config = load_config(user_id) or {}
     try:
         with db.get_session() as session:
