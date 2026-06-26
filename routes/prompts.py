@@ -192,19 +192,19 @@ def api_optimize_prompt(user_id):
             else:
                 lang_instruction = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
 
-            sys_prompt = f"""Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna, TANPA mengubah struktur teknis atau format output (JSON) dari prompt aslinya.
+            sys_prompt = f"""Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna.
 
 Informasi Website Pengguna:
 - Nama Website: {site_name}
 - URL: {site_url}
 - Kategori Konten: {categories}
 
-Instruksi Revisi:
+Instruksi Revisi (SANGAT PENTING):
 1. Ganti nama website, target audience, atau konteks niche (misalnya jika ada kata 'kelasmaster.id' atau 'pendidikan' di prompt asli) menjadi sesuai dengan Informasi Website Pengguna di atas.
 2. Pertahankan semua variabel placeholder seperti {{topic}}, {{existing_titles}}, {{title}}, dll persis seperti aslinya.
-3. Pertahankan semua instruksi format teknis, peringatan tahun 2026, dan format JSON output.
+3. Pertahankan semua peringatan tahun 2026.
 4. Sesuaikan contoh-contoh di Hook Pembuka atau Studi Kasus (jika ada) dengan niche website pengguna secara kreatif.
-5. Kembalikan HASIL AKHIR berupa teks prompt yang siap pakai, tanpa tambahan teks penjelasan apapun di luar prompt tersebut.
+5. PERINGATAN FORMAT OUTPUT: Prompt asli memiliki teks instruksi "FORMAT OUTPUT (JSON valid...)" di bagian akhirnya. Anda HARUS mempertahankan teks instruksi tersebut apa adanya di bagian akhir prompt Anda. JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt.
 {lang_instruction}"""
 
             response = generator.client.models.generate_content(
