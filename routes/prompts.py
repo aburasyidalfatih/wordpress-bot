@@ -187,8 +187,8 @@ def api_optimize_prompt(user_id):
             )
             
             language = site.language or 'id'
-            if language == 'en':
-                lang_instruction = "6. PENTING: Terjemahkan SELURUH isi teks prompt hasil revisi ke dalam Bahasa Inggris (English), termasuk semua instruksi, pedoman gaya penulisan, peringatan, contoh hook, dan field JSON. KECUALI variabel placeholder seperti {topic} dll yang harus tetap sama."
+            if language == 'en' or prompt_type == 'image':
+                lang_instruction = "6. PENTING: Terjemahkan SELURUH isi teks prompt hasil revisi ke dalam Bahasa Inggris (English), termasuk semua instruksi, pedoman gaya penulisan, peringatan, contoh hook, dan field JSON. KECUALI variabel placeholder seperti {topic} dll yang harus tetap sama. (Khusus Image Prompt, wajib dalam Bahasa Inggris karena model AI gambar hanya mendukung Bahasa Inggris)."
             else:
                 lang_instruction = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
 

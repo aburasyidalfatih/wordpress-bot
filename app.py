@@ -120,6 +120,7 @@ def regenerate_image_job(user_id, log_id):
             wordpress_username = site.wordpress_username
             wordpress_password = site.wordpress_password
             site_name = site.site_name
+            site_image_prompt = site.image_prompt
             
         if not post_id:
             logger.error("No post ID found in post log")
@@ -132,7 +133,7 @@ def regenerate_image_job(user_id, log_id):
         )
             
         logger.info(f"Regenerating image for post {post_id} - {title}")
-        custom_image_prompt = config.get('image_prompt') or None
+        custom_image_prompt = site_image_prompt or None
         
         image_data = generator.generate_image(
             category_name,
