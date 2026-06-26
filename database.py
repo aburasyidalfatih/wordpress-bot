@@ -796,9 +796,11 @@ class Database:
             ).order_by(ResearchData.created_at.desc()).first()
             
             if research and research.suggested_topics:
-                topic = research.suggested_topics[0] if research.suggested_topics else None
+                topics_list = list(research.suggested_topics) if research.suggested_topics else []
+                topic = topics_list[0] if topics_list else None
                 if topic:
-                    research.suggested_topics.pop(0)
+                    topics_list.pop(0)
+                    research.suggested_topics = topics_list
                     if not research.suggested_topics:
                         research.used = True
                     session.commit()
