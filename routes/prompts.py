@@ -186,6 +186,12 @@ def api_optimize_prompt(user_id):
                 config.get('gemini_image_model', 'gemini-3.1-flash-image')
             )
             
+            language = site.language or 'id'
+            if language == 'en':
+                lang_instruction = "6. PENTING: Terjemahkan SELURUH isi teks prompt hasil revisi ke dalam Bahasa Inggris (English), termasuk semua instruksi, pedoman gaya penulisan, peringatan, contoh hook, dan field JSON. KECUALI variabel placeholder seperti {topic} dll yang harus tetap sama."
+            else:
+                lang_instruction = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
+
             sys_prompt = f"""Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna, TANPA mengubah struktur teknis atau format output (JSON) dari prompt aslinya.
 
 Informasi Website Pengguna:
@@ -198,7 +204,8 @@ Instruksi Revisi:
 2. Pertahankan semua variabel placeholder seperti {{topic}}, {{existing_titles}}, {{title}}, dll persis seperti aslinya.
 3. Pertahankan semua instruksi format teknis, peringatan tahun 2026, dan format JSON output.
 4. Sesuaikan contoh-contoh di Hook Pembuka atau Studi Kasus (jika ada) dengan niche website pengguna secara kreatif.
-5. Kembalikan HASIL AKHIR berupa teks prompt yang siap pakai, tanpa tambahan teks penjelasan apapun di luar prompt tersebut."""
+5. Kembalikan HASIL AKHIR berupa teks prompt yang siap pakai, tanpa tambahan teks penjelasan apapun di luar prompt tersebut.
+{lang_instruction}"""
 
             response = generator.client.models.generate_content(
                 model=generator.model,
