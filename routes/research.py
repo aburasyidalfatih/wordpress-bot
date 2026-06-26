@@ -186,6 +186,7 @@ def generate_titles(user_id, category):
             keywords = latest.keywords if latest and latest.keywords else []
             questions = latest.questions if latest and latest.questions else []
             site_name = site.site_name
+            language = site.language or 'id'
             
             category_desc = ""
             for cat in (site.categories or []):
@@ -200,8 +201,6 @@ def generate_titles(user_id, category):
             config.get('gemini_model', 'gemini-2.5-pro'),
             config.get('gemini_image_model', 'gemini-3.1-flash-image')
         )
-        
-        language = site.language or 'id'
         
         if language == 'en':
             prompt = f"""Create {count} highly engaging, natural (like written by a professional journalist or blogger), click-worthy (High CTR), and SEO-optimized blog article titles for the category "{category}" on the website {site_name}. All titles MUST BE IN ENGLISH.
