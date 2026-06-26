@@ -177,10 +177,13 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
         title = article.get('title', '')
         excerpt = article.get('excerpt', '')
         excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:400]
+        language = config.get('language', 'id')
+        read_more_text = "Read the full article:" if language == 'en' else "Baca artikel lengkap"
+        
         keyword = article.get('focus_keyword', '').replace(' ', '').title()
         hashtags = f"#{keyword}" if keyword else ""
         
-        message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">Baca artikel lengkap</a>\n\n{hashtags}"""
+        message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">{read_more_text}</a>\n\n{hashtags}"""
         
         if image_data:
             url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
@@ -320,10 +323,12 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
             # Post link as comment
             if post_id and post_url:
                 try:
+                    language = config.get('language', 'id')
+                    read_more_text = "Read the full article:" if language == 'en' else "Baca artikel lengkapnya:"
                     comment_url = f"https://graph.facebook.com/v18.0/{post_id}/comments"
                     comment_data = {
                         'access_token': access_token,
-                        'message': f"📖 Baca artikel lengkapnya:\n{post_url}"
+                        'message': f"📖 {read_more_text}\n{post_url}"
                     }
                     comment_response = requests.post(comment_url, data=comment_data, timeout=10)
                     if comment_response.status_code == 200:
@@ -421,8 +426,11 @@ def post_to_threads(config, article, post_url, image_data=None):
         keyword = article.get('focus_keyword', '').replace(' ', '').title()
         hashtags = f"#{keyword}" if keyword else ""
         
+        language = config.get('language', 'id')
+        read_more_text = "Read more:" if language == 'en' else "Baca selengkapnya:"
+        
         # Build text: engaging excerpt + link + dynamic hashtags
-        text = f"{first_paragraph}\n\n📖 Baca selengkapnya:\n{post_url}\n\n{hashtags}"
+        text = f"{first_paragraph}\n\n📖 {read_more_text}\n{post_url}\n\n{hashtags}"
         
         # Limit to 500 chars (Threads limit)
         if len(text) > 500:
