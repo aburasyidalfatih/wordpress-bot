@@ -650,27 +650,24 @@ PENTING:
         target_site = site_name if site_name else "kelasmaster.id"
         try:
             if article_content:
-                prompt = f"""Create a professional featured image for this article about {topic}.
-
-Article Title: {title}
+                prompt = f"""Create a professional conceptual illustration for an educational blog article.
+Topic context: {topic}
 
 Design Requirements:
-- Modern, clean design in landscape orientation (16:9) - perfect for blog featured image
-- Professional color scheme (blues, greens, corporate/modern colors)
-- Include the title text: "{title}"
-- Add relevant visual elements, icons, or illustrations
-- "{target_site}" branding subtly placed
-- High quality, eye-catching design
-- Suitable as blog header/featured image
-
-Style: Modern, professional, suitable for blog featured image."""
+- Modern, abstract conceptual design in landscape orientation (16:9)
+- Professional corporate and educational color scheme (blues, teals, greens, white)
+- Symbolic representation (e.g. digital icons, charts, documents, abstract shapes)
+- STRICT SAFETY: Completely safe for work, educational context only, no violence, no weapons, no realistic human faces, no sensitive imagery.
+- Add minimal, clean typography with the title: "{title}"
+- Subtly include "{target_site}" branding
+- High quality, eye-catching minimalist 3D or vector illustration."""
             else:
-                prompt = f"""Create a professional featured image about {topic}.
+                prompt = f"""Create a professional conceptual illustration for an educational blog article about: {topic}.
 
 Title: "{title}"
 
-Design: Modern, landscape (16:9), professional colors, with title text and {target_site} branding.
-Style: Blog featured image."""
+Design: Modern, abstract, landscape (16:9), professional colors, minimal text.
+Constraints: Safe for work, educational context only, no realistic human faces, no violence, no weapons."""
 
             # Use custom image prompt if provided
             if custom_prompt:
