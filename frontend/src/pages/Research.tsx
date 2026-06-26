@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search, Sparkles } from 'lucide-react';
+import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search, Sparkles, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
@@ -78,6 +78,28 @@ export default function Research() {
 
     return () => clearInterval(interval);
   }, [jobId]);
+
+  const handleClearResearch = async () => {
+    if (!selectedSiteId) return;
+    if (!confirm('Apakah Anda yakin ingin menghapus SEMUA hasil riset untuk website ini? Anda harus melakukan riset dari awal lagi setelahnya.')) return;
+    
+    try {
+      const res = await apiFetch('/api/clear-research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: selectedSiteId })
+      });
+      const result = await res.json();
+      if (result.success) {
+        setMessage(result.message);
+        loadData();
+      } else {
+        setMessage('Gagal menghapus riset: ' + result.error);
+      }
+    } catch (err: any) {
+      setMessage(`Network error: ${err.message}`);
+    }
+  };
 
   const handleManualResearch = async (categoryName?: string) => {
     if (!selectedSiteId) return;
@@ -199,6 +221,10 @@ export default function Research() {
         </div>
         {selectedCategories.length > 0 && (
           <div className="flex gap-2">
+            <Button onClick={handleClearResearch} disabled={researching || Object.keys(researchData).length === 0} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700">
+              <Trash2 className="h-4 w-4" />
+              Bersihkan Riset
+            </Button>
             <Button onClick={handleOpenBulkModal} disabled={researching} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-indigo-600 border-indigo-200 hover:bg-indigo-50">
               <Sparkles className="h-4 w-4" />
               Buat Judul Massal

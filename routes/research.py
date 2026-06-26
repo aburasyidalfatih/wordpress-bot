@@ -268,3 +268,26 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
     except Exception as e:
         logger.error(f"Generate titles error: {e}")
         return jsonify({'success': False, 'error': f'Gagal men-generate judul: {str(e)}'}), 500
+
+@research_bp.route('/api/clear-research', methods=['POST'])
+@require_jwt
+def clear_research(user_id):
+    data = request.json or {}
+    site_id = data.get('site_id')
+    
+    if not site_id:
+        return jsonify({'success': False, 'error': 'site_id is required'}), 400
+        
+    try:
+        with db.get_session() as session:
+            from database import ResearchData
+            deleted_count = session.query(ResearchData).filter_by(site_id=site_id, user_id=user_id).delete()
+            session.commit()
+            
+        return jsonify({
+            'success': True, 
+            'message': f'Berhasil membersihkan {deleted_count} data riset.'
+        })
+    except Exception as e:
+        logger.error(f"Clear research error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
