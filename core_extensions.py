@@ -177,8 +177,10 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
         title = article.get('title', '')
         excerpt = article.get('excerpt', '')
         excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:400]
+        keyword = article.get('focus_keyword', '').replace(' ', '').title()
+        hashtags = f"#{keyword}" if keyword else ""
         
-        message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">Baca artikel lengkap</a>\n\n#SekolahDigital #Pendidikan #KelasMaster"""
+        message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">Baca artikel lengkap</a>\n\n{hashtags}"""
         
         if image_data:
             url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
@@ -274,9 +276,12 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
         if not first_3_paragraphs:
             excerpt = article.get('excerpt', '')
             first_3_paragraphs = html.unescape(re.sub('<[^<]+?>', '', excerpt).strip()[:500])
+            
+        keyword = article.get('focus_keyword', '').replace(' ', '').title()
+        hashtags = f"#{keyword}" if keyword else ""
         
         # Build message: Just 3 paragraphs + hashtags (NO title, NO link)
-        message = f"{first_3_paragraphs.strip()}\n\n#Pendidikan #SekolahDigital #KelasMaster #ManajemenSekolah"
+        message = f"{first_3_paragraphs.strip()}\n\n{hashtags}"
         
         # Get image URL from WordPress post
         image_url = None
@@ -364,10 +369,13 @@ def post_to_twitter(config, article, post_url, image_data=None):
         excerpt = article.get('excerpt', '')
         excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:200]
         
-        tweet = f"{title}\n\n{excerpt_clean}...\n\n{post_url}\n\n#SekolahDigital #Pendidikan"
+        keyword = article.get('focus_keyword', '').replace(' ', '').title()
+        hashtags = f"#{keyword}" if keyword else ""
+        
+        tweet = f"{title}\n\n{excerpt_clean}...\n\n{post_url}\n\n{hashtags}"
         
         if len(tweet) > 280:
-            tweet = f"{title[:100]}...\n\n{post_url}\n\n#SekolahDigital #Pendidikan"
+            tweet = f"{title[:100]}...\n\n{post_url}\n\n{hashtags}"
             
         response = client.create_tweet(text=tweet)
         logger.info(f"Twitter post successful, Tweet ID: {response.data.get('id')}")
@@ -396,29 +404,29 @@ def post_to_threads(config, article, post_url, image_data=None):
         if isinstance(content, dict):
             content = content.get('rendered', '')
         
-        # Remove HTML tags and decode entities
-        content_clean = re.sub('<[^<]+?>', '', content)
-        content_clean = html.unescape(content_clean)
-        content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+        # Get excerpt or fallback to first paragraph
+        excerpt = article.get('excerpt', '')
+        if excerpt:
+            content_clean = html.unescape(re.sub('<[^<]+?>', '', excerpt)).strip()
+            first_paragraph = content_clean
+        else:
+            # Fallback
+            content_clean = re.sub('<[^<]+?>', '', content)
+            content_clean = html.unescape(content_clean)
+            content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+            sentences = re.split(r'(?<=[.!?])\s+', content_clean)
+            first_para_sentences = [s.strip() for s in sentences[:4] if len(s.strip()) > 20]
+            first_paragraph = ' '.join(first_para_sentences[:3])
+            
+        keyword = article.get('focus_keyword', '').replace(' ', '').title()
+        hashtags = f"#{keyword}" if keyword else ""
         
-        # Get first paragraph (first 3-4 sentences)
-        sentences = re.split(r'(?<=[.!?])\s+', content_clean)
-        first_para_sentences = []
+        # Build text: engaging excerpt + link + dynamic hashtags
+        text = f"{first_paragraph}\n\n📖 Baca selengkapnya:\n{post_url}\n\n{hashtags}"
         
-        for sentence in sentences[:4]:
-            if len(sentence.strip()) > 20:
-                first_para_sentences.append(sentence.strip())
-                if len(' '.join(first_para_sentences)) > 300:
-                    break
-        
-        first_paragraph = ' '.join(first_para_sentences[:3])
-        
-        # Build text: 1 paragraph + link + hashtags
-        text = f"{first_paragraph}\n\n📖 {post_url}\n\n#Pendidikan #KelasMaster #SekolahDigital"
-        
-        # Limit to 500 chars
+        # Limit to 500 chars (Threads limit)
         if len(text) > 500:
-            text = first_paragraph[:450] + "...\n\n#Pendidikan #KelasMaster"
+            text = first_paragraph[:430] + f"...\n\n📖 {post_url}\n\n{hashtags}"
         
         # Get image URL from WordPress post
         image_url = None
