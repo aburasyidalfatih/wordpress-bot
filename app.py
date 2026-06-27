@@ -335,9 +335,14 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                         seo_data = {
                             'keywords': research.keywords if hasattr(research, 'keywords') else [],
                             'questions': research.questions if hasattr(research, 'questions') else [],
-                            'long_tail': research.long_tail_keywords if hasattr(research, 'long_tail_keywords') else []
+                            'long_tail': research.long_tail_keywords if hasattr(research, 'long_tail_keywords') else [],
+                            'competitor_outlines': research.competitor_outlines if hasattr(research, 'competitor_outlines') else [],
+                            'social_insights': research.social_insights if hasattr(research, 'social_insights') else [],
+                            'youtube_insights': research.youtube_insights if hasattr(research, 'youtube_insights') else [],
+                            'semantic_context': '',
+                            'news_insights': []
                         }
-                        logger.info(f"Using SEO data: {len(seo_data.get('keywords', []))} keywords, {len(seo_data.get('questions', []))} questions")
+                        logger.info(f"Using SEO data: {len(seo_data.get('keywords', []))} keywords, {len(seo_data.get('questions', []))} questions, {len(seo_data.get('competitor_outlines', []))} competitors, {len(seo_data.get('social_insights', []))} social, {len(seo_data.get('youtube_insights', []))} youtube")
             except Exception as e:
                 logger.error(f"Error getting SEO data: {e}")
         
