@@ -696,83 +696,185 @@ PENTING:
         """Generate landscape featured image for blog"""
         target_site = site_name if site_name else "kelasmaster.id"
         try:
-            if article_content:
-                prompt = f"""Create a professional conceptual illustration for an educational blog article.
-Topic context: {topic}
+            def to_webp(image_bytes):
+                img = Image.open(BytesIO(image_bytes))
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
-Design Requirements:
-- Modern, abstract conceptual design in landscape orientation (16:9)
-- Professional corporate and educational color scheme (blues, teals, greens, white)
-- Symbolic representation (e.g. digital icons, charts, documents, abstract shapes)
-- STRICT SAFETY: Completely safe for work, educational context only, no violence, no weapons, no realistic human faces, no sensitive imagery.
-- Add minimal, clean typography with the title: "{title}"
-- Subtly include "{target_site}" branding
-- High quality, eye-catching minimalist 3D or vector illustration."""
-            else:
-                prompt = f"""Create a professional conceptual illustration for an educational blog article about: {topic}.
+                output = BytesIO()
+                img.save(output, format='WEBP', quality=85)
+                output.seek(0)
+                return output
 
-Title: "{title}"
+            def iter_response_parts(response):
+                try:
+                    direct_parts = getattr(response, 'parts', None)
+                except Exception:
+                    direct_parts = None
+                if direct_parts:
+                    for part in direct_parts:
+                        yield part
 
-Design: Modern, abstract, landscape (16:9), professional colors, minimal text.
-Constraints: Safe for work, educational context only, no realistic human faces, no violence, no weapons."""
+                for candidate in getattr(response, 'candidates', None) or []:
+                    content = getattr(candidate, 'content', None)
+                    for part in getattr(content, 'parts', None) or []:
+                        yield part
 
-            # Use custom image prompt if provided
+            def response_summary(response):
+                details = []
+                prompt_feedback = getattr(response, 'prompt_feedback', None)
+                if prompt_feedback:
+                    details.append(f"prompt_feedback={prompt_feedback}")
+
+                for index, candidate in enumerate(getattr(response, 'candidates', None) or []):
+                    finish_reason = getattr(candidate, 'finish_reason', None)
+                    finish_message = getattr(candidate, 'finish_message', None)
+                    safety_ratings = getattr(candidate, 'safety_ratings', None)
+                    details.append(
+                        f"candidate[{index}] finish_reason={finish_reason} "
+                        f"finish_message={finish_message} safety_ratings={safety_ratings}"
+                    )
+
+                text_parts = [
+                    getattr(part, 'text', '').strip()
+                    for part in iter_response_parts(response)
+                    if getattr(part, 'text', None)
+                ]
+                if text_parts:
+                    details.append(f"text={text_parts[0][:300]}")
+
+                return " | ".join(details) if details else "no response details"
+
+            def inline_image_bytes(response):
+                for part in iter_response_parts(response):
+                    inline_data = getattr(part, 'inline_data', None)
+                    if inline_data is not None and getattr(inline_data, 'data', None):
+                        return inline_data.data
+                return None
+
+            def safe_title(value):
+                words = (value or topic or "education article").split()
+                return " ".join(words[:12])
+
+            image_prompts = []
             if custom_prompt:
-                prompt = custom_prompt.replace('{topic}', topic).replace('{title}', title).replace('{site_name}', target_site)
+                image_prompts.append((
+                    "custom",
+                    custom_prompt
+                    .replace('{topic}', topic)
+                    .replace('{title}', title)
+                    .replace('{site_name}', target_site)
+                ))
+
+            image_prompts.extend([
+                (
+                    "safe-editorial",
+                    f"""Create a professional editorial illustration for an education blog featured image.
+Article theme: "{safe_title(title)}"
+Category context: {topic}
+
+Design requirements:
+- Landscape 16:9 composition.
+- Conceptual illustration only: documents, classroom dashboard, charts, books, soft abstract shapes.
+- Professional education palette with balanced blues, greens, white, and warm accent colors.
+- Do not render readable text, article headlines, government logos, official seals, real people, or realistic faces.
+- Do not imply a factual announcement visually; keep it symbolic and broadly educational.
+- Safe for work, non-political, non-violent, clean modern style.
+- Subtle generic brand feel for {target_site}, without text-heavy typography."""
+                ),
+                (
+                    "generic-education",
+                    f"""Create a safe, generic 16:9 featured image for an education management article.
+Use abstract school administration symbols: open notebook, calendar, analytics chart, notification card, and soft geometric background.
+No readable words, no people, no portraits, no government insignia, no money bills, no official documents.
+Modern clean vector or soft 3D illustration, high quality, professional blog thumbnail."""
+                ),
+                (
+                    "minimal-abstract",
+                    """Create a clean abstract 16:9 education blog cover image.
+Use simple shapes, books, charts, and digital learning icons on a bright professional background.
+No text, no faces, no logos, no sensitive or political imagery."""
+                )
+            ])
+
+            image_config_kwargs = {'aspect_ratio': '16:9'}
+            person_generation = getattr(getattr(types, 'PersonGeneration', None), 'DONT_ALLOW', None)
+            if person_generation is not None:
+                image_config_kwargs['person_generation'] = person_generation
 
             # Use configured image model for image generation
+            last_error = None
+            last_summary = None
             if self.image_model.startswith('imagen-'):
-                response = self.client.models.generate_images(
-                    model=self.image_model,
-                    prompt=prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                        aspect_ratio='16:9',
-                        output_mime_type='image/webp'
-                    )
-                )
-                for generated_image in response.generated_images:
-                    image_bytes = generated_image.image.image_bytes
-                    img = Image.open(BytesIO(image_bytes))
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
-                    output = BytesIO()
-                    img.save(output, format='WEBP', quality=85)
-                    output.seek(0)
-                    return output
-            else:
-                response = self.client.models.generate_content(
-                    model=self.image_model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_modalities=['IMAGE'],
-                        image_config=types.ImageConfig(
-                            aspect_ratio='16:9'  # Landscape for featured image
-                        )
-                    )
-                )
-                
-                if not hasattr(response, 'parts') or response.parts is None:
-                    raise Exception(f"Image generation failed, blocked by safety or missing parts. Raw response: {getattr(response, 'text', 'None')}")
+                imagen_config_kwargs = {
+                    'number_of_images': 1,
+                    'aspect_ratio': '16:9',
+                    'output_mime_type': 'image/webp'
+                }
+                if person_generation is not None:
+                    imagen_config_kwargs['person_generation'] = person_generation
 
-                for part in response.parts:
-                    if part.inline_data is not None:
-                        image_bytes = part.inline_data.data
-                        
-                        # Convert to WebP for better compression
-                        img = Image.open(BytesIO(image_bytes))
-                        
-                        # Convert RGBA to RGB if needed
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
-                        
-                        # Save as WebP with high quality
-                        output = BytesIO()
-                        img.save(output, format='WEBP', quality=85)
-                        output.seek(0)
-                        return output
-            
-            return None
+                for attempt_name, prompt in image_prompts:
+                    try:
+                        logger.info(f"Generating featured image with {self.image_model} using {attempt_name} prompt")
+                        response = self.client.models.generate_images(
+                            model=self.image_model,
+                            prompt=prompt,
+                            config=types.GenerateImagesConfig(**imagen_config_kwargs)
+                        )
+
+                        for generated_image in getattr(response, 'generated_images', None) or []:
+                            image = getattr(generated_image, 'image', None)
+                            image_bytes = getattr(image, 'image_bytes', None)
+                            if image_bytes:
+                                return to_webp(image_bytes)
+
+                        last_summary = getattr(response, 'model_dump_json', lambda **_: str(response))(exclude_none=True)
+                        logger.warning(f"Imagen attempt '{attempt_name}' returned no image. {last_summary}")
+                    except Exception as attempt_err:
+                        last_error = attempt_err
+                        logger.warning(f"Imagen attempt '{attempt_name}' failed: {attempt_err}", exc_info=True)
+                if last_summary:
+                    raise Exception(
+                        "Image generation returned no image after fallback prompts. "
+                        f"Last response: {last_summary}"
+                    )
+                if last_error:
+                    raise last_error
+                raise Exception("Image generation returned no image after fallback prompts.")
+            else:
+                for attempt_name, prompt in image_prompts:
+                    try:
+                        logger.info(f"Generating featured image with {self.image_model} using {attempt_name} prompt")
+                        response = self.client.models.generate_content(
+                            model=self.image_model,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_modalities=['TEXT', 'IMAGE'],
+                                image_config=types.ImageConfig(**image_config_kwargs)
+                            )
+                        )
+
+                        image_bytes = inline_image_bytes(response)
+                        if image_bytes:
+                            return to_webp(image_bytes)
+
+                        last_summary = response_summary(response)
+                        logger.warning(f"Gemini image attempt '{attempt_name}' returned no image. {last_summary}")
+                    except Exception as attempt_err:
+                        last_error = attempt_err
+                        logger.warning(f"Gemini image attempt '{attempt_name}' failed: {attempt_err}", exc_info=True)
+
+                if last_summary:
+                    raise Exception(
+                        "Image generation returned no image after fallback prompts. "
+                        f"Last response: {last_summary}"
+                    )
+                if last_error:
+                    raise last_error
+                raise Exception(
+                    "Image generation returned no image after fallback prompts."
+                )
         except Exception as e:
             logger.error(f"Error generating featured image: {e}", exc_info=True)
             raise Exception(f"Gemini image generation API error: {str(e)}")
