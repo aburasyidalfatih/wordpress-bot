@@ -749,9 +749,6 @@ PENTING:
                 for part in iter_response_parts(response):
                     inline_data = getattr(part, 'inline_data', None)
                     if inline_data is not None and getattr(inline_data, 'data', None):
-                        return inline_data.data
-                return None
-
             def safe_title(value):
                 words = (value or topic or "education article").split()
                 return " ".join(words[:12])
@@ -769,31 +766,32 @@ PENTING:
             image_prompts.extend([
                 (
                     "safe-editorial",
-                    f"""Create a professional editorial illustration for an education blog featured image.
+                    f"""Create a professional editorial illustration for a blog featured image.
 Article theme: "{safe_title(title)}"
 Category context: {topic}
 
 Design requirements:
 - Landscape 16:9 composition.
-- Conceptual illustration only: documents, classroom dashboard, charts, books, soft abstract shapes.
-- Professional education palette with balanced blues, greens, white, and warm accent colors.
-- Do not render readable text, article headlines, government logos, official seals, real people, or realistic faces.
-- Do not imply a factual announcement visually; keep it symbolic and broadly educational.
-- Safe for work, non-political, non-violent, clean modern style.
-- Subtle generic brand feel for {target_site}, without text-heavy typography."""
+- Include a bold, highly aesthetic, 2 to 3 word typographic overlay that creates intense curiosity and invites clicks (for example: "MUST READ!", "TOP SECRET", "WOW!", "NEW UPDATE", or 2 words related to {topic}).
+- DO NOT render the full article title. The text must be very short and punchy.
+- Beautiful, modern typography perfectly integrated into the design.
+- Conceptual illustration with soft abstract shapes, charts, or modern digital elements.
+- Professional palette with vibrant, eye-catching colors.
+- Safe for work, non-political, clean modern style."""
                 ),
                 (
                     "generic-education",
-                    f"""Create a safe, generic 16:9 featured image for an education management article.
-Use abstract school administration symbols: open notebook, calendar, analytics chart, notification card, and soft geometric background.
-No readable words, no people, no portraits, no government insignia, no money bills, no official documents.
-Modern clean vector or soft 3D illustration, high quality, professional blog thumbnail."""
+                    f"""Create a high-quality 16:9 featured image for an article about {topic}.
+Include a short, 2-word clickbait typographic text in the center (e.g. "PRO TIPS", "SECRET STRATEGY"). 
+Do NOT write the full title.
+Use abstract modern symbols and a soft geometric background.
+Modern clean vector or soft 3D illustration, professional blog thumbnail."""
                 ),
                 (
                     "minimal-abstract",
-                    """Create a clean abstract 16:9 education blog cover image.
-Use simple shapes, books, charts, and digital learning icons on a bright professional background.
-No text, no faces, no logos, no sensitive or political imagery."""
+                    f"""Create a clean abstract 16:9 blog cover image for {topic}.
+Include one very short, bold, click-worthy word in aesthetic typography.
+Use simple shapes and digital icons on a bright professional background."""
                 )
             ])
 
