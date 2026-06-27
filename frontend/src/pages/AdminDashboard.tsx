@@ -520,9 +520,10 @@ export default function AdminDashboard() {
                   <Label htmlFor="TRIPAY_API_KEY">API Key</Label>
                   <Input 
                     id="TRIPAY_API_KEY"
+                    type="password"
                     value={config.TRIPAY_API_KEY || ''}
                     onChange={(e) => setConfig({ ...config, TRIPAY_API_KEY: e.target.value })}
-                    placeholder="Your Tripay API Key"
+                    placeholder={config.has_TRIPAY_API_KEY ? "Sudah tersimpan. Isi untuk mengganti." : "Your Tripay API Key"}
                   />
                 </div>
                 <div className="space-y-2">
@@ -532,7 +533,7 @@ export default function AdminDashboard() {
                     type="password"
                     value={config.TRIPAY_PRIVATE_KEY || ''}
                     onChange={(e) => setConfig({ ...config, TRIPAY_PRIVATE_KEY: e.target.value })}
-                    placeholder="Your Tripay Private Key"
+                    placeholder={config.has_TRIPAY_PRIVATE_KEY ? "Sudah tersimpan. Isi untuk mengganti." : "Your Tripay Private Key"}
                   />
                 </div>
                 <div className="h-px bg-border my-2" />
@@ -575,7 +576,7 @@ export default function AdminDashboard() {
                     type="password"
                     value={config.PAYPAL_SECRET || ''}
                     onChange={(e) => setConfig({ ...config, PAYPAL_SECRET: e.target.value })}
-                    placeholder="PayPal Secret Key"
+                    placeholder={config.has_PAYPAL_SECRET ? "Sudah tersimpan. Isi untuk mengganti." : "PayPal Secret Key"}
                   />
                 </div>
                 <div className="h-px bg-border my-2" />
@@ -651,7 +652,7 @@ export default function AdminDashboard() {
                       type="password"
                       value={config.gemini_api_key || ''}
                       onChange={(e) => setConfig({ ...config, gemini_api_key: e.target.value })}
-                      placeholder="Your Gemini API Key"
+                      placeholder={config.has_gemini_api_key ? "Sudah tersimpan. Isi untuk mengganti." : "Your Gemini API Key"}
                     />
                   </div>
                   <div className="space-y-2">
@@ -712,7 +713,7 @@ export default function AdminDashboard() {
                       type="password"
                       value={config.GOOGLE_CLIENT_SECRET || ''}
                       onChange={(e) => setConfig({ ...config, GOOGLE_CLIENT_SECRET: e.target.value })}
-                      placeholder="Your Google Client Secret"
+                      placeholder={config.has_GOOGLE_CLIENT_SECRET ? "Sudah tersimpan. Isi untuk mengganti." : "Your Google Client Secret"}
                     />
                   </div>
                 </CardContent>
@@ -766,7 +767,7 @@ export default function AdminDashboard() {
                         type="password"
                         value={config.SMTP_PASSWORD || ''}
                         onChange={(e) => setConfig({ ...config, SMTP_PASSWORD: e.target.value })}
-                        placeholder="Your SMTP password"
+                        placeholder={config.has_SMTP_PASSWORD ? "Sudah tersimpan. Isi untuk mengganti." : "Your SMTP password"}
                       />
                     </div>
                   </div>
@@ -788,9 +789,10 @@ export default function AdminDashboard() {
                       <Label htmlFor="STARSENDER_API_KEY">Starsender API Key</Label>
                       <Input 
                         id="STARSENDER_API_KEY"
+                        type="password"
                         value={config.STARSENDER_API_KEY || ''}
                         onChange={(e) => setConfig({ ...config, STARSENDER_API_KEY: e.target.value })}
-                        placeholder="Starsender API Key"
+                        placeholder={config.has_STARSENDER_API_KEY ? "Sudah tersimpan. Isi untuk mengganti." : "Starsender API Key"}
                       />
                     </div>
                     <div className="space-y-2">

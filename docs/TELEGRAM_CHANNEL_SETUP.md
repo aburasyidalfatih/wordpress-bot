@@ -51,7 +51,7 @@ Setiap artikel yang dipublish akan otomatis diposting ke channel Telegram Anda d
 
 ### **Langkah 4: Konfigurasi di Dashboard**
 
-1. Buka dashboard: http://localhost:5000
+1. Buka dashboard: http://localhost:5003
 2. Scroll ke **"📢 Auto Post ke Channel Telegram"**
 3. Centang **"Aktifkan Auto Post ke Channel"**
 4. Input **Channel ID**:

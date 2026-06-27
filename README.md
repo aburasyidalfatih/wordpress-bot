@@ -1,7 +1,7 @@
 # WordPress Auto Post Bot — Dokumentasi
 
 **URL**: https://bot.kelasmaster.id  
-**Stack**: Python 3 + Flask + SQLite + APScheduler  
+**Stack**: Python 3 + Flask + PostgreSQL 15 + Redis/RQ  
 **Server**: VPS 43.157.223.102, port 5003  
 **Process Manager**: Supervisor  
 **Last Updated**: 2026-03-22
@@ -16,7 +16,8 @@ https://bot.kelasmaster.id
     Nginx (SSL)
         │
     Flask app (port 5003)
-        ├── APScheduler  ──→ Auto post terjadwal
+        ├── Redis/RQ      ──→ Background jobs
+        ├── Dispatcher    ──→ Auto post terjadwal
         ├── Gemini AI    ──→ Generate artikel & gambar
         ├── WordPress API──→ Publish artikel
         ├── Telegram API ──→ Notifikasi & channel post
@@ -31,7 +32,7 @@ https://bot.kelasmaster.id
 wordpress-bot/
 ├── app.py              # Entry point Flask, semua routes
 ├── bot.py              # ArticleGenerator, WordPressPublisher
-├── database.py         # Database wrapper (SQLite)
+├── database.py         # Database wrapper (SQLAlchemy: PostgreSQL production, SQLite fallback)
 ├── config.py           # Konstanta konfigurasi
 ├── ml_optimizer.py     # AI category optimizer
 ├── seo_research.py     # SEO research helper
@@ -60,8 +61,8 @@ wordpress-bot/
 │   └── monitor.sh                # Monitor bot
 ├── docs/               # Dokumentasi setup per platform
 ├── logs/               # Log files (rotasi otomatis)
-├── wordpress_bot.db    # Database SQLite utama
-├── scheduler_jobs.db   # APScheduler persistent jobs
+├── docker-compose.yml  # Web, worker, scheduler, PostgreSQL 15, Redis
+├── wordpress_bot.db    # SQLite fallback/local legacy database
 ├── .env                # Environment variables (tidak di-commit)
 └── venv/               # Python virtual environment
 ```
@@ -112,14 +113,20 @@ Auto Research: setiap hari jam 00:00 (jika diaktifkan).
 
 ## Database
 
-**`wordpress_bot.db`** (SQLite):
-- `config` — semua konfigurasi aplikasi (1 row)
+Production Docker memakai **PostgreSQL 15** (`postgres:15-alpine`) melalui `DATABASE_URL`. Jika `DATABASE_URL` tidak diset, aplikasi fallback ke `sqlite:///wordpress_bot.db` untuk mode lokal/legacy.
+
+Tabel utama:
+- `users` — akun, role, tier, kredit
+- `wordpress_sites` — konfigurasi multi-website per user
+- `config` — konfigurasi Gemini global/admin
 - `post_logs` — riwayat semua posting (title, url, success, engagement)
 - `research_data` — hasil research trending topics per kategori
+- `content_queue` — antrean judul/content idea
+- `transactions` — riwayat top-up kredit
 
-Backup otomatis via cron setiap hari jam 02:00:
+Contoh backup PostgreSQL via cron setiap hari jam 02:00:
 ```bash
-0 2 * * * cp /home/ubuntu/wordpress-bot/wordpress_bot.db /home/ubuntu/wordpress-bot/wordpress_bot.db.bak
+0 2 * * * docker compose exec -T postgres pg_dump -U autowp autowpdb > /home/ubuntu/backups/autowp_$(date +\%Y\%m\%d).sql
 ```
 
 ## Perintah Penting
@@ -142,14 +149,14 @@ sudo supervisorctl stop wordpress-bot
 sudo fuser -k 5003/tcp
 sudo supervisorctl start wordpress-bot
 
-# Cek database
-sqlite3 /home/ubuntu/wordpress-bot/wordpress_bot.db \
-  "SELECT datetime(created_at,'localtime'), substr(title,1,60), success FROM post_logs ORDER BY created_at DESC LIMIT 10;"
+# Cek database production
+docker compose exec postgres psql -U autowp -d autowpdb \
+  -c "SELECT created_at, left(title, 60), success FROM post_logs ORDER BY created_at DESC LIMIT 10;"
 
 # Manual post via CLI
 cd /home/ubuntu/wordpress-bot
 source venv/bin/activate
-python -c "from app import generate_and_post; generate_and_post()"
+python -c "from app import generate_and_post; generate_and_post(USER_ID, site_id=SITE_ID)"
 ```
 
 ## Supervisor Config
@@ -193,10 +200,10 @@ sudo supervisorctl start wordpress-bot
 
 ### Bot tidak posting sesuai jadwal
 ```bash
-# Cek scheduler jobs
-sqlite3 /home/ubuntu/wordpress-bot/scheduler_jobs.db "SELECT * FROM apscheduler_jobs;"
-# Restart untuk re-register jobs
-sudo supervisorctl restart wordpress-bot
+# Cek scheduler/dispatcher log
+docker compose logs scheduler --tail=100
+# Restart scheduler
+docker compose restart scheduler
 ```
 
 ### Artikel gagal generate
@@ -207,8 +214,8 @@ grep "ERROR\|error" /home/ubuntu/wordpress-bot/logs/bot.log | tail -20
 
 ### Reset konfigurasi
 ```bash
-sqlite3 /home/ubuntu/wordpress-bot/wordpress_bot.db "DELETE FROM config;"
-# Lalu isi ulang via /settings
+docker compose exec postgres psql -U autowp -d autowpdb -c "DELETE FROM config;"
+# Lalu isi ulang via Admin Settings
 ```
 
 ## Integrasi Platform

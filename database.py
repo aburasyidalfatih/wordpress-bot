@@ -596,9 +596,12 @@ class Database:
                 config = Config(user_id=user_id)
                 session.add(config)
             
-            config.gemini_api_key = data.get('gemini_api_key', '')
-            config.gemini_model = data.get('gemini_model', 'gemini-2.5-pro')
-            config.gemini_image_model = data.get('gemini_image_model', 'gemini-3.1-flash-image')
+            if 'gemini_api_key' in data and data.get('gemini_api_key'):
+                config.gemini_api_key = data['gemini_api_key']
+            if 'gemini_model' in data:
+                config.gemini_model = data.get('gemini_model') or 'gemini-2.5-pro'
+            if 'gemini_image_model' in data:
+                config.gemini_image_model = data.get('gemini_image_model') or 'gemini-3.1-flash-image'
     
     def get_system_settings(self):
         with self.get_session() as session:

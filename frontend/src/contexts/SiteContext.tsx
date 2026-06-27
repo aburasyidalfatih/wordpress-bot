@@ -24,16 +24,24 @@ export interface WordPressSite {
   article_prompt: string | null;
   image_prompt: string | null;
   wordpress_password?: string;
+  has_wordpress_password?: boolean;
   telegram_post_to_channel?: boolean;
   telegram_channel_id?: string;
+  has_telegram_bot_token?: boolean;
   facebook_page_id?: string;
   facebook_access_token?: string;
+  has_facebook_access_token?: boolean;
   twitter_api_key?: string;
   twitter_api_secret?: string;
   twitter_access_token?: string;
   twitter_access_secret?: string;
+  has_twitter_api_key?: boolean;
+  has_twitter_api_secret?: boolean;
+  has_twitter_access_token?: boolean;
+  has_twitter_access_secret?: boolean;
   threads_user_id?: string;
   threads_access_token?: string;
+  has_threads_access_token?: boolean;
 }
 
 interface SiteContextType {

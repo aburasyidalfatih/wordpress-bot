@@ -7,6 +7,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 import requests
+import jwt
 
 from core_extensions import db, logger, require_jwt, send_email_notification, send_whatsapp_notification
 from config import Config
@@ -44,6 +45,17 @@ def get_paypal_access_token():
     except Exception as e:
         logger.error(f"Failed to get PayPal access token: {e}")
     return None
+
+def decode_bearer_user_id():
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return None
+    try:
+        token = auth_header.split(' ', 1)[1]
+        payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+        return payload.get('user_id')
+    except Exception:
+        return None
 
 @payments_bp.route('/api/payments/create-invoice', methods=['POST'])
 @require_jwt
@@ -268,8 +280,13 @@ def tripay_webhook():
     # Verify Tripay IP/Signature for security
     # Skip HMAC validation locally if mock
     is_mock = Config.TRIPAY_PRIVATE_KEY.startswith('MOCK')
+    mock_user_id = None
     
-    if not is_mock:
+    if is_mock:
+        mock_user_id = decode_bearer_user_id()
+        if not mock_user_id:
+            return jsonify({'success': False, 'message': 'Mock webhook requires authenticated admin/user session'}), 401
+    else:
         raw_payload = request.data
         calculated_signature = hmac.new(
             Config.TRIPAY_PRIVATE_KEY.encode('utf-8'),
@@ -292,6 +309,11 @@ def tripay_webhook():
         with db.get_session() as session:
             transaction = session.query(Transaction).filter_by(invoice_id=invoice_id).first()
             if transaction and transaction.status != 'success':
+                if is_mock and transaction.user_id != mock_user_id:
+                    mock_user = session.query(User).filter_by(id=mock_user_id).first()
+                    if not mock_user or mock_user.role != 'admin':
+                        return jsonify({'success': False, 'message': 'Unauthorized mock webhook target'}), 403
+                
                 transaction.status = 'success'
                 
                 # Update user credits and tier

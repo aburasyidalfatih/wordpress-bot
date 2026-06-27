@@ -208,17 +208,19 @@ def manual_post(user_id):
 def job_status(user_id, job_id):
     try:
         job = Job.fetch(job_id, connection=redis_conn)
+        if job.args and job.args[0] != user_id:
+            return jsonify({'success': False, 'error': 'Job not found', 'code': 404}), 404
         status = job.get_status()
         
-        progress = 0
-        message = 'Processing...'
+        progress = int(job.meta.get('progress', 0) or 0)
+        message = job.meta.get('message') or 'Processing...'
         if status == 'finished':
             progress = 100
             message = 'Completed successfully'
         elif status == 'failed':
             progress = 100
             message = 'Job failed'
-        elif status == 'started':
+        elif status == 'started' and progress == 0:
             progress = 50
             message = 'In progress'
             

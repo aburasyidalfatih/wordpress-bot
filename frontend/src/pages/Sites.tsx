@@ -196,7 +196,7 @@ export default function Sites() {
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="wordpress_password">Application Password {!currentSite.id && <span className="text-red-500">*</span>}</Label>
-                        <Input id="wordpress_password" name="wordpress_password" required={!currentSite.id} type="password" value={currentSite.wordpress_password || ''} onChange={handleChange} placeholder={currentSite.id ? "•••••••• (Biarkan kosong jika tidak ingin mengubah)" : ""} />
+                        <Input id="wordpress_password" name="wordpress_password" required={!currentSite.id} type="password" value={currentSite.wordpress_password || ''} onChange={handleChange} placeholder={currentSite.id ? (currentSite.has_wordpress_password ? "Sudah tersimpan. Isi untuk mengganti." : "Belum tersimpan.") : ""} />
                         <p className="text-xs text-muted-foreground">Use WordPress Application Passwords, not your main login password.</p>
                       </div>
 
@@ -409,7 +409,7 @@ export default function Sites() {
                         <div className="space-y-4 pt-4 border-t border-border/50">
                           <div className="space-y-2">
                             <Label>Bot Token</Label>
-                            <Input name="telegram_bot_token" value={currentSite.telegram_bot_token || ''} onChange={handleChange} />
+                            <Input name="telegram_bot_token" type="password" value={currentSite.telegram_bot_token || ''} onChange={handleChange} placeholder={currentSite.has_telegram_bot_token ? "Sudah tersimpan. Isi untuk mengganti." : "Bot token"} />
                           </div>
                           <div className="space-y-2">
                             <Label>Admin Chat ID (for notifications)</Label>
@@ -466,7 +466,7 @@ export default function Sites() {
                           </div>
                           <div className="space-y-2">
                             <Label>Access Token</Label>
-                            <Input name="facebook_access_token" type="password" value={currentSite.facebook_access_token || ''} onChange={handleChange} />
+                            <Input name="facebook_access_token" type="password" value={currentSite.facebook_access_token || ''} onChange={handleChange} placeholder={currentSite.has_facebook_access_token ? "Sudah tersimpan. Isi untuk mengganti." : "Access token"} />
                           </div>
                         </div>
                       )}
@@ -495,19 +495,19 @@ export default function Sites() {
                           <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
                               <Label>API Key</Label>
-                              <Input name="twitter_api_key" type="password" value={currentSite.twitter_api_key || ''} onChange={handleChange} />
+                              <Input name="twitter_api_key" type="password" value={currentSite.twitter_api_key || ''} onChange={handleChange} placeholder={currentSite.has_twitter_api_key ? "Tersimpan" : "API Key"} />
                             </div>
                             <div className="space-y-2">
                               <Label>API Secret</Label>
-                              <Input name="twitter_api_secret" type="password" value={currentSite.twitter_api_secret || ''} onChange={handleChange} />
+                              <Input name="twitter_api_secret" type="password" value={currentSite.twitter_api_secret || ''} onChange={handleChange} placeholder={currentSite.has_twitter_api_secret ? "Tersimpan" : "API Secret"} />
                             </div>
                             <div className="space-y-2">
                               <Label>Access Token</Label>
-                              <Input name="twitter_access_token" type="password" value={currentSite.twitter_access_token || ''} onChange={handleChange} />
+                              <Input name="twitter_access_token" type="password" value={currentSite.twitter_access_token || ''} onChange={handleChange} placeholder={currentSite.has_twitter_access_token ? "Tersimpan" : "Access Token"} />
                             </div>
                             <div className="space-y-2">
                               <Label>Access Secret</Label>
-                              <Input name="twitter_access_secret" type="password" value={currentSite.twitter_access_secret || ''} onChange={handleChange} />
+                              <Input name="twitter_access_secret" type="password" value={currentSite.twitter_access_secret || ''} onChange={handleChange} placeholder={currentSite.has_twitter_access_secret ? "Tersimpan" : "Access Secret"} />
                             </div>
                           </div>
                         </div>
@@ -540,7 +540,7 @@ export default function Sites() {
                           </div>
                           <div className="space-y-2">
                             <Label>Access Token</Label>
-                            <Input name="threads_access_token" type="password" value={currentSite.threads_access_token || ''} onChange={handleChange} />
+                            <Input name="threads_access_token" type="password" value={currentSite.threads_access_token || ''} onChange={handleChange} placeholder={currentSite.has_threads_access_token ? "Sudah tersimpan. Isi untuk mengganti." : "Access token"} />
                           </div>
                         </div>
                       )}

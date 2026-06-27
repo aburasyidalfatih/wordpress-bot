@@ -2,7 +2,8 @@
 # Comprehensive health check script
 
 BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BOT_URL="http://localhost:5000/health"
+BOT_PORT="${BOT_PORT:-5003}"
+BOT_URL="${BOT_URL:-http://localhost:${BOT_PORT}/health}"
 LOG_FILE="$BOT_DIR/health_check.log"
 
 # Load env
@@ -41,12 +42,7 @@ if ! pgrep -f "wordpress-bot/app.py" > /dev/null; then
 fi
 
 # Check 3: Database accessible
-if [ -f "$BOT_DIR/wordpress_bot.db" ]; then
-    if ! sqlite3 "$BOT_DIR/wordpress_bot.db" "SELECT 1;" > /dev/null 2>&1; then
-        echo "[$(date)] ❌ Database not accessible" >> $LOG_FILE
-        send_alert "🚨 <b>Database Alert</b>%0A%0A❌ Database not accessible%0A⏰ $(date)"
-    fi
-fi
+# The /health endpoint already checks PostgreSQL/Redis connectivity.
 
 # Check 4: Disk space
 DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')

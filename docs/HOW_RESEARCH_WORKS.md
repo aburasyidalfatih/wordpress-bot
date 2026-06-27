@@ -242,7 +242,7 @@ Topik tidak akan repeat karena auto-marked as used
 
 ### 1. Buka Settings
 ```
-http://localhost:5000/settings
+http://localhost:5003/settings
 ```
 
 ### 2. Aktifkan Fitur

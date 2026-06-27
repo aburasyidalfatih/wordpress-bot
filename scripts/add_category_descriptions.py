@@ -9,6 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import Database
 import requests
 from requests.auth import HTTPBasicAuth
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Deskripsi SEO-friendly untuk setiap kategori
 CATEGORY_DESCRIPTIONS = {
@@ -97,8 +100,8 @@ def main():
         if remote_cats:
             categories = [{'id': cat['id'], 'name': cat['name']} for cat in remote_cats]
     else:
-        # Load config dari local SQLite
-        db = Database('sqlite:///wordpress_bot.db')
+        # Load config dari DATABASE_URL (PostgreSQL production, SQLite fallback)
+        db = Database(os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db'))
         with db.get_session() as session:
             from database import WordPressSite
             site = session.query(WordPressSite).first()

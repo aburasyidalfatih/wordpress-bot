@@ -1,147 +1,136 @@
 #!/usr/bin/env python3
-"""Post last article to Threads"""
+"""Post the latest successful article for a site to Threads."""
 
+import argparse
+import html
 import os
+import re
 import sys
+
+import requests
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import Database
-from app import load_config
-import requests
+from database import Database, PostLog, WordPressSite
 
-# Get last post
-db = Database('sqlite:///wordpress_bot.db')
-logs = db.get_logs(limit=1)
+load_dotenv()
 
-if not logs:
-    print("❌ No posts found")
-    sys.exit(1)
 
-post = logs[0]
-config = load_config()
+def clean_text(text):
+    text = html.unescape(re.sub(r"<[^<]+?>", "", text or ""))
+    return re.sub(r"\s+", " ", text).strip()
 
-title = post['title']
-url = post['post_url']
-category = post['category']
 
-print("=" * 60)
-print("📝 POSTING TO THREADS")
-print("=" * 60)
-print(f"\n📄 Post:")
-print(f"   {title}")
-print(f"   {url}")
+def extract_caption(post_url, title):
+    try:
+        response = requests.get(post_url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        for node in soup(["script", "style", "noscript"]):
+            node.decompose()
 
-if not config.get('threads_enabled'):
-    print("\n❌ Threads not enabled in config")
-    sys.exit(1)
+        article_content = soup.find("article") or soup.find("div", class_="entry-content")
+        if article_content:
+            for paragraph in article_content.find_all("p"):
+                text = clean_text(paragraph.get_text(separator=" ", strip=True))
+                if len(text) > 50:
+                    sentences = re.split(r"(?<=[.!?])\s+", text)
+                    return " ".join(sentences[:3])[:430].strip()
+    except Exception as exc:
+        print(f"[WARN] Could not fetch article content: {exc}")
 
-user_id = config.get('threads_user_id')
-token = config.get('threads_access_token')
+    return title[:430]
 
-if not user_id or not token:
-    print("\n❌ Threads credentials not configured")
-    sys.exit(1)
 
-# Get article content to extract first paragraph
-print("\n🔄 Fetching article content...")
-try:
-    import requests
-    import re
-    from bs4 import BeautifulSoup
-    
-    response = requests.get(url, timeout=10)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Remove script and style elements
-    for script in soup(["script", "style", "noscript"]):
-        script.decompose()
-    
-    # Try to get first paragraph from article content
-    article_content = soup.find('article') or soup.find('div', class_='entry-content')
-    if article_content:
-        paragraphs = article_content.find_all('p')
-        first_para = ''
-        for p in paragraphs:
-            # Get text and clean it
-            text = p.get_text(separator=' ', strip=True)
-            # Remove extra whitespace
-            text = re.sub(r'\s+', ' ', text).strip()
-            if len(text) > 50:  # Skip short paragraphs
-                first_para = text
-                break
-        
-        # If first paragraph too long, get first 2-3 sentences
-        if len(first_para) > 200:
-            sentences = re.split(r'[.!?]\s+', first_para)
-            first_para = '. '.join(sentences[:2])
-            if not first_para.endswith('.'):
-                first_para += '.'
-        
-        if first_para:
-            caption = f"{first_para}\n\n👉 Baca selengkapnya:\n{url}\n\n#Pendidikan #KelasMaster"
-        else:
-            # Fallback to title
-            caption = f"{title}\n\n👉 Baca selengkapnya:\n{url}\n\n#Pendidikan #KelasMaster"
-    else:
-        # Fallback to title
-        caption = f"{title}\n\n👉 Baca selengkapnya:\n{url}\n\n#Pendidikan #KelasMaster"
-        
-except Exception as e:
-    print(f"   ⚠️  Could not fetch content: {e}")
-    # Fallback to title
-    caption = f"{title}\n\n👉 Baca selengkapnya:\n{url}\n\n#Pendidikan #KelasMaster"
+def resolve_site(session, user_id=None, site_id=None):
+    query = session.query(WordPressSite).filter_by(is_active=True)
+    if site_id:
+        query = query.filter_by(id=site_id)
+    if user_id:
+        query = query.filter_by(user_id=user_id)
+    return query.order_by(WordPressSite.created_at.asc()).first()
 
-print(f"\n📝 Caption ({len(caption)} chars):")
-print(caption)
 
-# Step 1: Create container
-print("\n🔄 Creating container...")
-try:
+def resolve_log(session, user_id, site_id, log_id=None):
+    query = session.query(PostLog).filter_by(user_id=user_id, site_id=site_id, success=True)
+    if log_id:
+        query = query.filter_by(id=log_id)
+    return query.order_by(PostLog.created_at.desc()).first()
+
+
+def post_to_threads(user_id=None, site_id=None, log_id=None):
+    db_url = os.getenv("DATABASE_URL", "sqlite:///wordpress_bot.db")
+    db = Database(db_url)
+
+    with db.get_session() as session:
+        site = resolve_site(session, user_id=user_id, site_id=site_id)
+        if not site:
+            print("[ERROR] No active site found.")
+            return 1
+
+        if not site.threads_enabled or not site.threads_user_id or not site.threads_access_token:
+            print("[ERROR] Threads integration is not enabled or configured for this site.")
+            return 1
+
+        log = resolve_log(session, site.user_id, site.id, log_id=log_id)
+        if not log or not log.post_url:
+            print("[ERROR] No successful post with URL found for this site.")
+            return 1
+
+        threads_user_id = site.threads_user_id
+        access_token = site.threads_access_token
+        language = site.language or "id"
+        title = log.title
+        post_url = log.post_url
+
+    read_more = "Read more:" if language == "en" else "Baca selengkapnya:"
+    caption = extract_caption(post_url, title)
+    text = f"{caption}\n\n{read_more}\n{post_url}"
+    if len(text) > 500:
+        text = f"{caption[:430]}...\n\n{post_url}"
+
+    print("=" * 60)
+    print("POSTING TO THREADS")
+    print("=" * 60)
+    print(f"Title: {title}")
+    print(f"URL: {post_url}")
+    print(f"Caption length: {len(text)}")
+
     response = requests.post(
-        f"https://graph.threads.net/v1.0/{user_id}/threads",
+        f"https://graph.threads.net/v1.0/{threads_user_id}/threads",
         params={
-            'media_type': 'TEXT',
-            'text': caption,
-            'access_token': token
+            "media_type": "TEXT",
+            "text": text,
+            "access_token": access_token,
         },
-        timeout=30
+        timeout=30,
     )
     response.raise_for_status()
-    data = response.json()
-    
-    if 'id' not in data:
-        print(f"❌ Failed: {data}")
-        sys.exit(1)
-    
-    container_id = data['id']
-    print(f"✅ Container: {container_id}")
-    
-    # Step 2: Publish
-    print("\n🔄 Publishing...")
+    creation_id = response.json().get("id")
+    if not creation_id:
+        print(f"[ERROR] Threads create response did not include creation id: {response.text}")
+        return 1
+
     response = requests.post(
-        f"https://graph.threads.net/v1.0/{user_id}/threads_publish",
+        f"https://graph.threads.net/v1.0/{threads_user_id}/threads_publish",
         params={
-            'creation_id': container_id,
-            'access_token': token
+            "creation_id": creation_id,
+            "access_token": access_token,
         },
-        timeout=30
+        timeout=30,
     )
     response.raise_for_status()
-    data = response.json()
-    
-    if 'id' in data:
-        print(f"✅ Published: {data['id']}")
-        print(f"\n🎉 SUCCESS! Post sent to Threads!")
-    else:
-        print(f"❌ Failed: {data}")
-        
-except Exception as e:
-    print(f"❌ Error: {e}")
-    if hasattr(e, 'response') and e.response:
-        try:
-            error_data = e.response.json()
-            print(f"Error details: {error_data}")
-        except:
-            print(f"Response: {e.response.text}")
+    published_id = response.json().get("id")
+    print(f"[OK] Published to Threads: {published_id}")
+    return 0
 
-print("=" * 60)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Post the latest successful AutoWP article to Threads.")
+    parser.add_argument("--user-id", type=int, help="Owner user ID")
+    parser.add_argument("--site-id", type=int, help="WordPress site ID")
+    parser.add_argument("--log-id", type=int, help="Specific post log ID")
+    args = parser.parse_args()
+    raise SystemExit(post_to_threads(user_id=args.user_id, site_id=args.site_id, log_id=args.log_id))

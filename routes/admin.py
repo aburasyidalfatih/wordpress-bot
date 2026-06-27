@@ -7,6 +7,23 @@ from database import User, Transaction, Config as DBConfig, WordPressSite, PostL
 
 admin_bp = Blueprint('admin', __name__)
 
+SENSITIVE_ADMIN_KEYS = {
+    'TRIPAY_API_KEY',
+    'TRIPAY_PRIVATE_KEY',
+    'PAYPAL_SECRET',
+    'GOOGLE_CLIENT_SECRET',
+    'SMTP_PASSWORD',
+    'STARSENDER_API_KEY',
+}
+
+def _secret_response(config_dict, key):
+    value = config_dict.get(key)
+    has_value = bool(value) and not str(value).startswith('MOCK_')
+    return {
+        key: '',
+        f'has_{key}': has_value
+    }
+
 @admin_bp.route('/api/admin/pending-payments', methods=['GET'])
 @require_admin
 def get_pending_payments(user_id):
@@ -233,38 +250,46 @@ def get_admin_config(user_id):
                 pass
         return default_val
 
+    config_response = {
+        'TRIPAY_MERCHANT_CODE': system_settings.get('TRIPAY_MERCHANT_CODE', Config.TRIPAY_MERCHANT_CODE),
+        'TRIPAY_API_URL': system_settings.get('TRIPAY_API_URL', Config.TRIPAY_API_URL),
+        'PAYPAL_CLIENT_ID': system_settings.get('PAYPAL_CLIENT_ID', Config.PAYPAL_CLIENT_ID),
+        'PAYPAL_API_URL': system_settings.get('PAYPAL_API_URL', Config.PAYPAL_API_URL),
+        'PAYMENT_USD_RATE': get_float('PAYMENT_USD_RATE', Config.PAYMENT_USD_RATE),
+        'GOOGLE_CLIENT_ID': system_settings.get('GOOGLE_CLIENT_ID', Config.GOOGLE_CLIENT_ID),
+        'SMTP_HOST': system_settings.get('SMTP_HOST', Config.SMTP_HOST),
+        'SMTP_PORT': get_int('SMTP_PORT', Config.SMTP_PORT),
+        'SMTP_USER': system_settings.get('SMTP_USER', Config.SMTP_USER),
+        'SMTP_SENDER_EMAIL': system_settings.get('SMTP_SENDER_EMAIL', Config.SMTP_SENDER_EMAIL),
+        'STARSENDER_DEVICE_ID': system_settings.get('STARSENDER_DEVICE_ID', Config.STARSENDER_DEVICE_ID),
+        'MANUAL_BANK_NAME': system_settings.get('MANUAL_BANK_NAME', Config.MANUAL_BANK_NAME),
+        'MANUAL_BANK_ACCOUNT': system_settings.get('MANUAL_BANK_ACCOUNT', Config.MANUAL_BANK_ACCOUNT),
+        'MANUAL_BANK_HOLDER': system_settings.get('MANUAL_BANK_HOLDER', Config.MANUAL_BANK_HOLDER),
+        'ADMIN_WHATSAPP': system_settings.get('ADMIN_WHATSAPP', Config.ADMIN_WHATSAPP),
+        'PAYMENT_TRIPAY_ENABLED': is_enabled('PAYMENT_TRIPAY_ENABLED', Config.PAYMENT_TRIPAY_ENABLED),
+        'PAYMENT_PAYPAL_ENABLED': is_enabled('PAYMENT_PAYPAL_ENABLED', Config.PAYMENT_PAYPAL_ENABLED),
+        'PAYMENT_MANUAL_ENABLED': is_enabled('PAYMENT_MANUAL_ENABLED', Config.PAYMENT_MANUAL_ENABLED),
+        # Gemini database-backed configs
+        'gemini_api_key': '',
+        'has_gemini_api_key': bool(db_config.get('gemini_api_key')),
+        'gemini_model': db_config.get('gemini_model', 'gemini-2.5-pro'),
+        'gemini_image_model': db_config.get('gemini_image_model', 'gemini-3.1-flash-image')
+    }
+
+    raw_sensitive = {
+        'TRIPAY_API_KEY': system_settings.get('TRIPAY_API_KEY', Config.TRIPAY_API_KEY),
+        'TRIPAY_PRIVATE_KEY': system_settings.get('TRIPAY_PRIVATE_KEY', Config.TRIPAY_PRIVATE_KEY),
+        'PAYPAL_SECRET': system_settings.get('PAYPAL_SECRET', Config.PAYPAL_SECRET),
+        'GOOGLE_CLIENT_SECRET': system_settings.get('GOOGLE_CLIENT_SECRET', Config.GOOGLE_CLIENT_SECRET),
+        'SMTP_PASSWORD': system_settings.get('SMTP_PASSWORD', Config.SMTP_PASSWORD),
+        'STARSENDER_API_KEY': system_settings.get('STARSENDER_API_KEY', Config.STARSENDER_API_KEY),
+    }
+    for key in SENSITIVE_ADMIN_KEYS:
+        config_response.update(_secret_response(raw_sensitive, key))
+
     return jsonify({
         'success': True,
-        'config': {
-            'TRIPAY_API_KEY': system_settings.get('TRIPAY_API_KEY', Config.TRIPAY_API_KEY),
-            'TRIPAY_PRIVATE_KEY': system_settings.get('TRIPAY_PRIVATE_KEY', Config.TRIPAY_PRIVATE_KEY),
-            'TRIPAY_MERCHANT_CODE': system_settings.get('TRIPAY_MERCHANT_CODE', Config.TRIPAY_MERCHANT_CODE),
-            'TRIPAY_API_URL': system_settings.get('TRIPAY_API_URL', Config.TRIPAY_API_URL),
-            'PAYPAL_CLIENT_ID': system_settings.get('PAYPAL_CLIENT_ID', Config.PAYPAL_CLIENT_ID),
-            'PAYPAL_SECRET': system_settings.get('PAYPAL_SECRET', Config.PAYPAL_SECRET),
-            'PAYPAL_API_URL': system_settings.get('PAYPAL_API_URL', Config.PAYPAL_API_URL),
-            'PAYMENT_USD_RATE': get_float('PAYMENT_USD_RATE', Config.PAYMENT_USD_RATE),
-            'GOOGLE_CLIENT_ID': system_settings.get('GOOGLE_CLIENT_ID', Config.GOOGLE_CLIENT_ID),
-            'GOOGLE_CLIENT_SECRET': system_settings.get('GOOGLE_CLIENT_SECRET', Config.GOOGLE_CLIENT_SECRET),
-            'SMTP_HOST': system_settings.get('SMTP_HOST', Config.SMTP_HOST),
-            'SMTP_PORT': get_int('SMTP_PORT', Config.SMTP_PORT),
-            'SMTP_USER': system_settings.get('SMTP_USER', Config.SMTP_USER),
-            'SMTP_PASSWORD': system_settings.get('SMTP_PASSWORD', Config.SMTP_PASSWORD),
-            'SMTP_SENDER_EMAIL': system_settings.get('SMTP_SENDER_EMAIL', Config.SMTP_SENDER_EMAIL),
-            'STARSENDER_API_KEY': system_settings.get('STARSENDER_API_KEY', Config.STARSENDER_API_KEY),
-            'STARSENDER_DEVICE_ID': system_settings.get('STARSENDER_DEVICE_ID', Config.STARSENDER_DEVICE_ID),
-            'MANUAL_BANK_NAME': system_settings.get('MANUAL_BANK_NAME', Config.MANUAL_BANK_NAME),
-            'MANUAL_BANK_ACCOUNT': system_settings.get('MANUAL_BANK_ACCOUNT', Config.MANUAL_BANK_ACCOUNT),
-            'MANUAL_BANK_HOLDER': system_settings.get('MANUAL_BANK_HOLDER', Config.MANUAL_BANK_HOLDER),
-            'ADMIN_WHATSAPP': system_settings.get('ADMIN_WHATSAPP', Config.ADMIN_WHATSAPP),
-            'PAYMENT_TRIPAY_ENABLED': is_enabled('PAYMENT_TRIPAY_ENABLED', Config.PAYMENT_TRIPAY_ENABLED),
-            'PAYMENT_PAYPAL_ENABLED': is_enabled('PAYMENT_PAYPAL_ENABLED', Config.PAYMENT_PAYPAL_ENABLED),
-            'PAYMENT_MANUAL_ENABLED': is_enabled('PAYMENT_MANUAL_ENABLED', Config.PAYMENT_MANUAL_ENABLED),
-            # Gemini database-backed configs
-            'gemini_api_key': db_config.get('gemini_api_key', ''),
-            'gemini_model': db_config.get('gemini_model', 'gemini-2.5-pro'),
-            'gemini_image_model': db_config.get('gemini_image_model', 'gemini-3.1-flash-image')
-        }
+        'config': config_response
     })
 
 
@@ -277,7 +302,7 @@ def update_admin_config(user_id):
     
     # Save Gemini DB configs
     gemini_data = {}
-    if 'gemini_api_key' in data:
+    if 'gemini_api_key' in data and str(data.get('gemini_api_key') or '').strip():
         gemini_data['gemini_api_key'] = data['gemini_api_key']
     if 'gemini_model' in data:
         gemini_data['gemini_model'] = data['gemini_model']
@@ -303,6 +328,8 @@ def update_admin_config(user_id):
     for k in keys:
         if k in data:
             val = data[k]
+            if k in SENSITIVE_ADMIN_KEYS and not str(val or '').strip():
+                continue
             if k == 'PAYMENT_USD_RATE':
                 try:
                     val = float(str(val).strip())

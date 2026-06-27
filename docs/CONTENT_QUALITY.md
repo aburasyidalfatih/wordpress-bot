@@ -98,10 +98,11 @@ python3 << 'EOF'
 import requests
 from requests.auth import HTTPBasicAuth
 import re
+import os
 
-WP_URL = "https://kelasmaster.id"
-WP_USER = "andriko"
-WP_PASS = "Sbyd JGoX limQ fHC3 VJsC VDar"
+WP_URL = os.environ["WP_URL"]
+WP_USER = os.environ["WP_USER"]
+WP_PASS = os.environ["WP_APP_PASSWORD"]
 POST_ID = 8136  # Ganti dengan ID post yang mau dibersihkan
 
 response = requests.get(

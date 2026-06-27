@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { apiFetch } from '../lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Activity, HardDrive, Cpu, MemoryStick, Clock, Download } from 'lucide-react';
-import { buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 
 export default function Monitor() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   const fetchMonitor = () => {
     apiFetch('/api/monitor')
@@ -22,6 +23,27 @@ export default function Monitor() {
     const interval = setInterval(fetchMonitor, 5000); // Auto refresh every 5s
     return () => clearInterval(interval);
   }, []);
+
+  const handleDownloadLogs = async () => {
+    setDownloading(true);
+    try {
+      const res = await apiFetch('/download-logs');
+      if (!res.ok) throw new Error('Failed to download logs');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `bot_log_${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (loading && !data) return <div className="p-8">Loading monitoring data...</div>;
 
@@ -118,9 +140,9 @@ export default function Monitor() {
               <CardTitle>Recent System Errors</CardTitle>
               <CardDescription>Latest ERROR lines from the application log.</CardDescription>
             </div>
-            <a href="http://localhost:5003/download-logs" target="_blank" rel="noreferrer" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'flex items-center gap-2' })}>
-              <Download className="h-4 w-4" /> Download Logs
-            </a>
+            <Button variant="outline" size="sm" className="flex items-center gap-2" onClick={handleDownloadLogs} disabled={downloading}>
+              <Download className="h-4 w-4" /> {downloading ? 'Downloading...' : 'Download Logs'}
+            </Button>
           </CardHeader>
           <CardContent>
             <div className="bg-muted/30 p-4 rounded-md font-mono text-xs overflow-x-auto max-h-[250px] overflow-y-auto space-y-2">

@@ -47,11 +47,11 @@ Monitoring Dashboard adalah fitur baru yang memungkinkan Anda memantau kesehatan
 
 ### Via Web UI
 ```
-http://YOUR_IP:5000/monitor
+http://YOUR_IP:5003/monitor
 ```
 
 ### Via Navigation
-1. Open dashboard: `http://YOUR_IP:5000`
+1. Open dashboard: `http://YOUR_IP:5003`
 2. Click "🔍 Monitor" in navigation menu
 
 ---
@@ -60,7 +60,7 @@ http://YOUR_IP:5000/monitor
 
 ### Health Check
 ```bash
-curl http://localhost:5000/health
+curl http://localhost:5003/health
 ```
 
 Response:
@@ -75,7 +75,7 @@ Response:
 
 ### Health Metrics (Detailed)
 ```bash
-curl http://localhost:5000/api/health-metrics
+curl http://localhost:5003/api/health-metrics
 ```
 
 Response:
@@ -197,7 +197,7 @@ sudo systemctl restart wordpress-bot
 
 Dashboard is mobile-responsive:
 - Access from phone/tablet
-- Same URL: `http://YOUR_IP:5000/monitor`
+- Same URL: `http://YOUR_IP:5003/monitor`
 - Auto-refresh works on mobile
 - Touch-friendly interface
 
@@ -208,7 +208,7 @@ Dashboard is mobile-responsive:
 - Monitor page requires same access as dashboard
 - No authentication by default (add if needed)
 - Consider using VPN for remote access
-- Don't expose port 5000 to public internet
+- Don't expose port 5003 to public internet
 
 ---
 
@@ -230,7 +230,7 @@ sudo systemctl restart wordpress-bot
 - Check browser console for errors
 - Verify `/api/health-metrics` endpoint works:
   ```bash
-  curl http://localhost:5000/api/health-metrics
+  curl http://localhost:5003/api/health-metrics
   ```
 - Clear browser cache
 - Try different browser
@@ -258,11 +258,11 @@ scrape_configs:
   - job_name: 'wordpress-bot'
     metrics_path: '/api/health-metrics'
     static_configs:
-      - targets: ['localhost:5000']
+      - targets: ['localhost:5003']
 ```
 
 ### Uptime Robot
-- Monitor URL: `http://YOUR_IP:5000/health`
+- Monitor URL: `http://YOUR_IP:5003/health`
 - Check interval: 5 minutes
 - Alert on: Status != 200
 
@@ -315,7 +315,7 @@ def health_metrics():
 
 ## 🎯 Next Steps
 
-1. Access monitor page: `http://YOUR_IP:5000/monitor`
+1. Access monitor page: `http://YOUR_IP:5003/monitor`
 2. Bookmark for quick access
 3. Check daily for health status
 4. Set up external monitoring (optional)

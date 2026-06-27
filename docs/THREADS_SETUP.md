@@ -72,7 +72,7 @@
 
 ### **7. Konfigurasi di Dashboard**
 
-1. Buka dashboard: http://localhost:5000
+1. Buka dashboard: http://localhost:5003
 2. Scroll ke **"🧵 Auto Post ke Threads"**
 3. Centang **"Aktifkan Auto Post ke Threads"**
 4. Input **User ID**: `123456789012345`

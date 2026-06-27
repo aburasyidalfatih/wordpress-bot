@@ -2,7 +2,8 @@
 # Health check and monitoring script
 
 BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BOT_URL="http://localhost:5000/health"
+BOT_PORT="${BOT_PORT:-5003}"
+BOT_URL="${BOT_URL:-http://localhost:${BOT_PORT}/health}"
 LOG_FILE="$BOT_DIR/monitor.log"
 TELEGRAM_BOT_TOKEN=""  # Will be read from .env
 TELEGRAM_CHAT_ID=""    # Will be read from .env

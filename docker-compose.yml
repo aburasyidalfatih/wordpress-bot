@@ -10,8 +10,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-your-super-secret-jwt-key}
-      - FERNET_KEY=${FERNET_KEY}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
+      - FERNET_KEY=${FERNET_KEY:?Set FERNET_KEY in .env}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.autowp-web.rule=Host(`autowp.web.id`)"
@@ -29,8 +29,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-your-super-secret-jwt-key}
-      - FERNET_KEY=${FERNET_KEY}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
+      - FERNET_KEY=${FERNET_KEY:?Set FERNET_KEY in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,8 +44,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-your-super-secret-jwt-key}
-      - FERNET_KEY=${FERNET_KEY}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
+      - FERNET_KEY=${FERNET_KEY:?Set FERNET_KEY in .env}
     depends_on:
       redis:
         condition: service_healthy

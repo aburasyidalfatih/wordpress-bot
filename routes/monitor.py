@@ -97,6 +97,7 @@ def health_metrics():
         return jsonify({'error': str(e)}), 500
 
 @monitor_bp.route('/download-logs')
+@require_jwt
 def download_logs():
     """Download log file"""
     try:

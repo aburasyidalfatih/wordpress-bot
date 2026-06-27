@@ -5,6 +5,12 @@ from bot import WordPressPublisher
 
 sites_bp = Blueprint('sites', __name__)
 
+def _secret_status(value):
+    return bool(value)
+
+def _should_update_secret(value):
+    return isinstance(value, str) and bool(value.strip())
+
 @sites_bp.route('/api/sites', methods=['GET'])
 @require_jwt
 def get_sites(user_id):
@@ -27,21 +33,30 @@ def get_sites(user_id):
                 'categories': site.categories,
                 'selected_categories': site.selected_categories,
                 'telegram_enabled': site.telegram_enabled,
-                'telegram_bot_token': site.telegram_bot_token,
+                'wordpress_password': '',
+                'has_wordpress_password': _secret_status(site.wordpress_password),
+                'telegram_bot_token': '',
+                'has_telegram_bot_token': _secret_status(site.telegram_bot_token),
                 'telegram_chat_id': site.telegram_chat_id,
                 'telegram_channel_id': site.telegram_channel_id,
                 'telegram_post_to_channel': site.telegram_post_to_channel,
                 'facebook_enabled': site.facebook_enabled,
                 'facebook_page_id': site.facebook_page_id,
-                'facebook_access_token': site.facebook_access_token,
+                'facebook_access_token': '',
+                'has_facebook_access_token': _secret_status(site.facebook_access_token),
                 'twitter_enabled': site.twitter_enabled,
-                'twitter_api_key': site.twitter_api_key,
-                'twitter_api_secret': site.twitter_api_secret,
-                'twitter_access_token': site.twitter_access_token,
-                'twitter_access_secret': site.twitter_access_secret,
+                'twitter_api_key': '',
+                'twitter_api_secret': '',
+                'twitter_access_token': '',
+                'twitter_access_secret': '',
+                'has_twitter_api_key': _secret_status(site.twitter_api_key),
+                'has_twitter_api_secret': _secret_status(site.twitter_api_secret),
+                'has_twitter_access_token': _secret_status(site.twitter_access_token),
+                'has_twitter_access_secret': _secret_status(site.twitter_access_secret),
                 'threads_enabled': site.threads_enabled,
                 'threads_user_id': site.threads_user_id,
-                'threads_access_token': site.threads_access_token,
+                'threads_access_token': '',
+                'has_threads_access_token': _secret_status(site.threads_access_token),
 
                 'article_prompt': site.article_prompt,
                 'image_prompt': site.image_prompt
@@ -87,7 +102,7 @@ def update_site(user_id, site_id):
         if 'site_name' in data: site.site_name = data['site_name']
         if 'wordpress_url' in data: site.wordpress_url = data['wordpress_url']
         if 'wordpress_username' in data: site.wordpress_username = data['wordpress_username']
-        if 'wordpress_password' in data and data['wordpress_password']: 
+        if 'wordpress_password' in data and _should_update_secret(data['wordpress_password']): 
             site.wordpress_password = data['wordpress_password']
             
         # Update schedule
@@ -106,24 +121,24 @@ def update_site(user_id, site_id):
         if 'image_prompt' in data: site.image_prompt = data['image_prompt'] or None
         
         # Update social
-        if 'telegram_bot_token' in data: site.telegram_bot_token = data['telegram_bot_token']
+        if 'telegram_bot_token' in data and _should_update_secret(data['telegram_bot_token']): site.telegram_bot_token = data['telegram_bot_token']
         if 'telegram_chat_id' in data: site.telegram_chat_id = data['telegram_chat_id']
         if 'telegram_channel_id' in data: site.telegram_channel_id = data['telegram_channel_id']
         if 'telegram_enabled' in data: site.telegram_enabled = data['telegram_enabled']
         if 'telegram_post_to_channel' in data: site.telegram_post_to_channel = data['telegram_post_to_channel']
         
         if 'facebook_page_id' in data: site.facebook_page_id = data['facebook_page_id']
-        if 'facebook_access_token' in data: site.facebook_access_token = data['facebook_access_token']
+        if 'facebook_access_token' in data and _should_update_secret(data['facebook_access_token']): site.facebook_access_token = data['facebook_access_token']
         if 'facebook_enabled' in data: site.facebook_enabled = data['facebook_enabled']
         
-        if 'twitter_api_key' in data: site.twitter_api_key = data['twitter_api_key']
-        if 'twitter_api_secret' in data: site.twitter_api_secret = data['twitter_api_secret']
-        if 'twitter_access_token' in data: site.twitter_access_token = data['twitter_access_token']
-        if 'twitter_access_secret' in data: site.twitter_access_secret = data['twitter_access_secret']
+        if 'twitter_api_key' in data and _should_update_secret(data['twitter_api_key']): site.twitter_api_key = data['twitter_api_key']
+        if 'twitter_api_secret' in data and _should_update_secret(data['twitter_api_secret']): site.twitter_api_secret = data['twitter_api_secret']
+        if 'twitter_access_token' in data and _should_update_secret(data['twitter_access_token']): site.twitter_access_token = data['twitter_access_token']
+        if 'twitter_access_secret' in data and _should_update_secret(data['twitter_access_secret']): site.twitter_access_secret = data['twitter_access_secret']
         if 'twitter_enabled' in data: site.twitter_enabled = data['twitter_enabled']
         
         if 'threads_user_id' in data: site.threads_user_id = data['threads_user_id']
-        if 'threads_access_token' in data: site.threads_access_token = data['threads_access_token']
+        if 'threads_access_token' in data and _should_update_secret(data['threads_access_token']): site.threads_access_token = data['threads_access_token']
         if 'threads_enabled' in data: site.threads_enabled = data['threads_enabled']
         
 

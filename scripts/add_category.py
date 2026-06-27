@@ -73,7 +73,7 @@ def main():
         password = args.password
     else:
         # Load config dari database
-        db = Database('sqlite:///wordpress_bot.db')
+        db = Database(os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db'))
         with db.get_session() as session:
             from database import WordPressSite
             site = session.query(WordPressSite).first()

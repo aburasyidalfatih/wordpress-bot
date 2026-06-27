@@ -69,7 +69,7 @@
 
 ### **6. Konfigurasi di Dashboard**
 
-1. Buka dashboard: http://localhost:5000
+1. Buka dashboard: http://localhost:5003
 2. Scroll ke **"📘 Auto Post ke Facebook Fanpage"**
 3. Centang **"Aktifkan Auto Post ke Facebook"**
 4. Input **Page ID**: `123456789012345`

@@ -1,6 +1,7 @@
 import datetime
 import jwt
 from flask import Blueprint, request, jsonify
+from flask import session
 from werkzeug.security import check_password_hash, generate_password_hash
 import requests
 
@@ -192,3 +193,7 @@ def api_auth_config():
         'payment_manual_enabled': manual_enabled
     })
 
+@auth_bp.route('/logout', methods=['GET', 'POST'])
+def logout():
+    session.clear()
+    return jsonify({'success': True})

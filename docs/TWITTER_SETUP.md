@@ -54,7 +54,7 @@
 
 ### **5. Konfigurasi di Dashboard**
 
-1. Buka dashboard: http://localhost:5000
+1. Buka dashboard: http://localhost:5003
 2. Scroll ke **"𝕏 Auto Post ke Twitter/X"**
 3. Centang **"Aktifkan Auto Post ke Twitter"**
 4. Input credentials:
