@@ -798,9 +798,8 @@ No text, no faces, no logos, no sensitive or political imagery."""
             ])
 
             image_config_kwargs = {'aspect_ratio': '16:9'}
-            person_generation = getattr(getattr(types, 'PersonGeneration', None), 'DONT_ALLOW', None)
-            if person_generation is not None:
-                image_config_kwargs['person_generation'] = person_generation
+            # person_generation is no longer supported in the new Gemini API
+            # we will not pass it to ImageConfig
 
             # Use configured image model for image generation
             last_error = None
@@ -811,8 +810,7 @@ No text, no faces, no logos, no sensitive or political imagery."""
                     'aspect_ratio': '16:9',
                     'output_mime_type': 'image/webp'
                 }
-                if person_generation is not None:
-                    imagen_config_kwargs['person_generation'] = person_generation
+                # person_generation removed
 
                 for attempt_name, prompt in image_prompts:
                     try:
