@@ -129,6 +129,17 @@ Contoh backup PostgreSQL via cron setiap hari jam 02:00:
 0 2 * * * docker compose exec -T postgres pg_dump -U autowp autowpdb > /home/ubuntu/backups/autowp_$(date +\%Y\%m\%d).sql
 ```
 
+## Deployment Docker/Dokploy
+
+`docker-compose.yml` menjalankan `web`, `worker`, `scheduler`, **PostgreSQL 15**, dan Redis. Untuk production, sebaiknya isi env berikut di Dokploy:
+
+```env
+SECRET_KEY=<random secret panjang>
+FERNET_KEY=<hasil python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
+```
+
+Jika kedua env itu belum diisi, aplikasi tetap bisa start: `SECRET_KEY` dan `FERNET_KEY` akan dibuat otomatis di volume bersama `autowp_runtime` pada boot pertama. Ini mencegah deploy gagal saat Dokploy menjalankan `docker compose` tanpa `.env`, sekaligus menjaga secret tetap sama untuk `web`, `worker`, dan `scheduler`.
+
 ## Perintah Penting
 
 ```bash

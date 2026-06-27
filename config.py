@@ -1,12 +1,58 @@
 import os
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
 
+def _load_or_create_runtime_secret(env_name, filename, generator):
+    value = os.getenv(env_name)
+    if value:
+        return value
+
+    runtime_dir = os.getenv('AUTOWP_RUNTIME_DIR', 'runtime')
+    secret_file = os.getenv(f'{env_name}_FILE', os.path.join(runtime_dir, filename))
+
+    try:
+        secret_dir = os.path.dirname(secret_file)
+        if secret_dir:
+            os.makedirs(secret_dir, exist_ok=True)
+
+        if os.path.exists(secret_file):
+            with open(secret_file, 'r', encoding='utf-8') as f:
+                value = f.read().strip()
+                if value:
+                    os.environ[env_name] = value
+                    return value
+
+        value = generator()
+        try:
+            with open(secret_file, 'x', encoding='utf-8') as f:
+                f.write(value)
+            try:
+                os.chmod(secret_file, 0o600)
+            except OSError:
+                pass
+        except FileExistsError:
+            with open(secret_file, 'r', encoding='utf-8') as f:
+                existing = f.read().strip()
+                if existing:
+                    value = existing
+
+        os.environ[env_name] = value
+        return value
+    except Exception:
+        value = generator()
+        os.environ[env_name] = value
+        return value
+
 class Config:
     # Flask
     DEBUG = False
-    SECRET_KEY = os.getenv('SECRET_KEY', os.urandom(24).hex())
+    SECRET_KEY = _load_or_create_runtime_secret(
+        'SECRET_KEY',
+        'secret_key',
+        lambda: secrets.token_urlsafe(48)
+    )
     
     # Database
     DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db')

@@ -7,68 +7,58 @@ load_dotenv()
 # Key length for Fernet is 32 bytes URL-safe base64 encoded
 _fernet_instance = None
 
+def _load_or_create_runtime_secret(env_name, filename, generator):
+    value = os.getenv(env_name)
+    if value:
+        return value
+
+    runtime_dir = os.getenv('AUTOWP_RUNTIME_DIR', 'runtime')
+    secret_file = os.getenv(f'{env_name}_FILE', os.path.join(runtime_dir, filename))
+
+    try:
+        secret_dir = os.path.dirname(secret_file)
+        if secret_dir:
+            os.makedirs(secret_dir, exist_ok=True)
+
+        if os.path.exists(secret_file):
+            with open(secret_file, 'r', encoding='utf-8') as f:
+                value = f.read().strip()
+                if value:
+                    os.environ[env_name] = value
+                    return value
+
+        value = generator()
+        try:
+            with open(secret_file, 'x', encoding='utf-8') as f:
+                f.write(value)
+            try:
+                os.chmod(secret_file, 0o600)
+            except OSError:
+                pass
+        except FileExistsError:
+            with open(secret_file, 'r', encoding='utf-8') as f:
+                existing = f.read().strip()
+                if existing:
+                    value = existing
+
+        os.environ[env_name] = value
+        return value
+    except Exception as e:
+        print(f"Warning: Failed to persist {env_name} to {secret_file}: {e}")
+        value = generator()
+        os.environ[env_name] = value
+        return value
+
 def get_fernet():
     global _fernet_instance
     if _fernet_instance is not None:
         return _fernet_instance
 
-    key = os.getenv('FERNET_KEY')
-    env_file = '.env'
-
-    if not key:
-        # Random sleep if .env does not exist to let another concurrent container write it
-        if not os.path.exists(env_file):
-            import time
-            import random
-            time.sleep(random.uniform(0.1, 0.6))
-            
-        # Re-check if key is now in .env file
-        if os.path.exists(env_file):
-            try:
-                with open(env_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.startswith('FERNET_KEY='):
-                            candidate = line.split('=', 1)[1].strip()
-                            if candidate:
-                                key = candidate
-                                os.environ['FERNET_KEY'] = key
-                                break
-            except Exception as e:
-                print(f"Error reading existing FERNET_KEY from .env: {e}")
-
-    if not key:
-        # Generate new key if still not found
-        new_key = Fernet.generate_key().decode()
-        key = new_key
-        
-        # Append to .env file if it exists, otherwise create it
-        try:
-            # Check if FERNET_KEY is already defined but empty
-            if os.path.exists(env_file):
-                with open(env_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                if 'FERNET_KEY=' in content:
-                    # Replace it
-                    import re
-                    content = re.sub(r'FERNET_KEY=.*', f'FERNET_KEY={new_key}', content)
-                    with open(env_file, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                else:
-                    # Append it
-                    with open(env_file, 'a', encoding='utf-8') as f:
-                        if not content.endswith('\n'):
-                            f.write('\n')
-                        f.write(f'FERNET_KEY={new_key}\n')
-            else:
-                with open(env_file, 'w', encoding='utf-8') as f:
-                    f.write(f'FERNET_KEY={new_key}\n')
-            
-            # Update current env
-            os.environ['FERNET_KEY'] = new_key
-        except Exception as e:
-            # If writing fails, we still use the key in memory
-            print(f"Warning: Failed to write FERNET_KEY to .env: {e}")
+    key = _load_or_create_runtime_secret(
+        'FERNET_KEY',
+        'fernet_key',
+        lambda: Fernet.generate_key().decode()
+    )
             
     try:
         _fernet_instance = Fernet(key.encode())
