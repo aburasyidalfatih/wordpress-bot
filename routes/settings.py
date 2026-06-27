@@ -70,15 +70,13 @@ def api_profile(user_id):
         password = data.get('password')
         
         if name is not None:
-            user.name = name
+            user.name = str(name).strip()
         if email is not None and email != user.email:
-            # Check if email is already taken
-            existing = session.query(User).filter_by(email=email).first()
-            if existing:
-                return jsonify({'success': False, 'error': 'Email already in use'}), 400
-            user.email = email
+            return jsonify({'success': False, 'error': 'Email cannot be changed from profile settings'}), 400
             
         if password:
+            if len(password) < 8:
+                return jsonify({'success': False, 'error': 'Password must be at least 8 characters'}), 400
             user.password_hash = generate_password_hash(password)
             
         session.commit()

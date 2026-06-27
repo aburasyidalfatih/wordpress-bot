@@ -66,7 +66,7 @@ def get_sites(user_id):
 @sites_bp.route('/api/sites', methods=['POST'])
 @require_jwt
 def create_site(user_id):
-    data = request.json
+    data = request.get_json(silent=True) or {}
     if not data or not data.get('wordpress_url'):
         return jsonify({'success': False, 'error': 'WordPress URL is required'}), 400
         
@@ -91,7 +91,7 @@ def create_site(user_id):
 @sites_bp.route('/api/sites/<int:site_id>', methods=['PUT'])
 @require_jwt
 def update_site(user_id, site_id):
-    data = request.json
+    data = request.get_json(silent=True) or {}
     with db.get_session() as session:
         from database import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
@@ -322,7 +322,7 @@ STRUKTUR ARTIKEL (2000-2500 KATA):
 @sites_bp.route('/api/sites/<int:site_id>/prompts', methods=['POST'])
 @require_jwt
 def save_prompts(user_id, site_id):
-    data = request.json
+    data = request.get_json(silent=True) or {}
     with db.get_session() as session:
         from database import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()

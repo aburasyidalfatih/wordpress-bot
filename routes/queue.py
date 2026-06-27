@@ -35,8 +35,8 @@ def api_queue(user_id):
 @queue_bp.route('/api/queue', methods=['POST'])
 @require_jwt
 def add_queue_api(user_id):
-    from database import ContentQueue
-    data = request.json
+    from database import ContentQueue, WordPressSite
+    data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     title = data.get('title')
     category = data.get('category')
@@ -46,6 +46,10 @@ def add_queue_api(user_id):
         return jsonify({'success': False, 'error': 'Title, category, and site_id are required', 'code': 400}), 400
         
     with db.get_session() as session:
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
+
         new_item = ContentQueue(
             user_id=user_id,
             site_id=site_id,
@@ -63,7 +67,7 @@ def add_queue_api(user_id):
 def shuffle_queue(user_id):
     import random
     from database import ContentQueue
-    data = request.json
+    data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
@@ -97,8 +101,10 @@ def shuffle_queue(user_id):
 @require_jwt
 def delete_queue_api(user_id):
     from database import ContentQueue
-    data = request.json
+    data = request.get_json(silent=True) or {}
     item_id = data.get('id')
+    if not item_id:
+        return jsonify({'success': False, 'error': 'id is required', 'code': 400}), 400
     
     with db.get_session() as session:
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
@@ -112,7 +118,7 @@ def delete_queue_api(user_id):
 @require_jwt
 def edit_queue_api(user_id, item_id):
     from database import ContentQueue
-    data = request.json
+    data = request.get_json(silent=True) or {}
     title = data.get('title')
     target_keywords = data.get('target_keywords', '')
     
@@ -130,7 +136,7 @@ def edit_queue_api(user_id, item_id):
 @require_jwt
 def reorder_queue_api(user_id):
     from database import ContentQueue
-    data = request.json
+    data = request.get_json(silent=True) or {}
     ids = data.get('ids', [])
     
     if not ids:
@@ -165,8 +171,17 @@ def post_queue_api(user_id, item_id):
             return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
         item.status = 'posting'
         session.commit()
-            
-    q.enqueue('app.generate_and_post', user_id, item_id, job_timeout='10m')
+
+    try:
+        q.enqueue('app.generate_and_post', user_id, item_id, job_timeout='10m')
+    except Exception as e:
+        with db.get_session() as session:
+            item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
+            if item:
+                item.status = 'pending'
+                session.commit()
+        logger.error(f"Queue post enqueue failed for item {item_id}: {e}")
+        return jsonify({'success': False, 'error': 'Failed to enqueue posting job', 'code': 500}), 500
     return jsonify({'success': True})
 
 @queue_bp.route('/api/queue/history/regenerate-image/<int:log_id>', methods=['POST'])
@@ -186,8 +201,9 @@ def regenerate_image_api(user_id, log_id):
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
 def manual_post(user_id):
-    from database import User
-    site_id = request.json.get('site_id')
+    from database import User, WordPressSite
+    data = request.get_json(silent=True) or {}
+    site_id = data.get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
@@ -195,6 +211,9 @@ def manual_post(user_id):
         user = session.query(User).filter_by(id=user_id).first()
         if not user or (user.credits or 0) <= 0:
             return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
 
     try:
         job = q.enqueue('app.generate_and_post', user_id, None, site_id, job_timeout='10m')
@@ -237,8 +256,9 @@ def job_status(user_id, job_id):
 @require_jwt
 def test_generate(user_id):
     config = load_config(user_id)
-    category_name = request.json.get('category', '')
-    site_id = request.json.get('site_id')
+    data = request.get_json(silent=True) or {}
+    category_name = data.get('category', '')
+    site_id = data.get('site_id')
     
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400

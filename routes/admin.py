@@ -123,16 +123,23 @@ def update_user(user_id, target_user_id):
             return jsonify({'success': False, 'error': 'User not found'}), 404
             
         if 'name' in data:
-            user.name = data['name']
+            user.name = str(data['name']).strip()
         if 'role' in data:
+            if data['role'] not in ('admin', 'user'):
+                return jsonify({'success': False, 'error': 'Invalid role'}), 400
             # Enforce that you cannot demote yourself
             if target_user_id == user_id and data['role'] != 'admin':
                 return jsonify({'success': False, 'error': 'You cannot remove your own admin status'}), 400
             user.role = data['role']
         if 'tier' in data:
+            if data['tier'] not in ('free', 'pro'):
+                return jsonify({'success': False, 'error': 'Invalid tier'}), 400
             user.tier = data['tier']
         if 'credits' in data:
-            user.credits = int(data['credits'])
+            try:
+                user.credits = max(0, int(data['credits']))
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'Invalid credits value'}), 400
         if 'is_active' in data:
             if target_user_id == user_id and not data['is_active']:
                 return jsonify({'success': False, 'error': 'You cannot suspend yourself'}), 400

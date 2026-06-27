@@ -84,6 +84,7 @@ class Config:
     PAYMENT_TRIPAY_ENABLED = os.getenv('PAYMENT_TRIPAY_ENABLED', 'true').lower() == 'true'
     PAYMENT_PAYPAL_ENABLED = os.getenv('PAYMENT_PAYPAL_ENABLED', 'true').lower() == 'true'
     PAYMENT_MANUAL_ENABLED = os.getenv('PAYMENT_MANUAL_ENABLED', 'true').lower() == 'true'
+    ALLOW_MOCK_PAYMENTS = os.getenv('ALLOW_MOCK_PAYMENTS', 'false').lower() == 'true'
     
     TRIPAY_API_KEY = os.getenv('TRIPAY_API_KEY', 'MOCK_TRIPAY_API_KEY')
     TRIPAY_PRIVATE_KEY = os.getenv('TRIPAY_PRIVATE_KEY', 'MOCK_TRIPAY_PRIVATE_KEY')

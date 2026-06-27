@@ -141,19 +141,30 @@ def manual_research(user_id):
                     'error': f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit, tetapi Anda hanya memiliki {user_credits} kredit.'
                 }), 400
                 
-            # Deduct credits
+            # Deduct credits before enqueue, then refund below if enqueue fails.
             user.credits = max(0, user_credits - required_credits)
             session.commit()
-            
-            # Enqueue job with category
+
+        # Enqueue outside the DB transaction. If Redis/RQ fails, refund the user.
+        try:
             job = q.enqueue('app.deep_research_job', user_id, True, site_id, category)
-            return jsonify({
-                'success': True, 
-                'job_id': job.id, 
-                'message': f'Riset berhasil masuk antrean. {required_credits} kredit didebit.',
-                'credits_deducted': required_credits,
-                'remaining_credits': user.credits
-            })
+        except Exception as enqueue_error:
+            with db.get_session() as refund_session:
+                from database import User
+                refund_user = refund_session.query(User).filter_by(id=user_id).first()
+                if refund_user:
+                    refund_user.credits = (refund_user.credits or 0) + required_credits
+                    refund_session.commit()
+            logger.error(f"Manual research enqueue failed, refunded {required_credits} credits: {enqueue_error}")
+            return jsonify({'success': False, 'error': 'Gagal memasukkan riset ke antrean. Kredit sudah dikembalikan.'}), 500
+
+        return jsonify({
+            'success': True,
+            'job_id': job.id,
+            'message': f'Riset berhasil masuk antrean. {required_credits} kredit didebit.',
+            'credits_deducted': required_credits,
+            'remaining_credits': max(0, user_credits - required_credits)
+        })
     except Exception as e:
         logger.error(f"Manual research error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500

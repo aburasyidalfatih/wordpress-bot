@@ -10,11 +10,29 @@ from config import Config
 
 auth_bp = Blueprint('auth', __name__)
 
+def configured_google_client_id():
+    client_id = Config.GOOGLE_CLIENT_ID
+    try:
+        system_settings = db.get_system_settings()
+        if system_settings.get('GOOGLE_CLIENT_ID'):
+            client_id = system_settings['GOOGLE_CLIENT_ID']
+    except Exception as e:
+        logger.error(f"Error reading Google client ID from system settings: {e}")
+    return client_id or ''
+
 def verify_google_token(token):
     try:
         resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={token}", timeout=10)
         if resp.status_code == 200:
-            return resp.json()
+            token_info = resp.json()
+            client_id = configured_google_client_id()
+            if client_id and token_info.get('aud') != client_id:
+                logger.warning("Rejected Google token with invalid audience")
+                return None
+            if str(token_info.get('email_verified', '')).lower() != 'true':
+                logger.warning("Rejected Google token with unverified email")
+                return None
+            return token_info
     except Exception as e:
         logger.error(f"Google token verification error: {e}")
     return None
@@ -43,7 +61,11 @@ def api_auth_google():
         
     with db.get_session() as session:
         from database import User
-        user = session.query(User).filter((User.google_id == google_id) | (User.email == email)).first()
+        user = session.query(User).filter_by(google_id=google_id).first()
+        if not user:
+            user = session.query(User).filter_by(email=email).first()
+            if user and user.google_id and user.google_id != google_id:
+                return jsonify({'success': False, 'error': 'Email is already linked to another Google account'}), 400
         
         if not user:
             user_count = session.query(User).count()
@@ -119,7 +141,6 @@ def api_auth_google():
 @auth_bp.route('/api/login', methods=['POST'])
 def api_auth_login():
     data = request.json or {}
-    logger.info(f"Login attempt data: {data}")
     email = data.get('email', '')
     password = data.get('password', '')
     logger.info(f"Login attempt for email: {email}")
@@ -171,6 +192,9 @@ def api_auth_config():
     tripay_enabled = Config.PAYMENT_TRIPAY_ENABLED
     paypal_enabled = Config.PAYMENT_PAYPAL_ENABLED
     manual_enabled = Config.PAYMENT_MANUAL_ENABLED
+    mock_payments_enabled = Config.ALLOW_MOCK_PAYMENTS
+    tripay_configured = True
+    paypal_configured = True
 
     try:
         system_settings = db.get_system_settings()
@@ -185,12 +209,22 @@ def api_auth_config():
     except Exception as e:
         logger.error(f"Error reading system settings in api_auth_config: {e}")
 
+    try:
+        from routes.payments import get_payment_settings, tripay_is_mock, paypal_is_mock
+        payment_settings = get_payment_settings()
+        mock_payments_enabled = payment_settings['ALLOW_MOCK_PAYMENTS']
+        tripay_configured = not tripay_is_mock(payment_settings)
+        paypal_configured = not paypal_is_mock(payment_settings)
+    except Exception as e:
+        logger.error(f"Error reading payment gateway availability: {e}")
+
     return jsonify({
         'success': True,
         'google_client_id': google_client_id or '',
-        'payment_tripay_enabled': tripay_enabled,
-        'payment_paypal_enabled': paypal_enabled,
-        'payment_manual_enabled': manual_enabled
+        'payment_tripay_enabled': tripay_enabled and (tripay_configured or mock_payments_enabled),
+        'payment_paypal_enabled': paypal_enabled and (paypal_configured or mock_payments_enabled),
+        'payment_manual_enabled': manual_enabled,
+        'mock_payments_enabled': mock_payments_enabled
     })
 
 @auth_bp.route('/logout', methods=['GET', 'POST'])
