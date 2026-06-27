@@ -749,6 +749,8 @@ PENTING:
                 for part in iter_response_parts(response):
                     inline_data = getattr(part, 'inline_data', None)
                     if inline_data is not None and getattr(inline_data, 'data', None):
+                        return inline_data.data
+                return None
             def safe_title(value):
                 words = (value or topic or "education article").split()
                 return " ".join(words[:12])
