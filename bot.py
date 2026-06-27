@@ -772,8 +772,9 @@ Category context: {topic}
 
 Design requirements:
 - Landscape 16:9 composition.
-- Include a bold, highly aesthetic, 2 to 3 word typographic overlay that creates intense curiosity and invites clicks (for example: "MUST READ!", "TOP SECRET", "WOW!", "NEW UPDATE", or 2 words related to {topic}).
-- DO NOT render the full article title. The text must be very short and punchy.
+- Include a bold, highly aesthetic typographic overlay (about 3 to 6 words). This text should be a catchy, descriptive hook that perfectly summarizes the article's core value (e.g. "Ultimate Guide to {topic}", "Mastering {topic} in 2026", "Key Strategies You Need to Know").
+- DO NOT just write 1 or 2 generic words. The text must accurately represent the article's content while remaining click-worthy.
+- DO NOT render the full lengthy article title. Keep it punchy and readable.
 - Beautiful, modern typography perfectly integrated into the design.
 - Conceptual illustration with soft abstract shapes, charts, or modern digital elements.
 - Professional palette with vibrant, eye-catching colors.
@@ -782,15 +783,15 @@ Design requirements:
                 (
                     "generic-education",
                     f"""Create a high-quality 16:9 featured image for an article about {topic}.
-Include a short, 2-word clickbait typographic text in the center (e.g. "PRO TIPS", "SECRET STRATEGY"). 
-Do NOT write the full title.
+Include a descriptive, click-worthy typographic hook of 3 to 6 words in the center (e.g. "Essential Tips for {topic}"). 
+Do NOT write the full lengthy title, but make sure the text clearly describes the content.
 Use abstract modern symbols and a soft geometric background.
 Modern clean vector or soft 3D illustration, professional blog thumbnail."""
                 ),
                 (
                     "minimal-abstract",
                     f"""Create a clean abstract 16:9 blog cover image for {topic}.
-Include one very short, bold, click-worthy word in aesthetic typography.
+Include a bold, catchy 3-to-6 word phrase in aesthetic typography that summarizes the topic.
 Use simple shapes and digital icons on a bright professional background."""
                 )
             ])
