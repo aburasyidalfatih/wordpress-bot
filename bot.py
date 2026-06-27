@@ -196,6 +196,46 @@ class ArticleGenerator:
                     seo_section += "\n💡 Ensure the article answers these questions comprehensively!\n"
                 else:
                     seo_section += "\n💡 Pastikan artikel menjawab pertanyaan-pertanyaan ini secara lengkap!\n"
+                    
+            competitor_outlines = seo_data.get('competitor_outlines', [])
+            if competitor_outlines:
+                if language == 'en':
+                    seo_section += f"\n\n⚔️ COMPETITOR ANALYSIS (Top Ranking Pages):\n"
+                else:
+                    seo_section += f"\n\n⚔️ ANALISIS KOMPETITOR (Halaman Ranking Atas):\n"
+                for comp in competitor_outlines[:3]:
+                    headers_str = ", ".join(comp.get('headers', [])[:5])
+                    seo_section += f"- Competitor '{comp.get('title')}' covers: {headers_str}\n"
+                if language == 'en':
+                    seo_section += "💡 MANDATORY: Your article MUST be more comprehensive, detailed, and cover angles these competitors missed!\n"
+                else:
+                    seo_section += "💡 WAJIB: Artikelmu HARUS lebih komprehensif, lebih detail, dan membahas sudut pandang yang dilewatkan oleh kompetitor ini!\n"
+                    
+            social_insights = seo_data.get('social_insights', [])
+            if social_insights:
+                if language == 'en':
+                    seo_section += f"\n\n🗣️ REAL AUDIENCE INSIGHTS (Quora/Reddit Discussions):\n"
+                else:
+                    seo_section += f"\n\n🗣️ KELUHAN AUDIENS ASLI (Diskusi Quora/Reddit):\n"
+                for insight in social_insights[:5]:
+                    seo_section += f"- {insight}\n"
+                if language == 'en':
+                    seo_section += "💡 Address these real pain points and questions directly in your content.\n"
+                else:
+                    seo_section += "💡 Jawab keresahan dan masalah nyata dari manusia-manusia ini ke dalam artikelmu.\n"
+                    
+            youtube_insights = seo_data.get('youtube_insights', [])
+            if youtube_insights:
+                if language == 'en':
+                    seo_section += f"\n\n🎥 YOUTUBE EXPERT INSIGHTS (Transcripts from top videos):\n"
+                else:
+                    seo_section += f"\n\n🎥 WAWASAN PAKAR YOUTUBE (Transkrip dari video teratas):\n"
+                for yt in youtube_insights[:2]:
+                    seo_section += f"- Video '{yt.get('title')}': \"{yt.get('snippets')}\"\n"
+                if language == 'en':
+                    seo_section += "💡 Weave these expert insights naturally into the article to boost E-E-A-T signals.\n"
+                else:
+                    seo_section += "💡 Selipkan wawasan dari transkrip video ini agar artikelmu memiliki sudut pandang praktisi (E-E-A-T).\n"
         
         category_desc_text = ""
         category_desc = kwargs.get('category_desc')
@@ -298,7 +338,7 @@ WRITING STYLE & SEO 2026:
   - Medium sentences (15-20 words): For standard explanations.
   - Long sentences (25-35 words): To string together deep logic and details.
   - Use unpredictable word choices (High Perplexity) but keep it natural. Avoid clichés.
-✓ Paragraphs: 3-4 sentences maximum, vary their length
+✓ Paragraphs: EXTREMELY SHORT. Maximum 2-3 sentences per paragraph. Frequently use 1-sentence paragraphs. MUST use many line breaks (enter) so there is plenty of whitespace to inject ADS.
 ✓ Examples: Always from a realistic context with specific names
 ✓ Data: Include relevant statistics/numbers (but VARY the sources)
 ✓ Empathy: Understand the pain points of the target audience
@@ -460,7 +500,7 @@ GAYA PENULISAN:
   - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
   - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
 ✓ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam. JANGAN keyword stuffing.
-✓ Paragraf: 3-4 kalimat maksimal, variasikan panjangnya
+✓ Paragraf: SANGAT PENDEK. Maksimal 2-3 kalimat per paragraf. Sering-sering gunakan paragraf 1 kalimat. Wajib gunakan banyak pemisahan baris (enter) agar banyak ruang kosong untuk menyelipkan IKLAN.
 ✓ Contoh: Selalu dari konteks Indonesia dengan nama sekolah/kota spesifik
 ✓ Data: Sertakan statistik/angka yang relevan (tapi VARIASIKAN sumbernya)
 ✓ Empati: Pahami pain points kepala sekolah
@@ -573,11 +613,18 @@ PENTING:
                 result['reading_time'] = f"{word_count // 200} menit"
             
             if not result.get('key_takeaways'):
-                result['key_takeaways'] = [
-                    f"Panduan lengkap {topic} untuk lembaga pendidikan",
-                    "Tips praktis yang bisa langsung diterapkan",
-                    "Studi kasus nyata dari sekolah Indonesia"
-                ]
+                if language == 'en':
+                    result['key_takeaways'] = [
+                        f"Complete guide to {topic} for modern families",
+                        "Practical tips you can apply immediately",
+                        "Real-world examples and proven strategies"
+                    ]
+                else:
+                    result['key_takeaways'] = [
+                        f"Panduan lengkap {topic} untuk lembaga pendidikan",
+                        "Tips praktis yang bisa langsung diterapkan",
+                        "Studi kasus nyata dari sekolah Indonesia"
+                    ]
             
             return result
         except json.JSONDecodeError as e:
