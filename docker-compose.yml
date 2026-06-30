@@ -26,7 +26,7 @@ services:
   worker:
     build: .
     restart: unless-stopped
-    command: rq worker --with-scheduler -u redis://redis:6379/0 high default low
+    command: rq worker --with-scheduler -u redis://redis:6379/0 high default low --max-jobs 100
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0

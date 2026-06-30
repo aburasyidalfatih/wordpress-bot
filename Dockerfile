@@ -23,4 +23,4 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 EXPOSE 5003
 
 # Run Gunicorn WSGI server
-CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--timeout", "120", "--workers", "2", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5003", "--timeout", "120", "--workers", "2", "--max-requests", "100", "--max-requests-jitter", "10", "app:app"]

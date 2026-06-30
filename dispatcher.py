@@ -37,77 +37,81 @@ def dispatch_jobs():
         users_dict = {user.id: user for user in users}
         
         for site in sites:
-            user_id = site.user_id
-            site_id = site.id
-            user = users_dict.get(user_id)
-            
-            # Check user credits
-            if not user or (user.credits or 0) <= 0:
-                # Log only once every hour to avoid spamming the log
-                lock_key_log = f"scheduler:log_credit_warning:{site_id}"
-                has_logged = redis_conn.get(lock_key_log)
-                if not has_logged:
-                    logger.info(f"Skipping auto-post for site_id={site_id}: user_id={user_id} has insufficient credits.")
-                    redis_conn.setex(lock_key_log, 3600, "1")
-                continue
-            
-            tz_name = site.timezone or 'Asia/Jakarta'
             try:
-                tz = ZoneInfo(tz_name)
-            except Exception as e:
-                logger.error(f"Invalid timezone '{tz_name}' for site_id={site_id}, falling back to Asia/Jakarta: {e}")
-                tz = ZoneInfo('Asia/Jakarta')
-            
-            now_site = datetime.now(tz)
-            current_hour = now_site.hour
-            current_hour_str = now_site.strftime("%Y-%m-%d %H")
-            
-            # 1. Check auto post
-            if site.auto_post and site.selected_categories:
-                schedule_hours = site.schedule_hours or '0,6,12,18'
+                user_id = site.user_id
+                site_id = site.id
+                user = users_dict.get(user_id)
+                
+                # Check user credits
+                if not user or (user.credits or 0) <= 0:
+                    # Log only once every hour to avoid spamming the log
+                    lock_key_log = f"scheduler:log_credit_warning:{site_id}"
+                    has_logged = redis_conn.get(lock_key_log)
+                    if not has_logged:
+                        logger.info(f"Skipping auto-post for site_id={site_id}: user_id={user_id} has insufficient credits.")
+                        redis_conn.setex(lock_key_log, 3600, "1")
+                    continue
+                
+                tz_name = site.timezone or 'Asia/Jakarta'
                 try:
-                    hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
-                    if current_hour in hours_list:
-                        lock_key = f"scheduler:last_run_post:{site_id}"
-                        last_run = redis_conn.get(lock_key)
-                        if last_run:
-                            last_run = last_run.decode('utf-8')
-                        
-                        if last_run != current_hour_str:
-                            delay_minutes = random.randint(0, 50)
-                            
-                            # Check if there is a pending item in ContentQueue (pick top/newest)
-                            from database import ContentQueue
-                            queue_item = session.query(ContentQueue).filter_by(
-                                user_id=user_id, 
-                                site_id=site_id, 
-                                status='pending'
-                            ).order_by(ContentQueue.created_at.asc()).first()
-                            
-                            item_id = None
-                            if queue_item:
-                                item_id = queue_item.id
-                                queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
-                                session.commit()
-                            
-                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
-                            try:
-                                q.enqueue_in(
-                                    timedelta(minutes=delay_minutes),
-                                    'app.generate_and_post',
-                                    user_id,
-                                    item_id,
-                                    site_id,
-                                    job_timeout='10m'
-                                )
-                                redis_conn.set(lock_key, current_hour_str)
-                            except Exception:
-                                if queue_item:
-                                    queue_item.status = 'pending'
-                                    session.commit()
-                                raise
+                    tz = ZoneInfo(tz_name)
                 except Exception as e:
-                    logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
+                    logger.error(f"Invalid timezone '{tz_name}' for site_id={site_id}, falling back to Asia/Jakarta: {e}")
+                    tz = ZoneInfo('Asia/Jakarta')
+                
+                now_site = datetime.now(tz)
+                current_hour = now_site.hour
+                current_hour_str = now_site.strftime("%Y-%m-%d %H")
+                
+                # 1. Check auto post
+                if site.auto_post and site.selected_categories:
+                    schedule_hours = site.schedule_hours or '0,6,12,18'
+                    try:
+                        hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
+                        if current_hour in hours_list:
+                            lock_key = f"scheduler:last_run_post:{site_id}"
+                            last_run = redis_conn.get(lock_key)
+                            if last_run:
+                                last_run = last_run.decode('utf-8')
+                            
+                            if last_run != current_hour_str:
+                                delay_minutes = random.randint(0, 50)
+                                
+                                # Check if there is a pending item in ContentQueue (pick top/newest)
+                                from database import ContentQueue
+                                queue_item = session.query(ContentQueue).filter_by(
+                                    user_id=user_id, 
+                                    site_id=site_id, 
+                                    status='pending'
+                                ).order_by(ContentQueue.created_at.asc()).first()
+                                
+                                item_id = None
+                                if queue_item:
+                                    item_id = queue_item.id
+                                    queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
+                                    session.commit()
+                                
+                                logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
+                                try:
+                                    q.enqueue_in(
+                                        timedelta(minutes=delay_minutes),
+                                        'app.generate_and_post',
+                                        user_id,
+                                        item_id,
+                                        site_id,
+                                        job_timeout='10m'
+                                    )
+                                    redis_conn.set(lock_key, current_hour_str)
+                                except Exception:
+                                    if queue_item:
+                                        queue_item.status = 'pending'
+                                        session.commit()
+                                    raise
+                    except Exception as e:
+                        logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
+            except Exception as loop_err:
+                logger.error(f"Error processing site_id={site.id}: {loop_err}")
+                continue
             
             # Auto research scheduler check removed since manual research is used instead.
 
