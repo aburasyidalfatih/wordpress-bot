@@ -4,25 +4,27 @@
 BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="$BOT_DIR/backups"
 DATE=$(date +%Y%m%d_%H%M%S)
-DB_FILE="$BOT_DIR/wordpress_bot.db"
-SCHEDULER_DB="$BOT_DIR/scheduler_jobs.db"
+
+set -a
+[ -f "$BOT_DIR/.env" ] && . "$BOT_DIR/.env"
+set +a
+
+POSTGRES_USER="${POSTGRES_USER:-autowp}"
+POSTGRES_DB="${POSTGRES_DB:-autowpdb}"
 
 # Create backup directory if not exists
-mkdir -p $BACKUP_DIR
+mkdir -p "$BACKUP_DIR"
 
-# Backup databases
-if [ -f "$DB_FILE" ]; then
-    cp $DB_FILE "$BACKUP_DIR/wordpress_bot_$DATE.db"
-    echo "✅ Database backed up: wordpress_bot_$DATE.db"
-fi
-
-if [ -f "$SCHEDULER_DB" ]; then
-    cp $SCHEDULER_DB "$BACKUP_DIR/scheduler_jobs_$DATE.db"
-    echo "✅ Scheduler DB backed up: scheduler_jobs_$DATE.db"
+# Backup PostgreSQL database
+if command -v docker >/dev/null 2>&1 && docker compose ps postgres >/dev/null 2>&1; then
+    docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > "$BACKUP_DIR/autowp_$DATE.sql"
+    echo "✅ PostgreSQL database backed up: autowp_$DATE.sql"
+else
+    echo "⚠️ Docker compose postgres service not available. Skipping database backup."
 fi
 
 # Keep only last 7 days of backups
-find $BACKUP_DIR -name "*.db" -mtime +7 -delete
+find "$BACKUP_DIR" -name "*.sql" -mtime +7 -delete
 echo "✅ Old backups cleaned (kept last 7 days)"
 
 # Backup logs

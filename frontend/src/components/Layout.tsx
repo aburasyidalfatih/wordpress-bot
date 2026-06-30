@@ -23,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useSiteContext } from '@/contexts/SiteContext';
+import { apiFetch } from '../lib/api';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -44,7 +45,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { sites, selectedSiteId, setSelectedSiteId, loading } = useSiteContext();
 
   useEffect(() => {
-    import('../lib/api').then(({ apiFetch }) => {
+    apiFetch('/api/profile')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.profile) {
+          setProfile(data.profile);
+        }
+      })
+      .catch(console.error);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
       apiFetch('/api/profile')
         .then(res => res.json())
         .then(data => {
@@ -53,21 +65,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           }
         })
         .catch(console.error);
-    });
-  }, [location.pathname]);
-
-  useEffect(() => {
-    const handleRefresh = () => {
-      import('../lib/api').then(({ apiFetch }) => {
-        apiFetch('/api/profile')
-          .then(res => res.json())
-          .then(data => {
-            if (data.success && data.profile) {
-              setProfile(data.profile);
-            }
-          })
-          .catch(console.error);
-      });
     };
     window.addEventListener('refresh-profile', handleRefresh);
     return () => window.removeEventListener('refresh-profile', handleRefresh);

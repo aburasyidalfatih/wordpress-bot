@@ -140,21 +140,18 @@ def manual_research(user_id):
                     'success': False,
                     'error': f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit, tetapi Anda hanya memiliki {user_credits} kredit.'
                 }), 400
-                
-            # Deduct credits before enqueue, then refund below if enqueue fails.
-            user.credits = max(0, user_credits - required_credits)
-            session.commit()
 
-        # Enqueue outside the DB transaction. If Redis/RQ fails, refund the user.
+        if not db.reserve_user_credits(user_id, required_credits):
+            return jsonify({
+                'success': False,
+                'error': f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit.'
+            }), 400
+
+        # Enqueue outside the validation query. If Redis/RQ fails, refund the user.
         try:
             job = q.enqueue('app.deep_research_job', user_id, True, site_id, category)
         except Exception as enqueue_error:
-            with db.get_session() as refund_session:
-                from database import User
-                refund_user = refund_session.query(User).filter_by(id=user_id).first()
-                if refund_user:
-                    refund_user.credits = (refund_user.credits or 0) + required_credits
-                    refund_session.commit()
+            db.refund_user_credits(user_id, required_credits)
             logger.error(f"Manual research enqueue failed, refunded {required_credits} credits: {enqueue_error}")
             return jsonify({'success': False, 'error': 'Gagal memasukkan riset ke antrean. Kredit sudah dikembalikan.'}), 500
 

@@ -84,6 +84,19 @@ app.register_blueprint(admin_bp)
 
 # Background tasks & workers retained in app namespace for RQ compatibility
 
+def _set_queue_item_status(item_id, user_id, status, post_url=None):
+    if not item_id:
+        return
+
+    from database import ContentQueue
+    with db.get_session() as session:
+        item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
+        if item:
+            item.status = status
+            if post_url:
+                item.post_url = post_url
+
+
 def regenerate_image_job(user_id, log_id):
     from database import PostLog, WordPressSite
     from bot import ArticleGenerator, WordPressPublisher
@@ -187,6 +200,8 @@ def regenerate_image_job(user_id, log_id):
 def generate_and_post(user_id, item_id=None, site_id=None):
     config = load_config(user_id)
     from database import WordPressSite, User
+    credit_reserved = False
+    credit_consumed = False
     
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
@@ -197,9 +212,9 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             logger.warning(f"User {user.email} has insufficient credits ({user.credits}). Aborting generation.")
             if item_id:
                 from database import ContentQueue
-                db_item = session.query(ContentQueue).filter_by(id=item_id).first()
+                db_item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
                 if db_item:
-                    db_item.status = 'failed'
+                    db_item.status = 'pending'
                     session.commit()
             return
             
@@ -298,15 +313,22 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         else:
             category = site_config['selected_categories'][0]
             logger.info(f"Selected category: {category['name']} (position 1 of {len(site_config['selected_categories'])})")
-            
-            # Rotate: move first to last
+
+        credit_reserved = db.reserve_user_credits(user_id, 1)
+        if not credit_reserved:
+            logger.warning(f"User {user_id} has insufficient credits when reserving post job.")
+            if item_id:
+                _set_queue_item_status(item_id, user_id, 'pending')
+            return
+
+        if not item_id:
+            # Rotate after a credit reservation succeeds so no-credit jobs do not advance the schedule.
             with db.get_session() as session:
-                site = session.query(WordPressSite).filter_by(id=site_id).first()
+                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
                 if site and site.selected_categories:
                     site.selected_categories = site.selected_categories[1:] + [category]
                     session.commit()
-            
-            logger.info(f"Rotation complete.")
+            logger.info("Rotation complete.")
         
         send_telegram_notification(site_config, 
             f"🤖 <b>WordPress Auto Post Bot</b>\n\n"
@@ -460,6 +482,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
         post_id = None
         post_url = None
         if success and isinstance(result, dict):
+            credit_consumed = True
             post_id = result.get('id')
             post_url = result.get('link')
             if image_failed:
@@ -493,15 +516,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                     session.commit()
         
         if success:
-            # Deduct 1 credit from user
-            from database import User
-            with db.get_session() as session:
-                user = session.query(User).filter_by(id=user_id).first()
-                if user:
-                    user.credits = max(0, (user.credits or 0) - 1)
-                    session.commit()
-                    logger.info(f"Deducted 1 credit from User {user.email}. Remaining: {user.credits}")
-            
+            logger.info(f"Consumed reserved credit for user_id={user_id}, site_id={site_id}")
+
             file_size = len(image_data.getvalue())/1024 if image_data else 0
             send_telegram_notification(site_config,
                 f"✅ <b>Artikel Berhasil Dipublish!</b>\n\n"
@@ -520,6 +536,10 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             
             logger.info(f"Article published successfully: {article.get('title', '')}")
         else:
+            if credit_reserved and not credit_consumed:
+                db.refund_user_credits(user_id, 1)
+                credit_reserved = False
+                logger.info(f"Refunded reserved credit for failed post: user_id={user_id}, site_id={site_id}")
             send_telegram_notification(site_config,
                 f"❌ <b>Posting Gagal!</b>\n\n"
                 f"🌐 <b>Website:</b> {site_config['site_name']}\n"
@@ -531,6 +551,12 @@ def generate_and_post(user_id, item_id=None, site_id=None):
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error in generate_and_post for site {site_id}: {error_msg}", exc_info=True)
+        if credit_reserved and not credit_consumed:
+            try:
+                db.refund_user_credits(user_id, 1)
+                logger.info(f"Refunded reserved credit after exception: user_id={user_id}, site_id={site_id}")
+            except Exception as refund_error:
+                logger.error(f"Failed to refund reserved credit for user {user_id}: {refund_error}")
         
         # Determine category values for logging even if it failed early
         log_category_id = category['id'] if 'category' in locals() and category else None

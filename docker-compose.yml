@@ -6,7 +6,7 @@ services:
     expose:
       - "5003"
     environment:
-      - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-}
       - FERNET_KEY=${FERNET_KEY:-}
@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     command: rq worker --with-scheduler -u redis://redis:6379/0 high default low
     environment:
-      - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-}
       - FERNET_KEY=${FERNET_KEY:-}
@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
     command: python dispatcher.py
     environment:
-      - DATABASE_URL=postgresql://autowp:securepassword@postgres:5432/autowpdb
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-}
       - FERNET_KEY=${FERNET_KEY:-}
@@ -63,13 +63,13 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=autowp
-      - POSTGRES_PASSWORD=securepassword
-      - POSTGRES_DB=autowpdb
+      - POSTGRES_USER=${POSTGRES_USER:-autowp}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-securepassword}
+      - POSTGRES_DB=${POSTGRES_DB:-autowpdb}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U autowp"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 5

@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database import Database
+from config import Config
 import requests
 from requests.auth import HTTPBasicAuth
 import os
@@ -73,7 +74,7 @@ def main():
         password = args.password
     else:
         # Load config dari database
-        db = Database(os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db'))
+        db = Database(Config.DATABASE_URL)
         with db.get_session() as session:
             from database import WordPressSite
             site = session.query(WordPressSite).first()

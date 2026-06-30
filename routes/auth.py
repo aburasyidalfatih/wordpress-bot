@@ -10,6 +10,9 @@ from config import Config
 
 auth_bp = Blueprint('auth', __name__)
 
+def is_configured_admin_email(email):
+    return (email or '').strip().lower() in Config.ADMIN_EMAILS
+
 def configured_google_client_id():
     client_id = Config.GOOGLE_CLIENT_ID
     try:
@@ -69,7 +72,7 @@ def api_auth_google():
         
         if not user:
             user_count = session.query(User).count()
-            role = 'admin' if (user_count == 0 or email == 'andriko484@gmail.com') else 'user'
+            role = 'admin' if (user_count == 0 or is_configured_admin_email(email)) else 'user'
             
             user = User(
                 email=email,
@@ -113,9 +116,9 @@ def api_auth_google():
         else:
             if not user.google_id:
                 user.google_id = google_id
-            if email == 'andriko484@gmail.com' and user.role != 'admin':
+            if is_configured_admin_email(email) and user.role != 'admin':
                 user.role = 'admin'
-                logger.info(f"Updated existing user {email} role to admin on login")
+                logger.info(f"Updated configured admin user {email} role to admin on login")
             session.commit()
                 
         if not user.is_active:

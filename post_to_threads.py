@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from database import Database, PostLog, WordPressSite
+from config import Config
 
 load_dotenv()
 
@@ -61,8 +62,7 @@ def resolve_log(session, user_id, site_id, log_id=None):
 
 
 def post_to_threads(user_id=None, site_id=None, log_id=None):
-    db_url = os.getenv("DATABASE_URL", "sqlite:///wordpress_bot.db")
-    db = Database(db_url)
+    db = Database(Config.DATABASE_URL)
 
     with db.get_session() as session:
         site = resolve_site(session, user_id=user_id, site_id=site_id)

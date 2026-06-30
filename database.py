@@ -261,6 +261,9 @@ class SystemSetting(Base):
 
 class Database:
     def __init__(self, db_url):
+        if not db_url.startswith(('postgresql://', 'postgresql+psycopg2://')):
+            raise ValueError('Database requires a PostgreSQL URL.')
+
         try:
             self.engine = create_engine(
                 db_url,
@@ -293,11 +296,6 @@ class Database:
             self.Session = scoped_session(session_factory)
             
             try:
-                self.migrate_to_project_based()
-            except Exception as em:
-                logger.warning(f"Project migration warning: {em}")
-                
-            try:
                 self.migrate_plain_configs()
             except Exception as em:
                 logger.warning(f"Database plain config migration warning: {em}")
@@ -321,93 +319,6 @@ class Database:
             logger.error(f"Database initialization failed: {e}")
             raise
     
-    def migrate_to_project_based(self):
-        from sqlalchemy import text
-        import json
-        with self.get_session() as session:
-            # Check if any sites exist
-            site_count = session.query(WordPressSite).count()
-            if site_count > 0:
-                return # Already migrated or new installation
-
-            try:
-                # Try to fetch old config using raw SQL (columns might still exist in SQLite)
-                result = session.execute(text("SELECT * FROM config")).fetchall()
-                if not result:
-                    return
-                
-                # Get column names from the result
-                columns = session.execute(text("PRAGMA table_info(config)")).fetchall()
-                col_names = [col[1] for col in columns]
-                
-                migrated = False
-                for row in result:
-                    row_dict = dict(zip(col_names, row))
-                    user_id = row_dict.get('user_id')
-                    wp_url = row_dict.get('wordpress_url')
-                    
-                    if not wp_url:
-                        continue
-                        
-                    # Parse JSON fields safely
-                    cats = row_dict.get('categories', [])
-                    sel_cats = row_dict.get('selected_categories', [])
-                    if isinstance(cats, str): 
-                        try: cats = json.loads(cats)
-                        except: cats = []
-                    if isinstance(sel_cats, str): 
-                        try: sel_cats = json.loads(sel_cats)
-                        except: sel_cats = []
-
-                    # Create the first site
-                    site = WordPressSite(
-                        user_id=user_id,
-                        site_name="My First Website",
-                        wordpress_url=wp_url,
-                        wordpress_username=row_dict.get('wordpress_username', ''),
-                        _wordpress_password=row_dict.get('wordpress_password', ''),
-
-                        schedule_hours=row_dict.get('schedule_hours', '0,6,12,18'),
-                        categories=cats,
-                        selected_categories=sel_cats,
-                        auto_post=row_dict.get('auto_post', False),
-                        _telegram_bot_token=row_dict.get('telegram_bot_token', ''),
-                        telegram_chat_id=row_dict.get('telegram_chat_id', ''),
-                        telegram_enabled=row_dict.get('telegram_enabled', False),
-                        telegram_channel_id=row_dict.get('telegram_channel_id', ''),
-                        telegram_post_to_channel=row_dict.get('telegram_post_to_channel', False),
-                        facebook_page_id=row_dict.get('facebook_page_id', ''),
-                        _facebook_access_token=row_dict.get('facebook_access_token', ''),
-                        facebook_enabled=row_dict.get('facebook_enabled', False),
-                        _twitter_api_key=row_dict.get('twitter_api_key', ''),
-                        _twitter_api_secret=row_dict.get('twitter_api_secret', ''),
-                        _twitter_access_token=row_dict.get('twitter_access_token', ''),
-                        _twitter_access_secret=row_dict.get('twitter_access_secret', ''),
-                        twitter_enabled=row_dict.get('twitter_enabled', False),
-                        threads_user_id=row_dict.get('threads_user_id', ''),
-                        _threads_access_token=row_dict.get('threads_access_token', ''),
-                        threads_enabled=row_dict.get('threads_enabled', False),
-
-                        article_prompt=row_dict.get('article_prompt'),
-                        image_prompt=row_dict.get('image_prompt')
-                    )
-                    
-                    session.add(site)
-                    session.flush() # To get site.id
-                    
-                    # Update all related tables
-                    session.execute(text(f"UPDATE post_logs SET site_id = {site.id} WHERE user_id = {user_id} AND site_id IS NULL"))
-                    session.execute(text(f"UPDATE research_data SET site_id = {site.id} WHERE user_id = {user_id} AND site_id IS NULL"))
-                    session.execute(text(f"UPDATE content_queue SET site_id = {site.id} WHERE user_id = {user_id} AND site_id IS NULL"))
-                    
-                    migrated = True
-                    
-                if migrated:
-                    session.commit()
-                    logger.info("Successfully migrated project-based data.")
-            except Exception as e:
-                logger.error(f"Migration error (ignorable if new install): {e}")
-
     @contextmanager
     def get_session(self):
         session = self.Session()
@@ -465,23 +376,14 @@ class Database:
         from sqlalchemy import text
         with self.get_session() as session:
             try:
-                is_postgres = 'postgresql' in str(self.engine.url)
-                if is_postgres:
-                    res = session.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='wordpress_sites' AND column_name='timezone'"
-                    )).fetchone()
-                    if not res:
-                        session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN timezone VARCHAR(100) DEFAULT 'Asia/Jakarta'"))
-                        session.commit()
-                        logger.info("Added column 'timezone' to 'wordpress_sites' table in PostgreSQL")
-                else:
-                    res = session.execute(text("PRAGMA table_info(wordpress_sites)")).fetchall()
-                    cols = [col[1] for col in res]
-                    if 'timezone' not in cols:
-                        session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN timezone VARCHAR(100) DEFAULT 'Asia/Jakarta'"))
-                        session.commit()
-                        logger.info("Added column 'timezone' to 'wordpress_sites' table in SQLite")
+                res = session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='wordpress_sites' AND column_name='timezone'"
+                )).fetchone()
+                if not res:
+                    session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN timezone VARCHAR(100) DEFAULT 'Asia/Jakarta'"))
+                    session.commit()
+                    logger.info("Added column 'timezone' to 'wordpress_sites' table")
             except Exception as e:
                 logger.warning(f"Timezone migration warning: {e}")
 
@@ -489,23 +391,14 @@ class Database:
         from sqlalchemy import text
         with self.get_session() as session:
             try:
-                is_postgres = 'postgresql' in str(self.engine.url)
-                if is_postgres:
-                    res = session.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='wordpress_sites' AND column_name='language'"
-                    )).fetchone()
-                    if not res:
-                        session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN language VARCHAR(50) DEFAULT 'id'"))
-                        session.commit()
-                        logger.info("Added column 'language' to 'wordpress_sites' table in PostgreSQL")
-                else:
-                    res = session.execute(text("PRAGMA table_info(wordpress_sites)")).fetchall()
-                    cols = [col[1] for col in res]
-                    if 'language' not in cols:
-                        session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN language VARCHAR(50) DEFAULT 'id'"))
-                        session.commit()
-                        logger.info("Added column 'language' to 'wordpress_sites' table in SQLite")
+                res = session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='wordpress_sites' AND column_name='language'"
+                )).fetchone()
+                if not res:
+                    session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN language VARCHAR(50) DEFAULT 'id'"))
+                    session.commit()
+                    logger.info("Added column 'language' to 'wordpress_sites' table")
             except Exception as e:
                 logger.warning(f"Language migration warning: {e}")
 
@@ -513,61 +406,34 @@ class Database:
         from sqlalchemy import text
         with self.get_session() as session:
             try:
-                is_postgres = 'postgresql' in str(self.engine.url)
-                if is_postgres:
-                    for col, col_type, default_val in [
-                        ('role', 'VARCHAR(50)', "'user'"),
-                        ('tier', 'VARCHAR(50)', "'free'"),
-                        ('credits', 'INTEGER', "5"),
-                        ('google_id', 'VARCHAR(255)', "NULL")
-                    ]:
-                        res = session.execute(text(
-                            f"SELECT column_name FROM information_schema.columns "
-                            f"WHERE table_name='users' AND column_name='{col}'"
-                        )).fetchone()
-                        if not res:
-                            session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
-                            session.commit()
-                            logger.info(f"Added column '{col}' to 'users' table in PostgreSQL")
-                            
-                    res_config = session.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='config' AND column_name='gemini_image_model'"
+                for col, col_type, default_val in [
+                    ('role', 'VARCHAR(50)', "'user'"),
+                    ('tier', 'VARCHAR(50)', "'free'"),
+                    ('credits', 'INTEGER', "5"),
+                    ('google_id', 'VARCHAR(255)', "NULL")
+                ]:
+                    res = session.execute(text(
+                        f"SELECT column_name FROM information_schema.columns "
+                        f"WHERE table_name='users' AND column_name='{col}'"
                     )).fetchone()
-                    if not res_config:
-                        session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
+                    if not res:
+                        session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
                         session.commit()
-                        logger.info("Added column 'gemini_image_model' to 'config' table in PostgreSQL")
-                        
-                    # Auto-migrate old imagen models to gemini-3.1-flash-image
-                    session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
-                    session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
+                        logger.info(f"Added column '{col}' to 'users' table")
+
+                res_config = session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='config' AND column_name='gemini_image_model'"
+                )).fetchone()
+                if not res_config:
+                    session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
                     session.commit()
-                else:
-                    res = session.execute(text("PRAGMA table_info(users)")).fetchall()
-                    cols = [col[1] for col in res]
-                    for col, col_type, default_val in [
-                        ('role', 'VARCHAR(50)', "'user'"),
-                        ('tier', 'VARCHAR(50)', "'free'"),
-                        ('credits', 'INTEGER', "5"),
-                        ('google_id', 'VARCHAR(255)', "NULL")
-                    ]:
-                        if col not in cols:
-                            session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
-                            session.commit()
-                            logger.info(f"Added column '{col}' to 'users' table in SQLite")
-                            
-                    res_config = session.execute(text("PRAGMA table_info(config)")).fetchall()
-                    cols_config = [col[1] for col in res_config]
-                    if 'gemini_image_model' not in cols_config:
-                        session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
-                        session.commit()
-                        logger.info("Added column 'gemini_image_model' to 'config' table in SQLite")
-                        
-                    # Auto-migrate old imagen models to gemini-3.1-flash-image
-                    session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
-                    session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
-                    session.commit()
+                    logger.info("Added column 'gemini_image_model' to 'config' table")
+
+                # Auto-migrate old imagen models to gemini-3.1-flash-image
+                session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
+                session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
+                session.commit()
             except Exception as e:
                 logger.warning(f"Credit system user/config migration warning: {e}")
     
@@ -630,6 +496,38 @@ class Database:
                 session.rollback()
                 logger.error(f"Error committing system settings: {e}")
                 raise e
+
+    def reserve_user_credits(self, user_id, amount=1):
+        if amount <= 0:
+            return True
+
+        from sqlalchemy import text
+        with self.get_session() as session:
+            result = session.execute(
+                text(
+                    "UPDATE users "
+                    "SET credits = COALESCE(credits, 0) - :amount "
+                    "WHERE id = :user_id AND COALESCE(credits, 0) >= :amount"
+                ),
+                {'user_id': user_id, 'amount': amount}
+            )
+            return result.rowcount == 1
+
+    def refund_user_credits(self, user_id, amount=1):
+        if amount <= 0:
+            return True
+
+        from sqlalchemy import text
+        with self.get_session() as session:
+            result = session.execute(
+                text(
+                    "UPDATE users "
+                    "SET credits = COALESCE(credits, 0) + :amount "
+                    "WHERE id = :user_id"
+                ),
+                {'user_id': user_id, 'amount': amount}
+            )
+            return result.rowcount == 1
     
     def add_log(self, user_id, site_id, category_id, category_name, title, success, result, post_id=None, post_url=None, image_failed=False):
         with self.get_session() as session:

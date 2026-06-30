@@ -32,7 +32,7 @@ https://bot.kelasmaster.id
 wordpress-bot/
 ├── app.py              # Entry point Flask, semua routes
 ├── bot.py              # ArticleGenerator, WordPressPublisher
-├── database.py         # Database wrapper (SQLAlchemy: PostgreSQL production, SQLite fallback)
+├── database.py         # Database wrapper (SQLAlchemy + PostgreSQL)
 ├── config.py           # Konstanta konfigurasi
 ├── ml_optimizer.py     # AI category optimizer
 ├── seo_research.py     # SEO research helper
@@ -62,7 +62,6 @@ wordpress-bot/
 ├── docs/               # Dokumentasi setup per platform
 ├── logs/               # Log files (rotasi otomatis)
 ├── docker-compose.yml  # Web, worker, scheduler, PostgreSQL 15, Redis
-├── wordpress_bot.db    # SQLite fallback/local legacy database
 ├── .env                # Environment variables (tidak di-commit)
 └── venv/               # Python virtual environment
 ```
@@ -113,7 +112,7 @@ Auto Research: setiap hari jam 00:00 (jika diaktifkan).
 
 ## Database
 
-Production Docker memakai **PostgreSQL 15** (`postgres:15-alpine`) melalui `DATABASE_URL`. Jika `DATABASE_URL` tidak diset, aplikasi fallback ke `sqlite:///wordpress_bot.db` untuk mode lokal/legacy.
+AutoWP memakai **PostgreSQL 15** (`postgres:15-alpine`). Aplikasi membaca `DATABASE_URL` jika tersedia, atau menyusun URL PostgreSQL dari `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, dan `POSTGRES_DB`. SQLite tidak lagi didukung.
 
 Tabel utama:
 - `users` — akun, role, tier, kredit

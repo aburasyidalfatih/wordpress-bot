@@ -4,6 +4,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def _require_postgres_database_url():
+    value = os.getenv('DATABASE_URL')
+    if not value:
+        user = os.getenv('POSTGRES_USER', 'autowp')
+        password = os.getenv('POSTGRES_PASSWORD', 'securepassword')
+        host = os.getenv('POSTGRES_HOST', 'postgres')
+        port = os.getenv('POSTGRES_PORT', '5432')
+        database = os.getenv('POSTGRES_DB', 'autowpdb')
+        value = f'postgresql://{user}:{password}@{host}:{port}/{database}'
+
+    allowed_prefixes = ('postgresql://', 'postgresql+psycopg2://')
+    if not value.startswith(allowed_prefixes):
+        raise RuntimeError('DATABASE_URL must use PostgreSQL, for example postgresql://user:password@host:5432/dbname.')
+
+    return value
+
 def _load_or_create_runtime_secret(env_name, filename, generator):
     value = os.getenv(env_name)
     if value:
@@ -55,13 +71,10 @@ class Config:
     )
     
     # Database
-    DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db')
+    DATABASE_URL = _require_postgres_database_url()
     
     # Redis
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    
-    # Scheduler
-    SCHEDULER_JOBSTORE_URL = 'sqlite:///scheduler_jobs.db'
     
     # Logging
     LOG_FILE = 'bot.log'
@@ -100,6 +113,11 @@ class Config:
     # Google OAuth
     GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
     GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+    ADMIN_EMAILS = [
+        email.strip().lower()
+        for email in os.getenv('ADMIN_EMAILS', '').split(',')
+        if email.strip()
+    ]
     
     # SMTP Settings (SMTP Mailketing)
     SMTP_HOST = os.getenv('SMTP_HOST', '')

@@ -145,15 +145,12 @@ def reorder_queue_api(user_id):
     import datetime
     
     with db.get_session() as session:
-        # Hack to reorder items based on created_at since there is no 'position' column
-        # We assign descending times so the first item has the newest timestamp
-        now = datetime.datetime.now()
+        # Keep order compatible with the queue query, which sorts created_at ascending.
+        base_time = datetime.datetime.now() - datetime.timedelta(seconds=len(ids))
         for idx, item_id in enumerate(ids):
             item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
             if item:
-                # the first id should be ordered first, so it needs the largest created_at
-                # subtract idx seconds from 'now'
-                item.created_at = now - datetime.timedelta(seconds=idx)
+                item.created_at = base_time + datetime.timedelta(seconds=idx)
         session.commit()
     return jsonify({'success': True})
 
@@ -163,12 +160,16 @@ def post_queue_api(user_id, item_id):
     from database import ContentQueue, User
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
-        if not user or (user.credits or 0) <= 0:
-            return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
-
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if not item:
             return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
+        if item.status == 'posting':
+            return jsonify({'success': True, 'message': 'Item is already being processed'})
+        if item.status == 'posted':
+            return jsonify({'success': False, 'error': 'Item has already been posted', 'code': 400}), 400
+        if not user or (user.credits or 0) <= 0:
+            return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
+
         item.status = 'posting'
         session.commit()
 

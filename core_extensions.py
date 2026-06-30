@@ -36,14 +36,12 @@ optimizer = ContentOptimizer(db)
 trending = TrendingResearch()
 
 # Cache settings
-_config_cache = {'data': None, 'timestamp': 0}
+_config_cache = {}
 _stats_cache = {'data': None, 'timestamp': 0}
 
 def load_config(user_id=None):
     now = time()
-    if now - _config_cache['timestamp'] < 5:  # 5 second cache
-        return _config_cache['data']
-    
+
     admin_id = None
     try:
         from database import User
@@ -57,10 +55,13 @@ def load_config(user_id=None):
     target_id = admin_id if admin_id is not None else user_id
     if target_id is None:
         target_id = 1
-        
+
+    cached = _config_cache.get(target_id)
+    if cached and now - cached['timestamp'] < 5:
+        return cached['data']
+
     config = db.get_config(target_id)
-    _config_cache['data'] = config
-    _config_cache['timestamp'] = now
+    _config_cache[target_id] = {'data': config, 'timestamp': now}
     return config
 
 def get_cached_stats(user_id, site_id=None):
@@ -82,6 +83,7 @@ def save_config(user_id, config_data):
     # If the user is saving, check if they are the admin, but this save_config is used on db. 
     # The route handler will enforce the admin check.
     db.save_config(user_id, config_data)
+    _config_cache.clear()
 
 # JWT decorator
 def require_jwt(f):

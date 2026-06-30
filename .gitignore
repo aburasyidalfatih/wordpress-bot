@@ -4,6 +4,13 @@ __pycache__/
 config.json
 logs.json
 *.log
+*.log.*
+*.db
+*.db.bak
+temp*.html
+runtime/
+scratch/
+legacy_sqlite_backup/
 venv/
 .vscode/
 .idea/

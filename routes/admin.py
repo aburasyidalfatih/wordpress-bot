@@ -304,7 +304,7 @@ def get_admin_config(user_id):
 @require_admin
 def update_admin_config(user_id):
     from config import Config
-    from core_extensions import save_config, _config_cache
+    from core_extensions import save_config
     data = request.json or {}
     
     # Save Gemini DB configs
@@ -318,8 +318,6 @@ def update_admin_config(user_id):
         
     if gemini_data:
         save_config(user_id, gemini_data)
-        # Invalidate cache
-        _config_cache['timestamp'] = 0
         
     keys = [
         'TRIPAY_API_KEY', 'TRIPAY_PRIVATE_KEY', 'TRIPAY_MERCHANT_CODE', 'TRIPAY_API_URL',

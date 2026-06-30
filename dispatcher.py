@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from redis import Redis
 from rq import Queue
 from database import Database, WordPressSite, User
+from config import Config
 
 # Setup logging
 logging.basicConfig(
@@ -20,16 +21,15 @@ redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 redis_conn = Redis.from_url(redis_url, protocol=2)
 q = Queue('default', connection=redis_conn)
 
-# Init DB - align default with app.py fallback to SQLite
-db_url = os.getenv('DATABASE_URL', 'sqlite:///wordpress_bot.db')
-db = Database(db_url)
-
-from sqlalchemy.orm import joinedload # Removing this later
+# Init DB
+db = Database(Config.DATABASE_URL)
 
 def dispatch_jobs():
     with db.get_session() as session:
         # Get all active WordPress sites
         sites = session.query(WordPressSite).filter_by(is_active=True).all()
+        if not sites:
+            return
         
         # Batch load users to prevent N+1 queries
         user_ids = list(set([site.user_id for site in sites]))
@@ -91,8 +91,21 @@ def dispatch_jobs():
                                 session.commit()
                             
                             logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
-                            q.enqueue_in(timedelta(minutes=delay_minutes), 'app.generate_and_post', user_id, item_id, site_id)
-                            redis_conn.set(lock_key, current_hour_str)
+                            try:
+                                q.enqueue_in(
+                                    timedelta(minutes=delay_minutes),
+                                    'app.generate_and_post',
+                                    user_id,
+                                    item_id,
+                                    site_id,
+                                    job_timeout='10m'
+                                )
+                                redis_conn.set(lock_key, current_hour_str)
+                            except Exception:
+                                if queue_item:
+                                    queue_item.status = 'pending'
+                                    session.commit()
+                                raise
                 except Exception as e:
                     logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
             

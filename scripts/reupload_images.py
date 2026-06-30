@@ -4,15 +4,28 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot import WordPressPublisher, ArticleGenerator
-from database import Database
+from config import Config
+from database import Database, WordPressSite
 
-db = Database('sqlite:///wordpress_bot.db')
-config = db.get_config()
+db = Database(Config.DATABASE_URL)
+with db.get_session() as session:
+    site = session.query(WordPressSite).filter_by(is_active=True).order_by(WordPressSite.created_at.asc()).first()
+    if not site:
+        raise SystemExit("[ERROR] No active WordPress site found.")
+
+    site_config = {
+        'user_id': site.user_id,
+        'wordpress_url': site.wordpress_url,
+        'wordpress_username': site.wordpress_username,
+        'wordpress_password': site.wordpress_password,
+    }
+
+config = db.get_config(site_config['user_id'])
 
 publisher = WordPressPublisher(
-    config['wordpress_url'],
-    config['wordpress_username'],
-    config['wordpress_password']
+    site_config['wordpress_url'],
+    site_config['wordpress_username'],
+    site_config['wordpress_password']
 )
 
 generator = ArticleGenerator(
@@ -55,8 +68,8 @@ for article in articles:
     print("   🔗 Setting as featured image...")
     import requests
     response = requests.post(
-        f"{config['wordpress_url']}/wp-json/wp/v2/posts/{article['post_id']}",
-        auth=(config['wordpress_username'], config['wordpress_password']),
+        f"{site_config['wordpress_url']}/wp-json/wp/v2/posts/{article['post_id']}",
+        auth=(site_config['wordpress_username'], site_config['wordpress_password']),
         json={'featured_media': media_id},
         timeout=30
     )

@@ -47,6 +47,7 @@ export default function Queue() {
 
   const handleDragEnd = async (event: any) => {
     const { active, over } = event;
+    if (!over) return;
     
     if (active.id !== over.id) {
       setItems((items) => {

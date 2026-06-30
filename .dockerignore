@@ -6,4 +6,12 @@ venv/
 __pycache__/
 *.pyc
 logs/
+*.log
+*.log.*
+*.db
+*.db.bak
+scratch/
+temp*.html
+runtime/
+legacy_sqlite_backup/
 .env

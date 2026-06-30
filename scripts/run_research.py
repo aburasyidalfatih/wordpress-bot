@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 
 from database import Database, WordPressSite
+from config import Config
 from trending_research import TrendingResearch
 
 load_dotenv()
@@ -37,8 +38,7 @@ def resolve_site(db, user_id=None, site_id=None):
 
 
 def run_manual_research(user_id=None, site_id=None):
-    db_url = os.getenv("DATABASE_URL", "sqlite:///wordpress_bot.db")
-    db = Database(db_url)
+    db = Database(Config.DATABASE_URL)
     trending = TrendingResearch()
 
     site = resolve_site(db, user_id=user_id, site_id=site_id)
