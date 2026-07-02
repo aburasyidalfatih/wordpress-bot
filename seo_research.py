@@ -302,22 +302,31 @@ class SEOResearch:
                 url = res.get('href')
                 title = res.get('title')
                 
-                # Fetch page content
+                # Fetch page content via Jina Reader to bypass Cloudflare
                 try:
-                    page_resp = requests.get(url, headers=self.headers, timeout=5, verify=False)
+                    jina_url = f"https://r.jina.ai/{url}"
+                    page_resp = requests.get(jina_url, timeout=15, verify=False)
                     if page_resp.status_code == 200:
-                        soup = BeautifulSoup(page_resp.text, 'html.parser')
-                        # Extract H2 and H3
-                        headers = [h.get_text(strip=True) for h in soup.find_all(['h2', 'h3'])]
-                        headers = [h for h in headers if len(h) > 10 and len(h) < 100][:5]
+                        content = page_resp.text
+                        import re
+                        headers = []
+                        for line in content.split('\n'):
+                            line = line.strip()
+                            # Match Markdown headers ## or ###
+                            if line.startswith('## ') or line.startswith('### '):
+                                header_text = re.sub(r'^#+\s*', '', line)
+                                if 10 < len(header_text) < 100:
+                                    headers.append(header_text)
+                                    if len(headers) >= 5:
+                                        break
                         
                         competitors.append({
                             'url': url,
                             'title': title,
-                            'headers': headers
+                            'headers': headers if headers else [title]
                         })
                 except Exception as ex:
-                    logger.warning(f"Failed to scrape competitor {url}: {ex}")
+                    logger.warning(f"Failed to scrape competitor {url} via Jina: {ex}")
                     continue
         except Exception as e:
             logger.error(f"DDGS competitor search error: {e}")
