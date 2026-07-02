@@ -30,7 +30,7 @@ class ArticleGenerator:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
     )
-    def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, **kwargs):
+    def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
         # Resolve custom prompt from either parameter name
         custom_prompt = custom_prompt or kwargs.get('custom_article_prompt')
         language = kwargs.get('language') or 'id'
@@ -245,9 +245,22 @@ class ArticleGenerator:
             else:
                 category_desc_text = f"\n\n📂 DESKRIPSI KATEGORI / PETUNJUK PENULISAN:\n{category_desc}\nIkuti petunjuk kategori ini dan fokuskan gaya serta ruang lingkup artikel pada deskripsi tersebut."
 
+        internal_links_text = ""
+        if internal_links_context:
+            if language == 'en':
+                internal_links_text = f"\n\n🔗 INTERNAL LINKING STRATEGY:\nHere are some of our previous articles:\n"
+                for post in internal_links_context[:30]:
+                    internal_links_text += f"- Title: {post['title']} (URL: {post['url']})\n"
+                internal_links_text += "💡 IMPORTANT: Find 3-5 opportunities in your article where the topic naturally relates to the titles above. When it does, weave the title/context naturally into a sentence and make it an HTML link `<a href=\"...\">anchor text</a>`. DO NOT list them at the end; weave them inside paragraphs organically!\n"
+            else:
+                internal_links_text = f"\n\n🔗 STRATEGI INTERNAL LINKING:\nBerikut adalah artikel-artikel lama kita:\n"
+                for post in internal_links_context[:30]:
+                    internal_links_text += f"- Judul: {post['title']} (URL: {post['url']})\n"
+                internal_links_text += "💡 PENTING: Sisipkan 3-5 link secara natural di dalam paragraf artikelmu. Jika kalimatmu relevan dengan salah satu judul di atas, jadikan kalimat itu sebagai anchor text menggunakan tag HTML `<a href=\"...\">teks</a>`. JANGAN membuat daftar link di akhir artikel, sisipkan secara organik di dalam teks bacaan!\n"
+
         if language == 'en':
             prompt = f"""Write a high-quality, SEO-optimized blog article for the website {target_site} about: {topic_focus}
-{existing_titles_text}{research_note}{seo_section}{category_desc_text}
+{existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
 TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
 
@@ -358,7 +371,7 @@ SEO OPTIMIZATION:
 ✓ Keyword in first 100 words
 ✓ Keyword variations in H2 headings
 ✓ LSI keywords naturally throughout
-✓ Related posts will appear automatically (no need for manual links)
+✓ Internal Links: You MUST weave the provided internal links into the content organically (as instructed above).
 ✓ Optimize for featured snippets (use lists/tables)
 
 ⚠️ STRICT PROHIBITIONS:
@@ -411,7 +424,7 @@ IMPORTANT:
 """
         else:
             prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic_focus}
-{existing_titles_text}{research_note}{seo_section}{category_desc_text}
+{existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
 TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
 
@@ -525,7 +538,7 @@ SEO OPTIMIZATION:
 ✓ Keyword di first 100 words
 ✓ Keyword variations di H2 headings
 ✓ LSI keywords natural throughout
-✓ Related posts akan muncul otomatis via plugin (tidak perlu manual link)
+✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
 ✓ Optimasi untuk featured snippet (gunakan list/table)
 
 ⚠️ LARANGAN KERAS:
@@ -921,6 +934,31 @@ class WordPressPublisher:
         except Exception as e:
             print(f"Error getting post stats: {e}")
             return None
+
+    def get_recent_posts(self, limit=30):
+        """Get recent posts for internal linking"""
+        try:
+            response = requests.get(
+                f"{self.api_url}/posts",
+                params={'per_page': limit, '_fields': 'id,title,link'},
+                headers=self._get_auth(),
+                timeout=10
+            )
+            if response.status_code == 200:
+                posts = []
+                import html
+                for p in response.json():
+                    title_rendered = p.get('title', {}).get('rendered', '')
+                    title_rendered = html.unescape(title_rendered)
+                    posts.append({
+                        'title': title_rendered,
+                        'url': p.get('link', '')
+                    })
+                return posts
+            return []
+        except Exception as e:
+            logger.error(f"Error getting recent posts: {e}")
+            return []
     
     @retry(
         stop=stop_after_attempt(3),

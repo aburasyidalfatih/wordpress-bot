@@ -281,6 +281,13 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             site_config['wordpress_password']
         )
         
+        try:
+            recent_posts_for_links = publisher.get_recent_posts(limit=30)
+            logger.info(f"Fetched {len(recent_posts_for_links)} recent posts for internal linking.")
+        except Exception as e:
+            logger.error(f"Failed to fetch recent posts for linking: {e}")
+            recent_posts_for_links = []
+        
         queue_item = None
         category = None
         custom_topic = None
@@ -386,7 +393,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             custom_prompt=custom_article_prompt,
             site_name=site_config.get('site_name'),
             language=site_config.get('language', 'id'),
-            category_desc=category_desc
+            category_desc=category_desc,
+            internal_links_context=recent_posts_for_links
         )
         
         # Check for duplicate or similar titles
@@ -442,7 +450,8 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 custom_prompt=custom_article_prompt,
                 site_name=site_config.get('site_name'),
                 language=site_config.get('language', 'id'),
-                category_desc=category_desc
+                category_desc=category_desc,
+                internal_links_context=recent_posts_for_links
             )
         
         image_failed = False
