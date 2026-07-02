@@ -3,12 +3,51 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { FileText, CheckCircle, Clock, BarChart2, AlertCircle, Lightbulb, TrendingUp, Sparkles, MessageSquare } from 'lucide-react';
 import EmptyState from '@/components/EmptyState';
-
 import { useSiteContext } from '@/contexts/SiteContext';
+
+interface DashboardRecommendation {
+  type: string;
+  category: string;
+  action: string;
+  reason: string;
+}
+
+interface DashboardInsightsData {
+  status: string;
+  message?: string;
+  recommendations?: DashboardRecommendation[];
+}
+
+interface DashboardLogEntry {
+  title: string;
+  category: string;
+  timestamp: string;
+  success: boolean | 'pending';
+}
+
+interface CategoryPerformance {
+  category: string;
+  total_posts: number;
+  total_views: number;
+  total_comments: number;
+  avg_engagement: number;
+}
+
+interface DashboardApiResponse {
+  stats?: {
+    total_posts: number;
+    success_rate: number;
+    failed_posts: number;
+  };
+  next_post_time?: string;
+  logs?: DashboardLogEntry[];
+  insights?: DashboardInsightsData;
+  performance?: CategoryPerformance[];
+}
 
 export default function Dashboard() {
   const { selectedSiteId } = useSiteContext();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DashboardApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -17,12 +56,12 @@ export default function Dashboard() {
       return;
     }
     setLoading(true);
-    apiFetch(`/api/dashboard?site_id=${selectedSiteId}&t=${Date.now()}`)
-      .then(res => res.json())
-      .then(d => {
-        setData(d);
-        setLoading(false);
-      });
+    const controller = new AbortController();
+    apiFetch(`/api/dashboard?site_id=${selectedSiteId}&t=${Date.now()}`, { signal: controller.signal })
+      .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(d => { setData(d); setLoading(false); })
+      .catch(err => { if (err.name !== 'AbortError') { console.error(err); setLoading(false); } });
+    return () => controller.abort();
   }, [selectedSiteId]);
 
   if (loading) return (
@@ -41,16 +80,16 @@ export default function Dashboard() {
 
   // Calculate SVG Chart coordinates if performance data exists
   const hasPerfData = performance && performance.length > 0;
-  let chartPoints: any[] = [];
+  let chartPoints: { x: number; y: number; name: string; val: number }[] = [];
   let polylinePoints = "";
   let areaPoints = "";
   const chartHeight = 160;
   const chartWidth = 600;
 
   if (hasPerfData) {
-    const maxVal = Math.max(...performance.map((c: any) => c.avg_engagement || 1.0), 2.0);
+    const maxVal = Math.max(...performance.map((c: CategoryPerformance) => c.avg_engagement || 1.0), 2.0);
     const len = performance.length;
-    chartPoints = performance.map((cat: any, idx: number) => {
+    chartPoints = performance.map((cat: CategoryPerformance, idx: number) => {
       const x = len > 1 ? (idx / (len - 1)) * (chartWidth - 80) + 40 : chartWidth / 2;
       const y = chartHeight - ((cat.avg_engagement || 0) / maxVal) * (chartHeight - 60) - 30;
       return { x, y, name: cat.category, val: cat.avg_engagement || 0 };
@@ -152,7 +191,7 @@ export default function Dashboard() {
           <CardContent className="flex-1">
             {insights?.status === 'success' && insights?.recommendations?.length > 0 ? (
               <div className="space-y-4">
-                {insights.recommendations.map((rec: any, idx: number) => (
+                {insights.recommendations.map((rec: DashboardRecommendation, idx: number) => (
                   <div 
                     key={idx} 
                     className={`p-4 rounded-xl border flex gap-3 transition-all hover:scale-[1.01] ${
@@ -192,7 +231,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {logs?.length > 0 ? logs.slice(0, 5).map((log: any, i: number) => (
+              {logs?.length > 0 ? logs.slice(0, 5).map((log: DashboardLogEntry, i: number) => (
                 <div key={i} className="flex justify-between items-start pb-4 border-b last:border-0 last:pb-0 last:border-none group">
                   <div className="space-y-1 pr-4">
                     <p className="text-sm font-semibold text-foreground/90 group-hover:text-primary transition-colors leading-tight line-clamp-2">
@@ -343,7 +382,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y border-b divide-border/40">
-                  {performance.map((cat: any, idx: number) => (
+                  {performance.map((cat: CategoryPerformance, idx: number) => (
                     <tr key={idx} className="hover:bg-secondary/40 transition-colors">
                       <td className="px-6 py-4 align-middle font-bold text-foreground/95 capitalize">{cat.category}</td>
                       <td className="px-6 py-4 align-middle text-center font-medium text-foreground/80">{cat.total_posts}</td>

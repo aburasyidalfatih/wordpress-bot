@@ -109,10 +109,12 @@
 {% block scripts %}
 <script>
 let lastUpdated = Date.now();
-setInterval(refreshMetrics, 5000);
 
 function refreshMetrics() {
-    fetch('/api/health-metrics').then(r=>r.json()).then(d=>{
+    fetch('/api/health-metrics').then(r=>{
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(d=>{
         lastUpdated = Date.now();
         const ok = d.service.status==='healthy';
         const el = document.getElementById('health-text');
@@ -124,13 +126,18 @@ function refreshMetrics() {
             if(ve)ve.textContent=v+'%';
             if(be){be.style.width=v+'%';be.style.background=v>85?'#f87171':v>65?'#fbbf24':(n==='cpu'?'#60a5fa':n==='memory'?'#4ade80':'#fbbf24');}
         });
-    }).catch(()=>{});
+    }).catch(err => console.error('Metrics refresh failed:', err));
 }
 
-setInterval(() => {
+const intervalId1 = setInterval(refreshMetrics, 5000);
+const intervalId2 = setInterval(() => {
     const secs = Math.round((Date.now() - lastUpdated) / 1000);
     const el = document.getElementById('last-updated');
     if (el) el.textContent = secs < 5 ? 'Just updated' : `Updated ${secs}s ago`;
 }, 1000);
+window.addEventListener('beforeunload', () => {
+    clearInterval(intervalId1);
+    clearInterval(intervalId2);
+});
 </script>
 {% endblock %}

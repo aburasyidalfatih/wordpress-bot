@@ -1,3 +1,17 @@
+/* ── CSS Custom Properties ────────────────────────────── */
+:root {
+  --color-bg-dark: #09090f;
+  --color-bg-card: #0f0f1a;
+  --color-text-muted: #475569;
+  --color-text-light: #f1f5f9;
+  --color-border: rgba(255,255,255,0.06);
+  --color-primary: #7c3aed;
+  --color-primary-rgb: 139,92,246;
+  --sidebar-width: 220px;
+  --topbar-height: 52px;
+  --content-max-width: 960px;
+}
+
 /* ── Reset ────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -410,6 +424,10 @@ body { opacity: 1; }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.2); border-radius: 99px; }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
 
 
 /* ── Settings 2-col layout ────────────────────────────── */
@@ -479,6 +497,31 @@ body { opacity: 1; }
 .modal-actions .btn { min-width: 90px; }
 
 /* ── Responsive ───────────────────────────────────────── */
+
+/* ── Screen-reader only ──────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ── Blink animation ─────────────────────────────────── */
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+
+/* ── Prompt textarea ─────────────────────────────────── */
+.prompt-textarea {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.775rem;
+    line-height: 1.6;
+    resize: vertical;
+    min-height: 160px;
+}
 @media (max-width: 768px) {
     .sidebar { transform: translateX(-100%); }
     .sidebar.open { transform: translateX(0); box-shadow: 12px 0 40px rgba(0,0,0,0.6); }

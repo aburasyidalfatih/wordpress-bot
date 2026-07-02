@@ -63,7 +63,7 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   });
   const [loading, setLoading] = useState(true);
 
-  const fetchSites = async () => {
+  const fetchSites = async (signal?: AbortSignal) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) {
@@ -74,8 +74,10 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const response = await fetch('/api/sites', {
         headers: {
           'Authorization': `Bearer ${token}`
-        }
+        },
+        signal
       });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
       if (data.success && data.sites) {
         setSites(data.sites);
@@ -87,7 +89,8 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           setSelectedSiteId(data.sites.length > 0 ? data.sites[0].id : null);
         }
       }
-    } catch (error) {
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       console.error('Failed to fetch sites:', error);
     } finally {
       setLoading(false);
@@ -95,7 +98,9 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   useEffect(() => {
-    fetchSites();
+    const controller = new AbortController();
+    fetchSites(controller.signal);
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {

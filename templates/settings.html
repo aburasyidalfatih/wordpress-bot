@@ -22,10 +22,10 @@
                 <div class="form-group">
                     <label class="form-label">Gemini API Key</label>
                     <div class="input-secret">
-                        <input type="password" name="gemini_api_key" value="{{ config.gemini_api_key }}" class="input" placeholder="AIza…" autocomplete="off">
+                        <input type="password" name="gemini_api_key" class="input" placeholder="••••••••" autocomplete="off">
                         <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
                     </div>
-                    <p class="form-hint">Get from <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio ↗</a></p>
+                    <p class="form-hint">Get from <a href="https://makersuite.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio ↗</a></p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Model Artikel</label>
@@ -80,7 +80,7 @@
                 <div class="form-group">
                     <label class="form-label">Bot Token</label>
                     <div class="input-secret">
-                        <input type="password" name="telegram_bot_token" value="{{ config.telegram_bot_token }}" class="input" placeholder="123456:ABC-DEF…" autocomplete="off">
+                        <input type="password" name="telegram_bot_token" class="input" placeholder="••••••••" autocomplete="off">
                         <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
                     </div>
                     <p class="form-hint">Get from @BotFather</p>
@@ -123,7 +123,7 @@
                 <div class="form-group">
                     <label class="form-label">Application Password</label>
                     <div class="input-secret">
-                        <input type="password" name="wordpress_password" value="{{ config.wordpress_password }}" class="input" placeholder="xxxx xxxx xxxx xxxx" autocomplete="off">
+                        <input type="password" name="wordpress_password" class="input" placeholder="••••••••" autocomplete="off">
                         <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
                     </div>
                     <p class="form-hint">WordPress Admin → Users → Profile → Application Passwords</p>
@@ -167,7 +167,7 @@
                 <div class="form-group" style="margin-bottom:0;">
                     <label class="form-label">Access Token</label>
                     <div class="input-secret">
-                        <input type="password" name="facebook_access_token" value="{{ config.facebook_access_token }}" class="input" placeholder="EAAxxxxx…" autocomplete="off">
+                        <input type="password" name="facebook_access_token" class="input" placeholder="••••••••" autocomplete="off">
                         <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
                     </div>
                 </div>
@@ -181,7 +181,7 @@
                 <div class="form-group" style="{% if loop.last %}margin-bottom:0;{% endif %}">
                     <label class="form-label">{{ field[1] }}</label>
                     <div class="input-secret">
-                        <input type="password" name="{{ field[0] }}" value="{{ config[field[0]] }}" class="input" autocomplete="off">
+                        <input type="password" name="{{ field[0] }}" class="input" placeholder="••••••••" autocomplete="off">
                         <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
                     </div>
                 </div>
@@ -199,7 +199,7 @@
                 <div class="form-group" style="margin-bottom:0;">
                     <label class="form-label">Access Token</label>
                     <div class="input-secret">
-                        <input type="password" name="threads_access_token" value="{{ config.threads_access_token }}" class="input" autocomplete="off">
+                        <input type="password" name="threads_access_token" class="input" placeholder="••••••••" autocomplete="off">
                         <button type="button" class="toggle-pw" onclick="togglePassword(this)"><i data-lucide="eye" style="width:14px;height:14px;"></i></button>
                     </div>
                 </div>

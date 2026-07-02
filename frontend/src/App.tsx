@@ -4,6 +4,7 @@ import { apiFetch } from './lib/api';
 import Layout from './components/Layout';
 import { Toaster } from './components/ui/sonner';
 import { SiteProvider } from './contexts/SiteContext';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Lazy loaded pages
 const Landing = lazy(() => import('./pages/Landing'));
@@ -43,22 +44,24 @@ function App() {
     <SiteProvider>
       <BrowserRouter>
         <Suspense fallback={<div className="flex h-screen items-center justify-center">Loading page...</div>}>
-          <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Login setIsAuthenticated={setIsAuthenticated} setUserRole={setUserRole} />} />
-            <Route path="/register" element={<Navigate to="/login" replace />} />
-            
-            {/* Authenticated Routes with Layout */}
-            <Route path="/dashboard" element={isAuthenticated ? <Layout><Dashboard /></Layout> : <Navigate to="/login" />} />
-            <Route path="/sites" element={isAuthenticated ? <Layout><Sites /></Layout> : <Navigate to="/login" />} />
-            <Route path="/settings" element={isAuthenticated ? <Layout><Settings /></Layout> : <Navigate to="/login" />} />
-            <Route path="/prompts" element={isAuthenticated ? <Layout><Prompts /></Layout> : <Navigate to="/login" />} />
-            <Route path="/research" element={isAuthenticated ? <Layout><Research /></Layout> : <Navigate to="/login" />} />
-            <Route path="/queue" element={isAuthenticated ? <Layout><Queue /></Layout> : <Navigate to="/login" />} />
-            <Route path="/monitor" element={isAuthenticated ? <Layout><Monitor /></Layout> : <Navigate to="/login" />} />
-            <Route path="/billing" element={isAuthenticated ? <Layout><Billing /></Layout> : <Navigate to="/login" />} />
-            <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/dashboard" />} />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<Landing />} />
+              <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" /> : <Login setIsAuthenticated={setIsAuthenticated} setUserRole={setUserRole} />} />
+              <Route path="/register" element={<Navigate to="/login" replace />} />
+              
+              {/* Authenticated Routes with Layout */}
+              <Route path="/dashboard" element={isAuthenticated ? <Layout><Dashboard /></Layout> : <Navigate to="/login" />} />
+              <Route path="/sites" element={isAuthenticated ? <Layout><Sites /></Layout> : <Navigate to="/login" />} />
+              <Route path="/settings" element={isAuthenticated ? <Layout><Settings /></Layout> : <Navigate to="/login" />} />
+              <Route path="/prompts" element={isAuthenticated ? <Layout><Prompts /></Layout> : <Navigate to="/login" />} />
+              <Route path="/research" element={isAuthenticated ? <Layout><Research /></Layout> : <Navigate to="/login" />} />
+              <Route path="/queue" element={isAuthenticated ? <Layout><Queue /></Layout> : <Navigate to="/login" />} />
+              <Route path="/monitor" element={isAuthenticated ? <Layout><Monitor /></Layout> : <Navigate to="/login" />} />
+              <Route path="/billing" element={isAuthenticated ? <Layout><Billing /></Layout> : <Navigate to="/login" />} />
+              <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/dashboard" />} />
+            </Routes>
+          </ErrorBoundary>
         </Suspense>
         <Toaster position="top-center" richColors />
       </BrowserRouter>

@@ -2,11 +2,12 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
     <title>{% block title %}WordPress Bot{% endblock %}</title>
     <link rel="stylesheet" href="/static/app.css">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-    <script src="/static/lucide.min.js"></script>
+    <script src="/static/lucide.min.js" defer></script>
 </head>
 <body class="page-transition">
 
@@ -44,7 +45,7 @@
     <!-- Page wrapper -->
     <div class="page-wrapper">
         <header class="topbar">
-            <button class="hamburger" onclick="toggleSidebar()"><i data-lucide="menu" style="width:16px;height:16px;"></i></button>
+            <button class="hamburger" onclick="toggleSidebar()" aria-label="Toggle navigation"><i data-lucide="menu" style="width:16px;height:16px;"></i></button>
             <div style="min-width:0;">
                 <div class="topbar-heading">{% block page_title %}{% endblock %}</div>
                 {% set subtitle %}{% block page_subtitle %}{% endblock %}{% endset %}

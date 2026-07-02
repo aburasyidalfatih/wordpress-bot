@@ -58,6 +58,7 @@
 <!-- Trending Lookup -->
 <div class="card section">
     <div class="card-header"><div class="card-title"><i data-lucide="flame"></i> Trending by Category</div></div>
+    <label for="categorySelect" class="sr-only">Pilih Kategori</label>
     <select id="categorySelect" onchange="loadTrending()" class="input">
         <option value="">— Select a category —</option>
         {% for cat in config.selected_categories %}
@@ -99,9 +100,26 @@
 {% block scripts %}
 <script>
 function renderList(id, items, icon) {
-    document.getElementById(id).innerHTML = items.length
-        ? items.map(t=>`<li style="padding:6px 10px;background:rgba(255,255,255,0.02);border-radius:5px;font-size:0.8rem;color:#cbd5e1;display:flex;align-items:center;gap:6px;"><i data-lucide="${icon}" style="width:11px;height:11px;flex-shrink:0;color:#475569;"></i>${t}</li>`).join('')
-        : `<li style="font-size:0.8rem;color:#475569;padding:4px 0;">No data</li>`;
+    const ul = document.getElementById(id);
+    ul.innerHTML = '';
+    if (items.length) {
+        items.forEach(t => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:6px 10px;background:rgba(255,255,255,0.02);border-radius:5px;font-size:0.8rem;color:#cbd5e1;display:flex;align-items:center;gap:6px;';
+            const i = document.createElement('i');
+            i.setAttribute('data-lucide', icon);
+            i.style.cssText = 'width:11px;height:11px;flex-shrink:0;color:#475569;';
+            li.appendChild(i);
+            const txt = document.createTextNode(t);
+            li.appendChild(txt);
+            ul.appendChild(li);
+        });
+    } else {
+        const li = document.createElement('li');
+        li.style.cssText = 'font-size:0.8rem;color:#475569;padding:4px 0;';
+        li.textContent = 'No data';
+        ul.appendChild(li);
+    }
     lucide.createIcons();
 }
 function loadTrending() {
@@ -122,12 +140,33 @@ function getSuggestions() {
     if (!cat) return showToast('Select a category first','warning');
     fetch('/api/suggest-topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat,count:10})})
     .then(r=>r.json()).then(d=>{
-        document.getElementById('suggestionsList').innerHTML = d.suggestions.map(s=>
-            `<div style="padding:7px 12px;margin-bottom:4px;border-radius:5px;border-left:2px solid ${s.type==='rising'?'#4ade80':'#60a5fa'};background:rgba(255,255,255,0.02);font-size:0.8rem;color:#cbd5e1;display:flex;align-items:center;gap:8px;">
-                <i data-lucide="${s.type==='rising'?'rocket':'star'}" style="width:12px;height:12px;flex-shrink:0;color:${s.type==='rising'?'#4ade80':'#60a5fa'};"></i>
-                <span><strong style="color:${s.type==='rising'?'#4ade80':'#60a5fa'};">${s.type==='rising'?'Rising':'Popular'}:</strong> ${s.topic}</span>
-            </div>`
-        ).join('')||'<p style="font-size:0.8rem;color:#475569;">No suggestions</p>';
+        const container = document.getElementById('suggestionsList');
+        container.innerHTML = '';
+        if (!d.suggestions || !d.suggestions.length) {
+            const p = document.createElement('p');
+            p.style.cssText = 'font-size:0.8rem;color:#475569;';
+            p.textContent = 'No suggestions';
+            container.appendChild(p);
+        } else {
+            d.suggestions.forEach(s => {
+                const isRising = s.type === 'rising';
+                const color = isRising ? '#4ade80' : '#60a5fa';
+                const div = document.createElement('div');
+                div.style.cssText = 'padding:7px 12px;margin-bottom:4px;border-radius:5px;border-left:2px solid ' + color + ';background:rgba(255,255,255,0.02);font-size:0.8rem;color:#cbd5e1;display:flex;align-items:center;gap:8px;';
+                const icon = document.createElement('i');
+                icon.setAttribute('data-lucide', isRising ? 'rocket' : 'star');
+                icon.style.cssText = 'width:12px;height:12px;flex-shrink:0;color:' + color + ';';
+                div.appendChild(icon);
+                const span = document.createElement('span');
+                const strong = document.createElement('strong');
+                strong.style.color = color;
+                strong.textContent = isRising ? 'Rising:' : 'Popular:';
+                span.appendChild(strong);
+                span.appendChild(document.createTextNode(' ' + s.topic));
+                div.appendChild(span);
+                container.appendChild(div);
+            });
+        }
         lucide.createIcons();
     }).catch(e=>showToast('Error: '+e.message,'error'));
 }

@@ -39,7 +39,13 @@ function showToast(message, type = 'info', duration = 4000) {
     const icons = { success: 'check-circle', error: 'x-circle', info: 'info', warning: 'alert-triangle' };
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    toast.innerHTML = `<i data-lucide="${icons[type]||'info'}" style="width:15px;height:15px;flex-shrink:0;"></i><span>${message}</span>`;
+    const icon = document.createElement('i');
+    icon.setAttribute('data-lucide', icons[type] || 'info');
+    icon.style.cssText = 'width:15px;height:15px;flex-shrink:0;';
+    toast.appendChild(icon);
+    const span = document.createElement('span');
+    span.textContent = message;
+    toast.appendChild(span);
     container.appendChild(toast);
     lucide.createIcons({ nodes: [toast] });
     setTimeout(() => {
@@ -56,11 +62,20 @@ function showLoading(msg = 'Generating Article…') {
     if (!el) {
         el = document.createElement('div');
         el.id = 'loadingOverlay';
-        el.innerHTML = `<div class="loading-box">
-            <div class="spinner spinner-lg" style="margin:0 auto;"></div>
-            <h3 id="loading-msg">${msg}</h3>
-            <p>This may take 30–60 seconds</p>
-        </div>`;
+        const box = document.createElement('div');
+        box.className = 'loading-box';
+        const spinner = document.createElement('div');
+        spinner.className = 'spinner spinner-lg';
+        spinner.style.margin = '0 auto';
+        box.appendChild(spinner);
+        const h3 = document.createElement('h3');
+        h3.id = 'loading-msg';
+        h3.textContent = msg;
+        box.appendChild(h3);
+        const p = document.createElement('p');
+        p.textContent = 'This may take 30\u201360 seconds';
+        box.appendChild(p);
+        el.appendChild(box);
         document.body.appendChild(el);
     } else {
         const m = el.querySelector('#loading-msg');
@@ -79,7 +94,7 @@ function apiAction(url, btn, loadingText, successText) {
     btn.disabled = true;
     btn.innerHTML = `<span class="spinner"></span> ${loadingText || 'Loading…'}`;
     fetch(url, { method: 'POST' })
-        .then(r => r.json())
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(data => {
             btn.disabled = false;
             btn.innerHTML = orig;

@@ -45,15 +45,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { sites, selectedSiteId, setSelectedSiteId, loading } = useSiteContext();
 
   useEffect(() => {
-    apiFetch('/api/profile')
+    const controller = new AbortController();
+    apiFetch('/api/profile', { signal: controller.signal })
       .then(res => res.json())
       .then(data => {
         if (data.success && data.profile) {
           setProfile(data.profile);
         }
       })
-      .catch(console.error);
-  }, [location.pathname]);
+      .catch(err => { if (err.name !== 'AbortError') console.error(err); });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const handleRefresh = () => {
@@ -232,12 +234,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <input
                 type="search"
                 placeholder="Search..."
-                className="h-9 w-64 rounded-full border border-input bg-background/50 pl-9 pr-4 text-sm ring-offset-background transition-all focus:w-72 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                disabled
+                aria-label="Search (coming soon)"
+                className="h-9 w-64 rounded-full border border-input bg-background/50 pl-9 pr-4 text-sm ring-offset-background transition-all focus:w-72 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
             <Button variant="ghost" size="icon" className="rounded-full relative hover:bg-secondary">
               <Bell className="h-5 w-5 text-muted-foreground" />
-              <span className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
             </Button>
 
             {/* Desktop Credits Badge */}

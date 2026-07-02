@@ -1,27 +1,48 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { apiFetch } from '../lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Activity, HardDrive, Cpu, MemoryStick, Clock, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
+interface MonitorSystemInfo {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  uptime: string;
+}
+
+interface MonitorServiceInfo {
+  scheduler_running: boolean;
+  scheduler_jobs: number;
+  log_size: number;
+}
+
+interface MonitorApiResponse {
+  system_info?: MonitorSystemInfo;
+  service_info?: MonitorServiceInfo;
+  recent_errors?: string[];
+}
+
 export default function Monitor() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<MonitorApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
-
-  const fetchMonitor = () => {
-    apiFetch('/api/monitor')
-      .then(res => res.json())
-      .then(d => {
-        setData(d);
-        setLoading(false);
-      });
-  };
+  const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    const fetchMonitor = () => {
+      // Abort any in-flight request before starting a new one
+      controllerRef.current?.abort();
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      apiFetch('/api/monitor', { signal: controller.signal })
+        .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+        .then(d => { setData(d); setLoading(false); })
+        .catch(err => { if (err.name !== 'AbortError') setLoading(false); });
+    };
     fetchMonitor();
-    const interval = setInterval(fetchMonitor, 5000); // Auto refresh every 5s
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchMonitor, 5000);
+    return () => { controllerRef.current?.abort(); clearInterval(interval); };
   }, []);
 
   const handleDownloadLogs = async () => {

@@ -6,10 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
+import type { PromptsData } from '../lib/types';
 
 export default function Prompts() {
   const { selectedSiteId } = useSiteContext();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<PromptsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
