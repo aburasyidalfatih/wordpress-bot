@@ -414,7 +414,11 @@ OUTPUT FORMAT (JSON):
     "focus_keyword": "main keyword of the article",
     "excerpt": "Engaging summary of 2-3 sentences with a strong hook",
     "reading_time": "estimated reading time (minutes)",
-    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"]
+    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
+    "faqs": [
+        {"question": "Question 1", "answer": "Answer 1"},
+        {"question": "Question 2", "answer": "Answer 2"}
+    ]
 }}
 
 IMPORTANT:
@@ -582,7 +586,11 @@ FORMAT OUTPUT (JSON):
     "focus_keyword": "keyword utama artikel",
     "excerpt": "Ringkasan engaging 2-3 kalimat dengan hook kuat",
     "reading_time": "estimasi waktu baca (menit)",
-    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"]
+    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
+    "faqs": [
+        {"question": "Pertanyaan 1", "answer": "Jawaban 1"},
+        {"question": "Pertanyaan 2", "answer": "Jawaban 2"}
+    ]
 }}
 
 PENTING:
@@ -1056,7 +1064,7 @@ class WordPressPublisher:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
     )
-    def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None):
+    def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
         
@@ -1089,6 +1097,85 @@ class WordPressPublisher:
         content = re.sub(r'"\s*\}\s*$', '', content)
         
         content = content.strip()
+        
+        # HTML Sanitizer (Fix broken tags)
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(content, 'html.parser')
+            # Fix broken links
+            for a in soup.find_all('a'):
+                if not a.get('href') or a.get('href').startswith('http') == False:
+                    # just keep text if invalid
+                    pass
+            content = str(soup)
+        except Exception as e:
+            logger.warning(f"Failed to sanitize HTML: {e}")
+            
+        # Inject Key Takeaways Box
+        if key_takeaways and isinstance(key_takeaways, list):
+            box = f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
+    <h3 style="margin-top:0; color:#0369a1;">Ringkasan Penting</h3>
+    <ul style="margin-bottom:0;">
+        {''.join([f'<li>{k}</li>' for k in key_takeaways])}
+    </ul>
+</div>"""
+            content = box + "\n" + content
+            
+        # Inject FAQ Schema (JSON-LD)
+        if faqs and isinstance(faqs, list):
+            import json
+            schema = {
+                "@context": "https://schema.org",
+                "@type": "FAQPage",
+                "mainEntity": []
+            }
+            for faq in faqs:
+                if 'question' in faq and 'answer' in faq:
+                    schema["mainEntity"].append({
+                        "@type": "Question",
+                        "name": faq["question"],
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": faq["answer"]
+                        }
+                    })
+            if schema["mainEntity"]:
+                schema_html = f'\n<script type="application/ld+json">{json.dumps(schema)}</script>\n'
+                content += schema_html
+                
+        # YouTube Auto-Embed
+        try:
+            from duckduckgo_search import DDGS
+            search_term = focus_keyword if focus_keyword else title
+            ddgs = DDGS()
+            results = ddgs.text(f"site:youtube.com {search_term}", max_results=1)
+            if results:
+                url = results[0].get('href', '')
+                import urllib.parse
+                parsed = urllib.parse.urlparse(url)
+                video_id = None
+                if 'youtube.com/watch' in url:
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    video_id = qs.get('v', [None])[0]
+                elif 'youtu.be/' in url:
+                    video_id = parsed.path.lstrip('/')
+                
+                if video_id:
+                    iframe = f'\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\n'
+                    # Insert in the middle of content
+                    # We can find the middle <h2 or <h3
+                    import re
+                    parts = re.split(r'(<h2.*?>)', content)
+                    if len(parts) >= 3:
+                        mid_idx = len(parts) // 2
+                        if mid_idx % 2 == 0:
+                            mid_idx += 1
+                        parts.insert(mid_idx, iframe)
+                        content = "".join(parts)
+                    else:
+                        content += iframe
+        except Exception as e:
+            logger.warning(f"Failed to embed YouTube video: {e}")
         
         post_data = {
             'title': title,

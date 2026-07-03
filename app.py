@@ -487,7 +487,9 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             featured_image_id,
             article.get('meta_description'),
             article.get('excerpt'),
-            article.get('focus_keyword')
+            article.get('focus_keyword'),
+            key_takeaways=article.get('key_takeaways'),
+            faqs=article.get('faqs')
         )
         
         post_id = None
