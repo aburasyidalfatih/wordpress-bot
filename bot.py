@@ -269,7 +269,8 @@ RELATED KEYWORDS: {context}
 - Do not use the year 2024 or 2025
 - Example: "Complete Guide 2026" or "Latest Strategies"
 
-ARTICLE STRUCTURE (2000-2500 WORDS):
+ARTICLE STRUCTURE (MINIMUM 2000-2500 WORDS - STRICTLY REQUIRED!):
+⚠️ WRITE IN EXTREME DETAIL AND LENGTH. DO NOT SUMMARIZE. EACH SUB-HEADING MUST CONSIST OF AT LEAST 4-5 LONG AND COMPREHENSIVE PARAGRAPHS. CREATE A VERY DEEP ARTICLE. IF IT IS LESS THAN 2000 WORDS, THIS ARTICLE WILL BE REJECTED.
 
 1. INTRODUCTORY HOOK (100 words):
    ⚠️ MUST BE VARIATIVE - Use one of these approaches (DO NOT always use statistics):
@@ -433,7 +434,8 @@ RELATED KEYWORDS: {context}
 - Jangan gunakan tahun 2024 atau 2025
 - Contoh: "Panduan Lengkap 2026" atau "Strategi Terkini"
 
-STRUKTUR ARTIKEL (2000-2500 KATA):
+STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
+⚠️ TULIS DENGAN SANGAT MENDETAIL DAN PANJANG. JANGAN MERINGKAS. SETIAP SUB-HEADING HARUS TERDIRI DARI MINIMAL 4-5 PARAGRAF PANJANG DAN KOMPREHENSIF. BENTUKLAH ARTIKEL YANG SANGAT DALAM. JIKA KURANG DARI 2000 KATA, ARTIKEL INI AKAN DITOLAK.
 
 1. HOOK PEMBUKA (100 kata):
    ⚠️ WAJIB VARIATIF - Gunakan salah satu pendekatan ini (JANGAN selalu pakai statistik):
@@ -595,7 +597,8 @@ PENTING:
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.85,
-                top_p=0.9
+                top_p=0.9,
+                max_output_tokens=8192
             )
         )
         
