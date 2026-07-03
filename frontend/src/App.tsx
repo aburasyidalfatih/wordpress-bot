@@ -14,7 +14,6 @@ const Settings = lazy(() => import('./pages/Settings'));
 const Sites = lazy(() => import('./pages/Sites'));
 const Prompts = lazy(() => import('./pages/Prompts'));
 const Research = lazy(() => import('./pages/Research'));
-const Monitor = lazy(() => import('./pages/Monitor'));
 const Queue = lazy(() => import('./pages/Queue'));
 const Billing = lazy(() => import('./pages/Billing'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
@@ -57,7 +56,6 @@ function App() {
               <Route path="/prompts" element={isAuthenticated ? <Layout><Prompts /></Layout> : <Navigate to="/login" />} />
               <Route path="/research" element={isAuthenticated ? <Layout><Research /></Layout> : <Navigate to="/login" />} />
               <Route path="/queue" element={isAuthenticated ? <Layout><Queue /></Layout> : <Navigate to="/login" />} />
-              <Route path="/monitor" element={isAuthenticated ? <Layout><Monitor /></Layout> : <Navigate to="/login" />} />
               <Route path="/billing" element={isAuthenticated ? <Layout><Billing /></Layout> : <Navigate to="/login" />} />
               <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/dashboard" />} />
             </Routes>

@@ -3,13 +3,13 @@ from datetime import datetime
 from flask import Blueprint, jsonify, send_file
 import psutil
 
-from core_extensions import db, logger, get_cached_stats, require_jwt, load_config
+from core_extensions import db, logger, get_cached_stats, require_jwt, require_admin, load_config
 from config import Config
 
 monitor_bp = Blueprint('monitor', __name__)
 
 @monitor_bp.route('/api/monitor')
-@require_jwt
+@require_admin
 def api_monitor(user_id):
     """Monitoring dashboard"""
     from flask import request
@@ -72,7 +72,8 @@ def api_monitor(user_id):
     })
 
 @monitor_bp.route('/api/health-metrics')
-def health_metrics():
+@require_admin
+def health_metrics(user_id):
     """API endpoint for real-time health metrics"""
     try:
         # Resolve log path dynamically
@@ -101,8 +102,8 @@ def health_metrics():
         return jsonify({'error': 'Internal health check error occurred'}), 500
 
 @monitor_bp.route('/download-logs')
-@require_jwt
-def download_logs():
+@require_admin
+def download_logs(user_id):
     """Download log file"""
     try:
         log_path = Config.LOG_FILE

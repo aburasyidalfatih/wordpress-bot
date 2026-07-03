@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { apiFetch } from '../lib/api';
+import Monitor from './Monitor';
 
 interface AdminStats {
   total_users?: number;
@@ -250,7 +251,7 @@ export default function AdminDashboard() {
 
       {/* Tabs Menu */}
       <div className="flex border-b border-border gap-2">
-        {['overview', 'users', 'payments', 'settings', 'logs'].map((tab) => (
+        {['overview', 'users', 'payments', 'monitor', 'settings', 'logs'].map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -264,7 +265,9 @@ export default function AdminDashboard() {
               ? `Payments (${pendingPayments.length})` 
               : tab === 'settings' 
                 ? 'Admin Settings' 
-                : tab}
+                : tab === 'monitor'
+                  ? 'System Monitor'
+                  : tab}
           </button>
         ))}
       </div>
@@ -505,7 +508,14 @@ export default function AdminDashboard() {
         </Card>
       )}
 
-      {/* 4. Logs Console Tab */}
+      {/* 4. Monitor Tab */}
+      {activeTab === 'monitor' && (
+        <div className="border border-border/50 shadow-md bg-card rounded-xl p-6">
+          <Monitor />
+        </div>
+      )}
+
+      {/* 5. Logs Console Tab */}
       {activeTab === 'logs' && (
         <Card className="border-border/50 shadow-md">
           <CardHeader>
