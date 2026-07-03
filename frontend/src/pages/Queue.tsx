@@ -21,16 +21,37 @@ import {
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
 
+export interface QueueItemType {
+  id: number;
+  title: string;
+  category: string;
+  status: string;
+  target_keywords?: string;
+  created_at?: string;
+  post_url?: string;
+}
+
+export interface HistoryItemType {
+  id: number;
+  title: string;
+  category: string;
+  success: boolean;
+  image_failed: boolean;
+  timestamp: string;
+  result: string;
+  post_url?: string;
+}
+
 export default function Queue() {
   const { selectedSiteId, sites } = useSiteContext();
-  const [items, setItems] = useState<any[]>([]);
-  const [historyItems, setHistoryItems] = useState<any[]>([]);
+  const [items, setItems] = useState<QueueItemType[]>([]);
+  const [historyItems, setHistoryItems] = useState<HistoryItemType[]>([]);
   const [activeTab, setActiveTab] = useState<'queue' | 'history'>('queue');
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newCategory, setNewCategory] = useState('');
-  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<QueueItemType | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editKeywords, setEditKeywords] = useState('');
   const [regeneratingIds, setRegeneratingIds] = useState<Record<number, boolean>>({});
@@ -60,7 +81,9 @@ export default function Queue() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids: newItems.map((i) => i.id) })
-        }).catch(err => console.error('Failed to save order:', err));
+        }).catch(err => {
+          if (import.meta.env.DEV) console.error('Failed to save order:', err);
+        });
         
         return newItems;
       });
@@ -83,11 +106,11 @@ export default function Queue() {
           setItems(d.queue || []);
           setHistoryItems(d.history || []);
         } else {
-          console.error('Queue API failed:', d.error);
+          if (import.meta.env.DEV) console.error('Queue API failed:', d.error);
         }
       })
       .catch(e => {
-        console.error('Failed to load queue/history:', e);
+        if (import.meta.env.DEV) console.error('Failed to load queue/history:', e);
       })
       .finally(() => {
         if (!silent) setLoading(false);
@@ -140,7 +163,7 @@ export default function Queue() {
       });
       loadQueue();
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
     } finally {
       setConfirmAction(null);
     }
@@ -164,7 +187,7 @@ export default function Queue() {
         }, 60000);
       }
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Network error');
       setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
     }
@@ -194,7 +217,7 @@ export default function Queue() {
         toast.error('Gagal menambahkan ke antrian: ' + (data.error || 'Terjadi kesalahan pada peladen.'));
       }
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Galat jaringan! Pastikan Anda sudah memuat ulang (Refresh) halaman.');
     } finally {
       setAdding(false);
@@ -218,7 +241,7 @@ export default function Queue() {
         toast.error('Gagal mengacak: ' + (data.error || 'Server error'));
       }
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Network error');
     } finally {
       setShuffling(false);
@@ -246,7 +269,7 @@ export default function Queue() {
         loadQueue(true);
       }
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Network error');
       loadQueue(true);
     } finally {
@@ -254,7 +277,7 @@ export default function Queue() {
     }
   };
 
-  const handleEdit = (item: any) => {
+  const handleEdit = (item: QueueItemType) => {
     setEditingItem(item);
     setEditTitle(item.title);
     setEditKeywords(item.target_keywords || '');
@@ -277,7 +300,7 @@ export default function Queue() {
         toast.error('Failed to save edit: ' + (data.error || 'Server error'));
       }
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Network error');
     }
   };
@@ -317,7 +340,7 @@ export default function Queue() {
               {availableCategories.length === 0 ? (
                 <option value="" disabled>No categories found</option>
               ) : (
-                availableCategories.map((cat: any) => (
+                availableCategories.map((cat: {id: number, name: string}) => (
                   <option key={cat.id} value={cat.name}>{cat.name}</option>
                 ))
               )}

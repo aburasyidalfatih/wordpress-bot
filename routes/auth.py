@@ -1,6 +1,6 @@
 import datetime
 import jwt
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, make_response
 from flask import session
 from werkzeug.security import check_password_hash, generate_password_hash
 import requests
@@ -129,7 +129,7 @@ def api_auth_google():
             'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
         }, Config.SECRET_KEY, algorithm='HS256')
         
-        return jsonify({
+        resp = make_response(jsonify({
             'success': True,
             'token': token,
             'user': {
@@ -139,7 +139,9 @@ def api_auth_google():
                 'tier': user.tier,
                 'credits': user.credits
             }
-        })
+        }))
+        resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=False, max_age=7*24*60*60)
+        return resp
 
 @auth_bp.route('/api/login', methods=['POST'])
 def api_auth_login():
@@ -158,7 +160,8 @@ def api_auth_login():
                 'user_id': user.id,
                 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
             }, Config.SECRET_KEY, algorithm='HS256')
-            return jsonify({
+            
+            resp = make_response(jsonify({
                 'success': True,
                 'token': token,
                 'user': {
@@ -168,7 +171,9 @@ def api_auth_login():
                     'tier': user.tier or 'free',
                     'credits': user.credits if user.credits is not None else 5
                 }
-            })
+            }))
+            resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=False, max_age=7*24*60*60)
+            return resp
     return jsonify({'success': False, 'error': 'Invalid email or password', 'code': 401}), 401
 
 @auth_bp.route('/api/auth/status', methods=['GET'])
@@ -233,4 +238,6 @@ def api_auth_config():
 @auth_bp.route('/logout', methods=['GET', 'POST'])
 def logout():
     session.clear()
-    return jsonify({'success': True})
+    resp = make_response(jsonify({'success': True}))
+    resp.delete_cookie('auth_token')
+    return resp

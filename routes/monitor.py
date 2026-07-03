@@ -56,7 +56,11 @@ def api_monitor(user_id):
                 lines = f.readlines()
                 for line in lines[-50:]:
                     if 'ERROR' in line:
-                        recent_errors.append(line.strip())
+                        # Sanitize line to avoid exposing internal paths
+                        sanitized = line.strip()
+                        import re
+                        sanitized = re.sub(r'(?:[a-zA-Z]:\\|/)[^\s]*\.(?:py|js|tsx?|html|css)', '[FILE]', sanitized)
+                        recent_errors.append(sanitized)
     except Exception as e:
         logger.error(f"Error reading log file: {e}")
     
@@ -94,7 +98,7 @@ def health_metrics():
         })
     except Exception as e:
         logger.error(f"Health metrics error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal health check error occurred'}), 500
 
 @monitor_bp.route('/download-logs')
 @require_jwt
@@ -138,5 +142,5 @@ def health():
         logger.error(f"Health check failed: {e}")
         return jsonify({
             'status': 'unhealthy',
-            'error': str(e)
+            'error': 'Internal health check error occurred'
         }), 500

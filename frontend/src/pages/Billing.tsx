@@ -29,12 +29,34 @@ interface InvoiceData {
   };
 }
 
+interface BillingProfile {
+  credits?: number;
+  tier?: string;
+}
+
+interface BillingHistoryItem {
+  id: number;
+  invoice_id: string;
+  created_at: string;
+  payment_method: string;
+  credits_purchased: number;
+  amount: number;
+  status: string;
+  receipt_url?: string;
+  bank_details?: {
+    bank_name: string;
+    account_number: string;
+    account_holder: string;
+    whatsapp_number?: string;
+  };
+}
+
 export default function Billing() {
-  const [profile, setProfile] = useState<any>({});
+  const [profile, setProfile] = useState<BillingProfile>({});
   const [creditsCount, setCreditsCount] = useState<number>(25);
   const [paymentMethod, setPaymentMethod] = useState<string>('manual');
   const [paymentCode, setPaymentCode] = useState<string>('QRIS2'); // Tripay default
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<BillingHistoryItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [processing, setProcessing] = useState<boolean>(false);
   const [activeInvoice, setActiveInvoice] = useState<InvoiceData | null>(null);
@@ -83,7 +105,7 @@ export default function Billing() {
         setPaymentMethod(defaultMethod);
       }
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Failed to load billing history');
     } finally {
       setLoading(false);

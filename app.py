@@ -69,6 +69,8 @@ except Exception as e:
 app = Flask(__name__)
 app.config.from_object(Config)
 
+from security import generate_csrf_token
+app.jinja_env.globals['csrf_token'] = generate_csrf_token
 
 # Register Blueprints
 app.register_blueprint(auth_bp)

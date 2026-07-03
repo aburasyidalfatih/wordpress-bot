@@ -75,6 +75,7 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         headers: {
           'Authorization': `Bearer ${token}`
         },
+        credentials: 'include',
         signal
       });
       if (!response.ok) throw new Error('HTTP ' + response.status);

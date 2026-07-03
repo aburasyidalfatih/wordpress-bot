@@ -189,7 +189,7 @@ export default function Dashboard() {
             <CardDescription>Analisis performa cerdas berbasis Machine Learning.</CardDescription>
           </CardHeader>
           <CardContent className="flex-1">
-            {insights?.status === 'success' && insights?.recommendations?.length > 0 ? (
+            {insights?.status === 'success' && insights?.recommendations && insights.recommendations.length > 0 ? (
               <div className="space-y-4">
                 {insights.recommendations.map((rec: DashboardRecommendation, idx: number) => (
                   <div 
@@ -231,7 +231,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {logs?.length > 0 ? logs.slice(0, 5).map((log: DashboardLogEntry, i: number) => (
+              {logs && logs.length > 0 ? logs.slice(0, 5).map((log: DashboardLogEntry, i: number) => (
                 <div key={i} className="flex justify-between items-start pb-4 border-b last:border-0 last:pb-0 last:border-none group">
                   <div className="space-y-1 pr-4">
                     <p className="text-sm font-semibold text-foreground/90 group-hover:text-primary transition-colors leading-tight line-clamp-2">
@@ -369,7 +369,7 @@ export default function Dashboard() {
           <CardDescription>Rincian performa postingan dan total keterlibatan per kategori.</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {performance?.length > 0 ? (
+          {performance && performance.length > 0 ? (
             <div className="relative w-full overflow-auto">
               <table className="w-full caption-bottom text-sm">
                 <thead>

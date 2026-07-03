@@ -119,8 +119,8 @@ export default function Sites() {
       if (res.ok && data.success) {
         setCurrentSite(prev => {
           const newCategories = data.categories || [];
-          const existingSelected = (prev.selected_categories || []).filter((sel: any) =>
-            newCategories.some((cat: any) => cat.id === sel.id)
+          const existingSelected = (prev.selected_categories || []).filter((sel: {id: number, name: string, count?: number}) =>
+            newCategories.some((cat: {id: number, name: string, count?: number}) => cat.id === sel.id)
           );
           const finalSelection = existingSelected.length === 0 ? newCategories : existingSelected;
           return {
@@ -273,18 +273,18 @@ export default function Sites() {
                                   Centang Semua
                                 </Label>
                               </div>
-                              {currentSite.categories.map((cat: any) => (
+                              {currentSite.categories.map((cat: {id: number, name: string, count?: number}) => (
                                 <div key={cat.id} className="flex items-center space-x-3 p-1">
                                   <input
                                     type="checkbox"
                                     id={`cat_${cat.id}`}
                                     name="selected_categories"
                                     value={cat.id}
-                                    checked={currentSite.selected_categories?.some((c: any) => c.id === cat.id) || false}
+                                    checked={currentSite.selected_categories?.some((c: {id: number, name: string, count?: number}) => c.id === cat.id) || false}
                                     onChange={(e) => {
                                       const newSelection = e.target.checked
                                         ? [...(currentSite.selected_categories || []), cat]
-                                        : (currentSite.selected_categories || []).filter((c: any) => c.id !== cat.id);
+                                        : (currentSite.selected_categories || []).filter((c: {id: number, name: string, count?: number}) => c.id !== cat.id);
                                       setCurrentSite({ ...currentSite, selected_categories: newSelection });
                                     }}
                                     className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"

@@ -4,8 +4,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Trash2, GripVertical, Pencil, Play, Eye, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import type { QueueItemType } from './Queue';
 
-export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNow }: { item: any, handleDelete: (id: number) => void, handleEdit: (item: any) => void, handlePostNow: (id: number) => void }) {
+export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNow }: { item: QueueItemType, handleDelete: (id: number) => void, handleEdit: (item: QueueItemType) => void, handlePostNow: (id: number) => void }) {
   const {
     attributes,
     listeners,

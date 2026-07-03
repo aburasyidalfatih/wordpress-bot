@@ -1,3 +1,6 @@
+(function() {
+'use strict';
+
 // ── Page transitions ───────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
@@ -140,7 +143,7 @@ function showConfirm(title, message, onConfirm) {
             <p id="confirm-msg" class="modal-msg"></p>
             <div class="modal-actions">
                 <button class="btn btn-ghost" onclick="closeConfirm()">Cancel</button>
-                <button id="confirm-ok" class="btn btn-primary">Confirm</button>
+                <button id="confirm-ok" class="btn btn-primary confirm-btn">Confirm</button>
             </div>
         </div>`;
         document.body.appendChild(modal);
@@ -150,10 +153,25 @@ function showConfirm(title, message, onConfirm) {
     document.getElementById('confirm-ok').onclick = () => { closeConfirm(); onConfirm(); };
     modal.classList.add('open');
     lucide.createIcons({ nodes: [modal] });
+
+    // Focus the confirm button
+    const confirmBtn = modal.querySelector('.confirm-btn');
+    if (confirmBtn) confirmBtn.focus();
+
+    // Close on Escape key
+    const escHandler = (e) => { if (e.key === 'Escape') closeConfirm(); };
+    document.addEventListener('keydown', escHandler);
+    // Store handler for cleanup in closeConfirm
+    modal._escHandler = escHandler;
 }
 function closeConfirm() {
     const m = document.getElementById('confirm-modal');
-    if (m) m.classList.remove('open');
+    if (m) {
+        if (m._escHandler) {
+            document.removeEventListener('keydown', m._escHandler);
+        }
+        m.classList.remove('open');
+    }
 }
 
 // ── Password toggle ────────────────────────────────────
@@ -164,3 +182,16 @@ function togglePassword(btn) {
     btn.innerHTML = `<i data-lucide="${isText ? 'eye' : 'eye-off'}" style="width:14px;height:14px;"></i>`;
     lucide.createIcons({ nodes: [btn] });
 }
+
+// ── Expose to global scope for inline handlers ─────────
+window.showToast = showToast;
+window.showLoading = showLoading;
+window.hideLoading = hideLoading;
+window.apiAction = apiAction;
+window.logout = logout;
+window.toggleSidebar = toggleSidebar;
+window.showConfirm = showConfirm;
+window.closeConfirm = closeConfirm;
+window.togglePassword = togglePassword;
+
+})();

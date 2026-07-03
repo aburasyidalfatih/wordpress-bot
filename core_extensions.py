@@ -89,12 +89,16 @@ def save_config(user_id, config_data):
 def require_jwt(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        token = request.cookies.get('auth_token')
         auth_header = request.headers.get('Authorization')
-        logger.info(f"JWT Check for path: {request.path}, auth_header: {auth_header[:20] + '...' if auth_header else None}")
-        if not auth_header or not auth_header.startswith('Bearer '):
+        
+        if not token and auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            
+        logger.info(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
+        if not token:
             return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
             
-        token = auth_header.split(' ')[1]
         try:
             payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
             user_id = payload.get('user_id')

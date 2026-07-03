@@ -7,15 +7,82 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { apiFetch } from '../lib/api';
 
+interface AdminStats {
+  total_users?: number;
+  total_pro?: number;
+  total_earnings_idr?: number;
+  total_credits_purchased?: number;
+  queue_count?: number;
+  total_articles?: number;
+}
+
+interface AdminUser {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  tier: string;
+  credits: number;
+  is_active: boolean;
+}
+
+interface PendingPayment {
+  id: number;
+  invoice_id: string;
+  created_at: string;
+  user_name: string;
+  user_email: string;
+  credits_purchased: number;
+  amount: number;
+  receipt_url?: string;
+}
+
+interface AdminConfig {
+  PAYMENT_USD_RATE?: number;
+  PAYMENT_TRIPAY_ENABLED?: boolean;
+  TRIPAY_MERCHANT_CODE?: string;
+  TRIPAY_API_URL?: string;
+  TRIPAY_API_KEY?: string;
+  TRIPAY_PRIVATE_KEY?: string;
+  has_TRIPAY_API_KEY?: boolean;
+  has_TRIPAY_PRIVATE_KEY?: boolean;
+  PAYMENT_PAYPAL_ENABLED?: boolean;
+  PAYPAL_API_URL?: string;
+  PAYPAL_CLIENT_ID?: string;
+  PAYPAL_SECRET?: string;
+  has_PAYPAL_SECRET?: boolean;
+  PAYMENT_MANUAL_ENABLED?: boolean;
+  MANUAL_BANK_NAME?: string;
+  MANUAL_BANK_HOLDER?: string;
+  MANUAL_BANK_ACCOUNT?: string;
+  ADMIN_WHATSAPP?: string;
+  gemini_api_key?: string;
+  has_gemini_api_key?: boolean;
+  gemini_model?: string;
+  gemini_image_model?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  has_GOOGLE_CLIENT_SECRET?: boolean;
+  SMTP_HOST?: string;
+  SMTP_PORT?: number;
+  SMTP_USER?: string;
+  SMTP_PASSWORD?: string;
+  has_SMTP_PASSWORD?: boolean;
+  SMTP_SENDER_EMAIL?: string;
+  STARSENDER_API_KEY?: string;
+  has_STARSENDER_API_KEY?: boolean;
+  STARSENDER_DEVICE_ID?: string;
+}
+
 export default function AdminDashboard() {
-  const [stats, setStats] = useState<any>({});
-  const [users, setUsers] = useState<any[]>([]);
-  const [pendingPayments, setPendingPayments] = useState<any[]>([]);
+  const [stats, setStats] = useState<AdminStats>({});
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [pendingPayments, setPendingPayments] = useState<PendingPayment[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [config, setConfig] = useState<any>({});
+  const [config, setConfig] = useState<AdminConfig>({});
 
   // Edit user state
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
@@ -46,7 +113,7 @@ export default function AdminDashboard() {
       if (logsData.success) setLogs(logsData.logs || []);
       if (configData.success) setConfig(configData.config || {});
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) console.error(e);
       toast.error('Failed to retrieve administrative data.');
     } finally {
       setLoading(false);
@@ -97,7 +164,7 @@ export default function AdminDashboard() {
   };
 
   // User management handlers
-  const startEditUser = (user: any) => {
+  const startEditUser = (user: AdminUser) => {
     setEditingUserId(user.id);
     setEditRole(user.role);
     setEditTier(user.tier);

@@ -9,9 +9,36 @@ import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
 
+export interface ResearchDataResponse {
+  categories: CategoryType[];
+  research_data: Record<string, ResearchStats>;
+}
+
+export interface CategoryType {
+  id: number;
+  name: string;
+  description?: string;
+}
+
+export interface ResearchStats {
+  created_at: string;
+  trend_score: number;
+  keywords: string[];
+  social_insights: string[];
+  competitor_outlines: {
+    title: string;
+    url: string;
+    headers: string[];
+  }[];
+  youtube_insights: {
+    title: string;
+    snippets: string;
+  }[];
+}
+
 export default function Research() {
   const { selectedSiteId } = useSiteContext();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<ResearchDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [researching, setResearching] = useState(false);
   const [researchingCategory, setResearchingCategory] = useState<string | null>(null);
@@ -72,7 +99,7 @@ export default function Research() {
           }
         }
       } catch (e) {
-        console.error("Polling error", e);
+        if (import.meta.env.DEV) console.error("Polling error", e);
       }
     }, 2000);
 
@@ -96,8 +123,9 @@ export default function Research() {
       } else {
         setMessage('Gagal menghapus riset: ' + result.error);
       }
-    } catch (err: any) {
-      setMessage(`Network error: ${err.message}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      setMessage(`Network error: ${errorMsg}`);
     }
   };
 
@@ -156,7 +184,7 @@ export default function Research() {
   const handleOpenBulkModal = () => {
     if (!data?.categories) return;
     const initialCounts: Record<string, number> = {};
-    data.categories.forEach((cat: any) => {
+    data.categories.forEach((cat: CategoryType) => {
       initialCounts[cat.name] = 5; // Default 5 per category
     });
     setBulkCounts(initialCounts);
@@ -188,7 +216,7 @@ export default function Research() {
           totalGenerated += count;
         }
       } catch (err) {
-        console.error('Failed for', category, err);
+        if (import.meta.env.DEV) console.error('Failed for', category, err);
       }
     }
     
@@ -267,7 +295,7 @@ export default function Research() {
         </Card>
       ) : (
         <div className="grid gap-6 xl:grid-cols-2">
-          {selectedCategories.map((catObj: any) => {
+          {selectedCategories.map((catObj: CategoryType) => {
             const cat = catObj.name;
             const stats = researchData[cat];
             
@@ -490,7 +518,7 @@ export default function Research() {
             </CardHeader>
             <CardContent className="p-6 overflow-y-auto">
               <div className="space-y-4">
-                {selectedCategories.map((catObj: any) => (
+                {selectedCategories.map((catObj: CategoryType) => (
                   <div key={catObj.name} className="flex items-center justify-between gap-4 p-3 rounded-lg border bg-card">
                     <div className="flex-1">
                       <Label className="text-base font-semibold capitalize">{catObj.name}</Label>
