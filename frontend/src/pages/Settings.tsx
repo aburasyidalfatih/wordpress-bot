@@ -75,7 +75,7 @@ export default function Settings() {
         <p className="text-muted-foreground">Manage your personal profile information and account password.</p>
       </div>
 
-      <div className="max-w-xl">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
         {/* Profile Settings */}
         <form onSubmit={handleProfileSubmit}>
           <Card className="border-border/50 shadow-md h-full">
@@ -184,7 +184,7 @@ function BulkUpdateYearComponent() {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="mt-8">
+    <form onSubmit={handleSubmit}>
       <Card className="border-border/50 shadow-md h-full">
         <CardHeader>
           <CardTitle>Bulk Update SEO Year (Admin)</CardTitle>
