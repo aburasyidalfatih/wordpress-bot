@@ -417,8 +417,8 @@ OUTPUT FORMAT (JSON):
     "reading_time": "estimated reading time (minutes)",
     "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
     "faqs": [
-        {"question": "Question 1", "answer": "Answer 1"},
-        {"question": "Question 2", "answer": "Answer 2"}
+        {{"question": "Question 1", "answer": "Answer 1"}},
+        {{"question": "Question 2", "answer": "Answer 2"}}
     ]
 }}
 
@@ -589,8 +589,8 @@ FORMAT OUTPUT (JSON):
     "reading_time": "estimasi waktu baca (menit)",
     "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
     "faqs": [
-        {"question": "Pertanyaan 1", "answer": "Jawaban 1"},
-        {"question": "Pertanyaan 2", "answer": "Jawaban 2"}
+        {{"question": "Pertanyaan 1", "answer": "Jawaban 1"}},
+        {{"question": "Pertanyaan 2", "answer": "Jawaban 2"}}
     ]
 }}
 
