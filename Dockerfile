@@ -22,6 +22,7 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Create non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser && \
+    mkdir -p /app/runtime && \
     chown -R appuser:appgroup /app
 
 USER appuser
