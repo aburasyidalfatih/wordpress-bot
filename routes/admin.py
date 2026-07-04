@@ -24,6 +24,29 @@ def _secret_response(config_dict, key):
         f'has_{key}': has_value
     }
 
+@admin_bp.route('/api/admin/bulk_update_year', methods=['POST'])
+@require_admin
+def bulk_update_year_endpoint(user_id):
+    data = request.json or {}
+    site_id = data.get('site_id')
+    from_year = data.get('from_year')
+    to_year = data.get('to_year')
+    
+    if not all([site_id, from_year, to_year]):
+        return jsonify({'success': False, 'error': 'Missing site_id, from_year, or to_year'}), 400
+        
+    try:
+        from worker import redis_conn
+        from rq import Queue
+        from app import bulk_update_year_task
+        q = Queue('default', connection=redis_conn)
+        job = q.enqueue(bulk_update_year_task, user_id, site_id, from_year, to_year, job_timeout='1h')
+        return jsonify({'success': True, 'message': 'Bulk update task started', 'job_id': job.id})
+    except Exception as e:
+        logger.error(f"Failed to start bulk update task: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @admin_bp.route('/api/admin/pending-payments', methods=['GET'])
 @require_admin
 def get_pending_payments(user_id):

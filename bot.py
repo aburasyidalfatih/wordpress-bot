@@ -1174,10 +1174,16 @@ class WordPressPublisher:
         except Exception as e:
             logger.warning(f"Failed to embed YouTube video: {e}")
         
+        
+        # Generate an evergreen slug by removing years (2020-2099)
+        clean_slug = re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
+        # WordPress will automatically sanitize this string into a valid slug
+        
         post_data = {
             'title': title,
             'content': content,
-            'status': 'publish'
+            'status': 'publish',
+            'slug': clean_slug
         }
         
         if category_id:
@@ -1222,3 +1228,32 @@ class WordPressPublisher:
                 logger.warning(f"Could not update Yoast meta: {e}")
         
         return response.status_code == 201, response.json() if response.status_code == 201 else response.text
+        
+    def get_posts(self, page=1, per_page=100, search=None):
+        headers = self._get_auth()
+        params = {'page': page, 'per_page': per_page}
+        if search:
+            params['search'] = search
+        
+        response = requests.get(
+            f"{self.api_url}/posts",
+            headers=headers,
+            params=params,
+            timeout=30
+        )
+        if response.status_code == 200:
+            total_pages = int(response.headers.get('X-WP-TotalPages', 1))
+            return True, response.json(), total_pages
+        return False, response.text, 0
+        
+    def update_post(self, post_id, data):
+        headers = self._get_auth()
+        headers['Content-Type'] = 'application/json'
+        
+        response = requests.post(
+            f"{self.api_url}/posts/{post_id}",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        return response.status_code == 200, response.json() if response.status_code == 200 else response.text

@@ -123,7 +123,104 @@ export default function Settings() {
             </CardFooter>
           </Card>
         </form>
+
+        {/* Admin SEO Tools */}
+        {profile.role === 'admin' && (
+          <BulkUpdateYear />
+        )}
       </div>
     </div>
+  );
+}
+
+function BulkUpdateYear() {
+  return <BulkUpdateYearComponent />;
+}
+
+function BulkUpdateYearComponent() {
+  const [siteId, setSiteId] = useState('');
+  const [fromYear, setFromYear] = useState('2026');
+  const [toYear, setToYear] = useState('2027');
+  const [loading, setLoading] = useState(false);
+  const [sites, setSites] = useState<any[]>([]);
+
+  useEffect(() => {
+    apiFetch('/api/sites')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setSites(data.sites || []);
+          if (data.sites && data.sites.length > 0) {
+            setSiteId(data.sites[0].id.toString());
+          }
+        }
+      });
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!siteId || !fromYear || !toYear) {
+      toast.error('All fields are required');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/admin/bulk_update_year', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: parseInt(siteId), from_year: fromYear, to_year: toYear })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message || 'Bulk update started in background');
+      } else {
+        toast.error(data.error || 'Failed to start bulk update');
+      }
+    } catch (err) {
+      toast.error('Network error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-8">
+      <Card className="border-border/50 shadow-md h-full">
+        <CardHeader>
+          <CardTitle>Bulk Update SEO Year (Admin)</CardTitle>
+          <CardDescription>Update all articles containing a specific year in their title and content to a new year.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 pb-8">
+          <div className="space-y-2">
+            <Label>Select Site</Label>
+            <select
+              value={siteId}
+              onChange={(e) => setSiteId(e.target.value)}
+              className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="" disabled>Select a site</option>
+              {sites.map(site => (
+                <option key={site.id} value={site.id.toString()}>{site.site_name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>From Year</Label>
+              <Input value={fromYear} onChange={e => setFromYear(e.target.value)} placeholder="e.g. 2026" />
+            </div>
+            <div className="space-y-2">
+              <Label>To Year</Label>
+              <Input value={toYear} onChange={e => setToYear(e.target.value)} placeholder="e.g. 2027" />
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter className="bg-muted/50 py-4 mt-auto">
+          <Button type="submit" disabled={loading} className="w-full">
+            {loading ? 'Starting...' : 'Start Bulk Update'}
+          </Button>
+        </CardFooter>
+      </Card>
+    </form>
   );
 }

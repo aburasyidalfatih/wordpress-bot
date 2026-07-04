@@ -727,6 +727,74 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
             f"Error: {str(e)}")
 
 
+def bulk_update_year_task(user_id, site_id, from_year, to_year):
+    """Background task to bulk update year in WordPress posts"""
+    logger.info(f"Starting bulk update year from {from_year} to {to_year} for site_id {site_id}")
+    try:
+        from database import WordPressSite
+        with db.get_session() as session:
+            site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+            if not site:
+                logger.error(f"Site {site_id} not found")
+                return
+            
+            site_config = {
+                'url': site.url,
+                'username': site.username,
+                'password': site.app_password,
+                'site_name': site.site_name
+            }
+            
+        from bot import WordPressBot
+        bot = WordPressBot(site_config)
+        
+        # Get all posts
+        page = 1
+        total_updated = 0
+        while True:
+            success, response, total_pages = bot.get_posts(page=page, per_page=100)
+            if not success:
+                logger.error(f"Failed to fetch posts: {response}")
+                break
+                
+            for post in response:
+                title = post.get('title', {}).get('raw', post.get('title', {}).get('rendered', ''))
+                content = post.get('content', {}).get('raw', post.get('content', {}).get('rendered', ''))
+                
+                if str(from_year) in title:
+                    new_title = title.replace(str(from_year), str(to_year))
+                    new_content = content.replace(str(from_year), str(to_year))
+                    
+                    update_data = {
+                        'title': new_title,
+                        'content': new_content
+                    }
+                    
+                    up_success, up_res = bot.update_post(post['id'], update_data)
+                    if up_success:
+                        total_updated += 1
+                        logger.info(f"Updated post ID {post['id']}: {new_title}")
+                    else:
+                        logger.error(f"Failed to update post ID {post['id']}: {up_res}")
+            
+            if page >= total_pages:
+                break
+            page += 1
+            
+        logger.info(f"Finished bulk update. Total updated: {total_updated}")
+        try:
+            send_telegram_notification(site_config,
+                f"✅ <b>Bulk Update Selesai</b>\n\n"
+                f"🌐 <b>Website:</b> {site_config['site_name']}\n"
+                f"🔄 <b>Tahun:</b> {from_year} ➡️ {to_year}\n"
+                f"📊 <b>Total Update:</b> {total_updated} Artikel")
+        except Exception as e:
+            logger.error(f"Failed to send Telegram notification: {e}")
+            
+    except Exception as e:
+        logger.error(f"Error in bulk_update_year_task: {e}", exc_info=True)
+
+
 def shutdown():
     """Graceful shutdown"""
     logger.info("Shutting down gracefully...")
