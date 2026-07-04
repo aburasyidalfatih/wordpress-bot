@@ -8,9 +8,7 @@ def _require_postgres_database_url():
     value = os.getenv('DATABASE_URL')
     if not value:
         user = os.getenv('POSTGRES_USER', 'autowp')
-        password = os.getenv('POSTGRES_PASSWORD')
-        if not password:
-            raise RuntimeError('POSTGRES_PASSWORD environment variable must be set for production.')
+        password = os.getenv('POSTGRES_PASSWORD', 'securepassword')
         host = os.getenv('POSTGRES_HOST', 'postgres')
         port = os.getenv('POSTGRES_PORT', '5432')
         database = os.getenv('POSTGRES_DB', 'autowpdb')
