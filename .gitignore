@@ -1,12 +1,17 @@
 *.pyc
 __pycache__/
 .env
+.env.*
+!.env.example
 config.json
 logs.json
 *.log
 *.log.*
+logs/
 *.db
 *.db.bak
+*.sqlite
+*.sqlite3
 temp*.html
 runtime/
 scratch/
@@ -14,3 +19,24 @@ legacy_sqlite_backup/
 venv/
 .vscode/
 .idea/
+
+# Security - certificates & keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# WordPress configs (may contain DB credentials)
+*wp-config.php
+
+# Uploaded files
+static/uploads/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node
+node_modules/

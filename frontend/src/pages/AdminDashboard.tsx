@@ -92,14 +92,14 @@ export default function AdminDashboard() {
   const [editCredits, setEditCredits] = useState<number>(0);
   const [editActive, setEditActive] = useState<boolean>(true);
 
-  const fetchAdminData = async () => {
+  const fetchAdminData = async (signal?: AbortSignal) => {
     try {
       const [statsRes, usersRes, paymentsRes, logsRes, configRes] = await Promise.all([
-        apiFetch('/api/admin/stats'),
-        apiFetch('/api/admin/users'),
-        apiFetch('/api/admin/pending-payments'),
-        apiFetch('/api/admin/logs?limit=300'),
-        apiFetch('/api/admin/config')
+        apiFetch('/api/admin/stats', { signal }),
+        apiFetch('/api/admin/users', { signal }),
+        apiFetch('/api/admin/pending-payments', { signal }),
+        apiFetch('/api/admin/logs?limit=300', { signal }),
+        apiFetch('/api/admin/config', { signal })
       ]);
 
       const statsData = await statsRes.json();
@@ -113,9 +113,11 @@ export default function AdminDashboard() {
       if (paymentsData.success) setPendingPayments(paymentsData.transactions);
       if (logsData.success) setLogs(logsData.logs || []);
       if (configData.success) setConfig(configData.config || {});
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Failed to retrieve administrative data.');
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        if (import.meta.env.DEV) console.error(e);
+        toast.error('Failed to retrieve administrative data.');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -123,7 +125,9 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
-    fetchAdminData();
+    const controller = new AbortController();
+    fetchAdminData(controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleRefresh = () => {

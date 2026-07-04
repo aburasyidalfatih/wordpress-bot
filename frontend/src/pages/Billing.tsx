@@ -65,12 +65,12 @@ export default function Billing() {
   const [paypalEnabled, setPaypalEnabled] = useState<boolean>(true);
   const [manualEnabled, setManualEnabled] = useState<boolean>(true);
 
-  const fetchBillingInfo = async () => {
+  const fetchBillingInfo = async (signal?: AbortSignal) => {
     try {
       const [profileRes, historyRes, configRes] = await Promise.all([
-        apiFetch('/api/profile'),
-        apiFetch('/api/payments/history'),
-        apiFetch('/api/auth/config')
+        apiFetch('/api/profile', { signal }),
+        apiFetch('/api/payments/history', { signal }),
+        apiFetch('/api/auth/config', { signal })
       ]);
       
       const profileData = await profileRes.json();
@@ -104,16 +104,20 @@ export default function Billing() {
         }
         setPaymentMethod(defaultMethod);
       }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Failed to load billing history');
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        if (import.meta.env.DEV) console.error(e);
+        toast.error('Failed to load billing history');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchBillingInfo();
+    const controller = new AbortController();
+    fetchBillingInfo(controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleCreateInvoice = async (e: React.FormEvent) => {

@@ -70,7 +70,7 @@ def api_profile(user_id):
         password = data.get('password')
         
         if name is not None:
-            user.name = str(name).strip()
+            user.name = str(name).strip()[:100]
         if email is not None and email != user.email:
             return jsonify({'success': False, 'error': 'Email cannot be changed from profile settings'}), 400
             

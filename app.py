@@ -113,6 +113,7 @@ def regenerate_image_job(user_id, log_id):
         with db.get_session() as session:
             log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
             if not log:
+                db.refund_user_credits(user_id, 1)
                 logger.error(f"Post log not found for ID {log_id}")
                 return
             
@@ -128,6 +129,7 @@ def regenerate_image_job(user_id, log_id):
                 site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
                 
             if not site:
+                db.refund_user_credits(user_id, 1)
                 logger.error(f"No active WordPress site found for user {user_id} and site {site_id}")
                 return
                 
@@ -138,6 +140,7 @@ def regenerate_image_job(user_id, log_id):
             site_image_prompt = site.image_prompt
             
         if not post_id:
+            db.refund_user_credits(user_id, 1)
             logger.error("No post ID found in post log")
             return
             
@@ -189,6 +192,11 @@ def regenerate_image_job(user_id, log_id):
     except Exception as e:
         logger.error(f"Error in regenerate_image_job: {e}", exc_info=True)
         try:
+            db.refund_user_credits(user_id, 1)
+            logger.info(f"Refunded reserved credit for failed image regen: user_id={user_id}, log_id={log_id}")
+        except Exception as refund_err:
+            logger.error(f"Failed to refund credit for image regen: {refund_err}")
+        try:
             with db.get_session() as session:
                 log = session.query(PostLog).filter_by(id=log_id).first()
                 if log:
@@ -206,6 +214,8 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
         if not user:
+            if credit_reserved:
+                db.refund_user_credits(user_id, 1)
             logger.error(f"User {user_id} not found. Aborting generation.")
             return
         if (user.credits or 0) <= 0:
@@ -218,11 +228,15 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 site_id = queue_item.site_id
                 
         if not site_id:
+            if credit_reserved:
+                db.refund_user_credits(user_id, 1)
             logger.error("No site_id provided for generate_and_post")
             return
             
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
+            if credit_reserved:
+                db.refund_user_credits(user_id, 1)
             logger.error(f"Site {site_id} not found")
             return
             
@@ -258,6 +272,8 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
     
     # Auto post check is bypassed if manual post (item_id provided)
     if not item_id and (not site_config['selected_categories'] or not site_config['auto_post']):
+        if credit_reserved:
+            db.refund_user_credits(user_id, 1)
         logger.info(f"Auto post disabled or no categories selected for site {site_id}")
         return
     
@@ -445,6 +461,10 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 category_desc=category_desc,
                 internal_links_context=recent_posts_for_links
             )
+        
+        # Validate generated article is not empty
+        if not article.get('title') or not article.get('content') or len(article.get('content', '').split()) < 50:
+            raise Exception(f"Generated article is empty or too short (title='{article.get('title', '')[:50]}', words={len(article.get('content', '').split())})")
         
         image_failed = False
         featured_image_id = None

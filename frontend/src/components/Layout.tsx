@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   FileText, 
@@ -26,7 +26,6 @@ import { apiFetch } from '../lib/api';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -94,13 +93,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const handleLogout = async () => {
     try {
-      await fetch('/logout');
-      localStorage.removeItem('token');
-      navigate('/login');
-      window.location.reload();
+      await apiFetch('/logout');
     } catch (e) {
-      console.error(e);
+      // Logout endpoint may not exist, ignore
     }
+    localStorage.removeItem('token');
+    window.location.href = '/login';
   };
 
   const toggleDarkMode = () => {

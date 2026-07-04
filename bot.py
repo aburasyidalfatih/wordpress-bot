@@ -1158,7 +1158,7 @@ class WordPressPublisher:
                 elif 'youtu.be/' in url:
                     video_id = parsed.path.lstrip('/')
                 
-                if video_id:
+                if video_id and re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
                     iframe = f'\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\n'
                     # Insert in the middle of content
                     # We can find the middle <h2 or <h3

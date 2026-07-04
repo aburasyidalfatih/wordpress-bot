@@ -56,7 +56,7 @@ class SEOResearch:
                 logger.warning(f"Failed to initialize DDGS with default arguments: {e}. Trying verify=False fallback.")
                 try:
                     # Fallback for older versions if needed
-                    self.ddgs = DDGS(verify=False)
+                    self.ddgs = DDGS(verify=True)
                 except Exception as ex:
                     logger.error(f"Failed to initialize DDGS: {ex}")
                     self.ddgs = None
@@ -305,7 +305,7 @@ class SEOResearch:
                 # Fetch page content via Jina Reader to bypass Cloudflare
                 try:
                     jina_url = f"https://r.jina.ai/{url}"
-                    page_resp = requests.get(jina_url, timeout=15, verify=False)
+                    page_resp = requests.get(jina_url, timeout=15)
                     if page_resp.status_code == 200:
                         content = page_resp.text
                         import re
