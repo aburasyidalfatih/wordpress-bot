@@ -340,7 +340,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         if not item_id:
             # Rotate after a credit reservation succeeds so no-credit jobs do not advance the schedule.
             with db.get_session() as session:
-                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).with_for_update().first()
                 if site and site.selected_categories:
                     site.selected_categories = site.selected_categories[1:] + [category]
             logger.info("Rotation complete.")

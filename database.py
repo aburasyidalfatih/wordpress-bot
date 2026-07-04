@@ -29,7 +29,7 @@ class Transaction(Base):
     __tablename__ = 'transactions'
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     payment_method = Column(String(50)) # 'manual', 'tripay', 'paypal'
     invoice_id = Column(String(255), unique=True)
     credits_purchased = Column(Integer)
@@ -42,7 +42,7 @@ class Config(Base):
     __tablename__ = 'config'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     _gemini_api_key = Column('gemini_api_key', String(500))
     gemini_model = Column(String(100), default='gemini-2.5-pro')
     gemini_image_model = Column(String(100), default='imagen-4.0-generate-001')
@@ -63,7 +63,7 @@ class WordPressSite(Base):
     __tablename__ = 'wordpress_sites'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_name = Column(String(200), default="My Website")
     wordpress_url = Column(String(500))
     wordpress_username = Column(String(200))
@@ -194,7 +194,7 @@ class PostLog(Base):
     __tablename__ = 'post_logs'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True, nullable=True)
     post_id = Column(Integer)
     post_url = Column(String(500))
@@ -223,7 +223,7 @@ class ResearchData(Base):
     __tablename__ = 'research_data'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True, nullable=True)
     category = Column(String(200), index=True)
     trending_topics = Column(JSON)
@@ -244,7 +244,7 @@ class ContentQueue(Base):
     __tablename__ = 'content_queue'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True, nullable=True)
     category = Column(String(200), index=True)
     title = Column(String(500))
@@ -318,6 +318,11 @@ class Database:
                 self.migrate_credit_system_tables()
             except Exception as em:
                 logger.warning(f"Database credit system migration warning: {em}")
+                
+            try:
+                self.migrate_add_foreign_keys()
+            except Exception as em:
+                logger.warning(f"Database foreign keys migration warning: {em}")
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
@@ -441,6 +446,29 @@ class Database:
                 session.commit()
             except Exception as e:
                 logger.warning(f"Credit system user/config migration warning: {e}")
+                
+    def migrate_add_foreign_keys(self):
+        from sqlalchemy import text
+        with self.get_session() as session:
+            try:
+                tables = ['transactions', 'config', 'wordpress_sites', 'post_logs', 'research_data', 'content_queue']
+                for table in tables:
+                    # Check if foreign key exists
+                    res = session.execute(text(f"""
+                        SELECT constraint_name 
+                        FROM information_schema.table_constraints 
+                        WHERE table_name='{table}' AND constraint_type='FOREIGN KEY' AND constraint_name='fk_{table}_user_id'
+                    """)).fetchone()
+                    
+                    if not res:
+                        # Clean up orphans before adding constraint
+                        session.execute(text(f"DELETE FROM {table} WHERE user_id NOT IN (SELECT id FROM users)"))
+                        # Add constraint
+                        session.execute(text(f"ALTER TABLE {table} ADD CONSTRAINT fk_{table}_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"))
+                        session.commit()
+                        logger.info(f"Added foreign key constraint fk_{table}_user_id to {table}")
+            except Exception as e:
+                logger.warning(f"Foreign keys migration warning: {e}")
     
     def get_config(self, user_id):
         with self.get_session() as session:
