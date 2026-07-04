@@ -1,4 +1,5 @@
 import os
+import html as html_module
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
@@ -95,7 +96,7 @@ def require_jwt(f):
         if not token and auth_header and auth_header.startswith('Bearer '):
             token = auth_header.split(' ')[1]
             
-        logger.info(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
+        logger.debug(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
         if not token:
             return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
             
@@ -105,8 +106,8 @@ def require_jwt(f):
             if not user_id:
                 raise ValueError('Invalid user_id in token')
         except Exception as e:
-            logger.error(f"JWT verification error on path {request.path}: {e}", exc_info=True)
-            return jsonify({'success': False, 'error': f'Invalid token: {e}'}), 401
+            logger.warning(f'JWT decode failed: {e}')
+            return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
             
         return f(user_id, *args, **kwargs)
             
@@ -180,7 +181,7 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
     
     try:
         import re
-        title = article.get('title', '')
+        title = html_module.escape(article.get('title', ''))
         excerpt = article.get('excerpt', '')
         excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:400]
         language = config.get('language', 'id')
@@ -190,6 +191,10 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
         hashtags = f"#{keyword}" if keyword else ""
         
         message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">{read_more_text}</a>\n\n{hashtags}"""
+        
+        # M9: Truncate caption to Telegram's 1024-char limit for photo captions
+        if len(message) > 1024:
+            message = message[:1021] + '...'
         
         if image_data:
             url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
@@ -454,23 +459,22 @@ def post_to_threads(config, article, post_url, image_data=None):
                 pass
         
         # Step 1: Create container
+        url = f"https://graph.threads.net/v1.0/{user_id}/threads"
         if image_url:
-            url = f"https://graph.threads.net/v1.0/{user_id}/threads"
-            params = {
+            post_data = {
                 'media_type': 'IMAGE',
                 'image_url': image_url,
                 'text': text,
                 'access_token': access_token
             }
         else:
-            url = f"https://graph.threads.net/v1.0/{user_id}/threads"
-            params = {
+            post_data = {
                 'media_type': 'TEXT',
                 'text': text,
                 'access_token': access_token
             }
             
-        response = requests.post(url, params=params, timeout=30)
+        response = requests.post(url, data=post_data, timeout=30)
         if response.status_code != 200:
             logger.error(f"Threads container failed: {response.text}")
             return False
@@ -479,11 +483,11 @@ def post_to_threads(config, article, post_url, image_data=None):
         
         # Step 2: Publish container
         url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
-        params = {
+        publish_data = {
             'creation_id': creation_id,
             'access_token': access_token
         }
-        response = requests.post(url, params=params, timeout=30)
+        response = requests.post(url, data=publish_data, timeout=30)
         
         if response.status_code == 200:
             logger.info(f"Threads post successful, Post ID: {response.json().get('id')}")

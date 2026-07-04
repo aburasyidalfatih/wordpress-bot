@@ -13,7 +13,8 @@ export default function Settings() {
   const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
-    apiFetch('/api/profile')
+    const controller = new AbortController();
+    apiFetch('/api/profile', { signal: controller.signal })
       .then(res => res.json())
       .then(profileData => {
         if (profileData.success) {
@@ -25,7 +26,11 @@ export default function Settings() {
           });
         }
         setLoading(false);
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') console.error('Failed to load profile:', err);
       });
+    return () => controller.abort();
   }, []);
 
   const handleProfileSubmit = async (e: React.FormEvent) => {

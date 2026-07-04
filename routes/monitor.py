@@ -16,11 +16,16 @@ def api_monitor(user_id):
     site_id = request.args.get('site_id', type=int)
     stats = get_cached_stats(user_id, site_id=site_id)
     
+    try:
+        disk_percent = psutil.disk_usage('/').percent
+    except OSError:
+        disk_percent = psutil.disk_usage('C:\\').percent
+    
     # Get system info
     system_info = {
         'cpu_percent': psutil.cpu_percent(interval=0.1),
         'memory_percent': psutil.virtual_memory().percent,
-        'disk_percent': psutil.disk_usage('/').percent,
+        'disk_percent': disk_percent,
         'uptime': str(datetime.now() - datetime.fromtimestamp(psutil.boot_time())).split('.')[0]
     }
     
@@ -83,6 +88,11 @@ def health_metrics(user_id):
             
         log_size = os.path.getsize(log_path) / 1024 / 1024 if os.path.exists(log_path) else 0
         
+        try:
+            _disk_percent = psutil.disk_usage('/').percent
+        except OSError:
+            _disk_percent = psutil.disk_usage('C:\\').percent
+        
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'service': {
@@ -94,7 +104,7 @@ def health_metrics(user_id):
             'system': {
                 'cpu_percent': psutil.cpu_percent(interval=0.1),
                 'memory_percent': psutil.virtual_memory().percent,
-                'disk_percent': psutil.disk_usage('/').percent
+                'disk_percent': _disk_percent
             }
         })
     except Exception as e:

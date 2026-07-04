@@ -1,6 +1,9 @@
 import os
+import logging
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -44,7 +47,7 @@ def _load_or_create_runtime_secret(env_name, filename, generator):
         os.environ[env_name] = value
         return value
     except Exception as e:
-        print(f"Warning: Failed to persist {env_name} to {secret_file}: {e}")
+        logger.warning(f"Failed to persist {env_name} to {secret_file}: {e}")
         value = generator()
         os.environ[env_name] = value
         return value
@@ -63,11 +66,7 @@ def get_fernet():
     try:
         _fernet_instance = Fernet(key.encode())
     except Exception as e:
-        # Fallback in case key is corrupted
-        print(f"Error initializing Fernet: {e}. Re-generating key...")
-        new_key = Fernet.generate_key().decode()
-        _fernet_instance = Fernet(new_key.encode())
-        os.environ['FERNET_KEY'] = new_key
+        raise RuntimeError('Fernet encryption key is corrupt or invalid. Restore from backup. DO NOT auto-regenerate or all encrypted data will be lost.')
         
     return _fernet_instance
 
@@ -79,7 +78,7 @@ def encrypt_value(value: str) -> str:
         f = get_fernet()
         return f.encrypt(value.encode()).decode()
     except Exception as e:
-        print(f"Encryption error: {e}")
+        logger.error(f"Encryption error: {e}")
         return value
 
 def decrypt_value(value: str) -> str:

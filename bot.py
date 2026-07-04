@@ -3,6 +3,8 @@ from google.genai import types
 import requests
 import base64
 import json
+import re
+import urllib.parse
 from io import BytesIO
 from PIL import Image
 import time
@@ -12,7 +14,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 logger = logging.getLogger(__name__)
 
 def sanitize_filename(name):
-    import re
     import unicodedata
     name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
     name = re.sub(r'[^a-zA-Z0-9._-]', '-', name)
@@ -28,13 +29,13 @@ class ArticleGenerator:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
+        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
     )
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
         # Resolve custom prompt from either parameter name
         custom_prompt = custom_prompt or kwargs.get('custom_article_prompt')
         language = kwargs.get('language') or 'id'
-        target_site = site_name if site_name else "kelasmaster.id"
+        target_site = site_name if site_name else "website"
         
         if language == 'en':
             target_audience = f"Readers of website {target_site}"
@@ -618,7 +619,6 @@ PENTING:
             response_text = response_text.replace('```json', '').replace('```', '').strip()
         
         # Remove invalid control characters for JSON
-        import re
         response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', response_text)
         
         try:
@@ -661,7 +661,6 @@ PENTING:
             # Try to extract content field from malformed JSON
             try:
                 # Look for "content": "..." pattern
-                import re
                 content_match = re.search(r'"content"\s*:\s*"([^"]+(?:\\.[^"]*)*)"', content, re.DOTALL)
                 if content_match:
                     content = content_match.group(1)
@@ -718,7 +717,7 @@ PENTING:
     
     def generate_image(self, topic, title, article_content=None, custom_prompt=None, site_name=None, **kwargs):
         """Generate landscape featured image for blog"""
-        target_site = site_name if site_name else "kelasmaster.id"
+        target_site = site_name if site_name else "website"
         try:
             def to_webp(image_bytes):
                 img = Image.open(BytesIO(image_bytes))
@@ -974,7 +973,7 @@ class WordPressPublisher:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
+        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
     )
     def upload_image(self, image_data, title):
         """Upload image via WordPress REST API"""
@@ -1062,14 +1061,13 @@ class WordPressPublisher:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
+        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
     )
     def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
         
         # Clean content before posting
-        import re
         
         # Remove placeholder patterns
         placeholders = [
@@ -1114,7 +1112,7 @@ class WordPressPublisher:
         # Inject Key Takeaways Box
         if key_takeaways and isinstance(key_takeaways, list):
             box = f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
-    <h3 style="margin-top:0; color:#0369a1;">Ringkasan Penting</h3>
+    <h3 style="margin-top:0; color:#0369a1;">✨ Key Takeaways</h3>
     <ul style="margin-bottom:0;">
         {''.join([f'<li>{k}</li>' for k in key_takeaways])}
     </ul>
@@ -1123,7 +1121,7 @@ class WordPressPublisher:
             
         # Inject FAQ Schema (JSON-LD)
         if faqs and isinstance(faqs, list):
-            import json
+
             schema = {
                 "@context": "https://schema.org",
                 "@type": "FAQPage",
@@ -1151,7 +1149,7 @@ class WordPressPublisher:
             results = ddgs.text(f"site:youtube.com {search_term}", max_results=1)
             if results:
                 url = results[0].get('href', '')
-                import urllib.parse
+
                 parsed = urllib.parse.urlparse(url)
                 video_id = None
                 if 'youtube.com/watch' in url:
@@ -1164,7 +1162,6 @@ class WordPressPublisher:
                     iframe = f'\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\n'
                     # Insert in the middle of content
                     # We can find the middle <h2 or <h3
-                    import re
                     parts = re.split(r'(<h2.*?>)', content)
                     if len(parts) >= 3:
                         mid_idx = len(parts) // 2

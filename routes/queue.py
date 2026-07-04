@@ -167,8 +167,10 @@ def post_queue_api(user_id, item_id):
             return jsonify({'success': True, 'message': 'Item is already being processed'})
         if item.status == 'posted':
             return jsonify({'success': False, 'error': 'Item has already been posted', 'code': 400}), 400
-        if not user or (user.credits or 0) <= 0:
-            return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
+
+        # Atomic credit reservation to prevent race conditions
+        if not db.reserve_user_credits(user_id, 1):
+            return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
         item.status = 'posting'
         session.commit()
@@ -195,7 +197,11 @@ def regenerate_image_api(user_id, log_id):
             return jsonify({'success': False, 'error': 'Log not found', 'code': 404}), 404
         if not log.post_id:
             return jsonify({'success': False, 'error': 'Cannot regenerate image: No post ID found in WordPress', 'code': 400}), 400
-            
+
+    # Credit validation before enqueue
+    if not db.reserve_user_credits(user_id, 1):
+        return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
+
     q.enqueue('app.regenerate_image_job', user_id, log_id, job_timeout='5m')
     return jsonify({'success': True})
 
@@ -210,11 +216,13 @@ def manual_post(user_id):
         
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
-        if not user or (user.credits or 0) <= 0:
-            return jsonify({'success': False, 'error': 'Insufficient credits. Please top up.', 'code': 400}), 400
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
+
+    # Atomic credit reservation to prevent race conditions
+    if not db.reserve_user_credits(user_id, 1):
+        return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
     try:
         job = q.enqueue('app.generate_and_post', user_id, None, site_id, job_timeout='10m')

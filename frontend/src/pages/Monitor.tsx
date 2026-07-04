@@ -86,9 +86,9 @@ export default function Monitor() {
             <Cpu className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{system_info?.cpu_percent}%</div>
+            <div className="text-2xl font-bold">{system_info?.cpu_percent ?? 0}%</div>
             <div className="w-full bg-secondary h-2 mt-2 rounded-full overflow-hidden">
-              <div className="bg-primary h-full transition-all" style={{ width: `${system_info?.cpu_percent}%` }} />
+              <div className="bg-primary h-full transition-all" style={{ width: `${system_info?.cpu_percent ?? 0}%` }} />
             </div>
           </CardContent>
         </Card>
@@ -99,9 +99,9 @@ export default function Monitor() {
             <MemoryStick className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{system_info?.memory_percent}%</div>
+            <div className="text-2xl font-bold">{system_info?.memory_percent ?? 0}%</div>
             <div className="w-full bg-secondary h-2 mt-2 rounded-full overflow-hidden">
-              <div className="bg-primary h-full transition-all" style={{ width: `${system_info?.memory_percent}%` }} />
+              <div className="bg-primary h-full transition-all" style={{ width: `${system_info?.memory_percent ?? 0}%` }} />
             </div>
           </CardContent>
         </Card>
@@ -112,9 +112,9 @@ export default function Monitor() {
             <HardDrive className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{system_info?.disk_percent}%</div>
+            <div className="text-2xl font-bold">{system_info?.disk_percent ?? 0}%</div>
             <div className="w-full bg-secondary h-2 mt-2 rounded-full overflow-hidden">
-              <div className="bg-primary h-full transition-all" style={{ width: `${system_info?.disk_percent}%` }} />
+              <div className="bg-primary h-full transition-all" style={{ width: `${system_info?.disk_percent ?? 0}%` }} />
             </div>
           </CardContent>
         </Card>
@@ -125,7 +125,7 @@ export default function Monitor() {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-sm truncate">{system_info?.uptime}</div>
+            <div className="font-bold text-sm truncate">{system_info?.uptime}</div>
             <p className="text-xs text-muted-foreground mt-2">Server running time</p>
           </CardContent>
         </Card>

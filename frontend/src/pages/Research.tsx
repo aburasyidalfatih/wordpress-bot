@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -53,30 +53,36 @@ export default function Research() {
   const [bulkCounts, setBulkCounts] = useState<Record<string, number>>({});
   const navigate = useNavigate();
 
-  const loadData = () => {
+  const loadData = useCallback((signal?: AbortSignal) => {
     if (!selectedSiteId) {
       setLoading(false);
       return;
     }
     setLoading(true);
-    apiFetch(`/api/research_data?site_id=${selectedSiteId}`)
+    apiFetch(`/api/research_data?site_id=${selectedSiteId}`, { signal })
       .then(res => res.json())
       .then(d => {
         setData(d);
         setLoading(false);
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') console.error('Failed to load research data:', err);
       });
-  };
+  }, [selectedSiteId]);
 
   useEffect(() => {
-    loadData();
-  }, [selectedSiteId]);
+    const controller = new AbortController();
+    loadData(controller.signal);
+    return () => controller.abort();
+  }, [loadData]);
 
   useEffect(() => {
     if (!jobId) return;
 
+    const controller = new AbortController();
     const interval = setInterval(async () => {
       try {
-        const res = await apiFetch(`/api/job-status/${jobId}`);
+        const res = await apiFetch(`/api/job-status/${jobId}`, { signal: controller.signal });
         const result = await res.json();
         
         if (result.success) {
@@ -89,7 +95,7 @@ export default function Research() {
             setResearchingCategory(null);
             setJobId(null);
             setMessage('Analysis complete! Reloading data...');
-            setTimeout(loadData, 1000);
+            setTimeout(() => loadData(), 1000);
           } else if (result.status === 'failed') {
             clearInterval(interval);
             setResearching(false);
@@ -99,15 +105,20 @@ export default function Research() {
           }
         }
       } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
         if (import.meta.env.DEV) console.error("Polling error", e);
       }
     }, 2000);
 
-    return () => clearInterval(interval);
-  }, [jobId]);
+    return () => {
+      clearInterval(interval);
+      controller.abort();
+    };
+  }, [jobId, loadData]);
 
   const handleClearResearch = async () => {
     if (!selectedSiteId) return;
+    // TODO: Replace native confirm() with AlertDialog component for consistent UI
     if (!confirm('Apakah Anda yakin ingin menghapus SEMUA hasil riset untuk website ini? Anda harus melakukan riset dari awal lagi setelahnya.')) return;
     
     try {

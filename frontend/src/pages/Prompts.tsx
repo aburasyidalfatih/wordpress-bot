@@ -24,15 +24,20 @@ export default function Prompts() {
       setLoading(false);
       return;
     }
+    const controller = new AbortController();
     setLoading(true);
-    apiFetch(`/api/prompts?site_id=${selectedSiteId}`)
+    apiFetch(`/api/prompts?site_id=${selectedSiteId}`, { signal: controller.signal })
       .then(res => res.json())
       .then(d => {
         setData(d);
         setArticlePrompt(d.config?.article_prompt || d.default_article_prompt || '');
         setImagePrompt(d.config?.image_prompt || d.default_image_prompt || '');
         setLoading(false);
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') console.error('Failed to load prompts:', err);
       });
+    return () => controller.abort();
   }, [selectedSiteId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -68,7 +73,7 @@ export default function Prompts() {
     }
   };
 
-  const insertVariable = (setter: any, variable: string) => {
+  const insertVariable = (setter: React.Dispatch<React.SetStateAction<string>>, variable: string) => {
     setter((prev: string) => prev + ` {${variable}}`);
   };
 

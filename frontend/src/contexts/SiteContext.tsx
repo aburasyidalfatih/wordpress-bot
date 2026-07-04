@@ -1,5 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import type { ReactNode } from 'react';
+
+export interface SiteCategory {
+  id: number;
+  name: string;
+  description?: string;
+  count?: number;
+}
 
 export interface WordPressSite {
   id: number;
@@ -12,8 +19,8 @@ export interface WordPressSite {
   timezone?: string;
   language?: string;
   auto_post: boolean;
-  categories: any[];
-  selected_categories: any[];
+  categories: SiteCategory[];
+  selected_categories: SiteCategory[];
   telegram_enabled: boolean;
   telegram_bot_token: string;
   telegram_chat_id: string;
@@ -63,7 +70,10 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   });
   const [loading, setLoading] = useState(true);
 
-  const fetchSites = async (signal?: AbortSignal) => {
+  const selectedSiteIdRef = useRef(selectedSiteId);
+  useEffect(() => { selectedSiteIdRef.current = selectedSiteId; }, [selectedSiteId]);
+
+  const fetchSites = useCallback(async (signal?: AbortSignal) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) {
@@ -83,10 +93,11 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (data.success && data.sites) {
         setSites(data.sites);
         
+        const currentSelectedId = selectedSiteIdRef.current;
         // If we don't have a selected site, or the selected site is no longer in the list
-        if (!selectedSiteId && data.sites.length > 0) {
+        if (!currentSelectedId && data.sites.length > 0) {
           setSelectedSiteId(data.sites[0].id);
-        } else if (selectedSiteId && !data.sites.find((s: WordPressSite) => s.id === selectedSiteId)) {
+        } else if (currentSelectedId && !data.sites.find((s: WordPressSite) => s.id === currentSelectedId)) {
           setSelectedSiteId(data.sites.length > 0 ? data.sites[0].id : null);
         }
       }
@@ -96,13 +107,13 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     fetchSites(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [fetchSites]);
 
   useEffect(() => {
     if (selectedSiteId !== null) {

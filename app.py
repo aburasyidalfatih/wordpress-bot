@@ -11,7 +11,7 @@ import logging
 import signal
 import atexit
 import sys
-from functools import lru_cache, wraps
+from functools import wraps
 from time import time
 import jwt
 from redis import Redis
@@ -178,7 +178,6 @@ def regenerate_image_job(user_id, log_id):
                         if log:
                             log.image_failed = False
                             log.result = "Article and Featured Image published successfully."
-                            session.commit()
                     return
                 else:
                     raise Exception(f"WordPress attach media failed ({response.status_code}): {response.text}")
@@ -194,7 +193,6 @@ def regenerate_image_job(user_id, log_id):
                 log = session.query(PostLog).filter_by(id=log_id).first()
                 if log:
                     log.result = f"Image regeneration failed: {str(e)}"
-                    session.commit()
         except Exception as db_err:
             logger.error(f"Failed to save error status: {db_err}")
 
@@ -211,14 +209,7 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             logger.error(f"User {user_id} not found. Aborting generation.")
             return
         if (user.credits or 0) <= 0:
-            logger.warning(f"User {user.email} has insufficient credits ({user.credits}). Aborting generation.")
-            if item_id:
-                from database import ContentQueue
-                db_item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
-                if db_item:
-                    db_item.status = 'pending'
-                    session.commit()
-            return
+            logger.info(f"User {user.email} credits look low ({user.credits}), will confirm with atomic reserve.")
             
         if item_id:
             from database import ContentQueue
@@ -301,7 +292,6 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 if queue_item:
                     # Update status to posting
                     queue_item.status = 'posting'
-                    session.commit()
                     
                     custom_topic = queue_item.title
                     category_name = queue_item.category
@@ -336,7 +326,6 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                 site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
                 if site and site.selected_categories:
                     site.selected_categories = site.selected_categories[1:] + [category]
-                    session.commit()
             logger.info("Rotation complete.")
         
         send_telegram_notification(site_config, 
@@ -526,7 +515,6 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                     db_item.status = 'posted' if success else 'failed'
                     if success and post_url:
                         db_item.post_url = post_url
-                    session.commit()
         
         if success:
             logger.info(f"Consumed reserved credit for user_id={user_id}, site_id={site_id}")
@@ -599,15 +587,14 @@ def generate_and_post(user_id, item_id=None, site_id=None):
                     db_item = session.query(ContentQueue).filter_by(id=item_id).first()
                     if db_item:
                         db_item.status = 'failed'
-                        session.commit()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to update queue item status: {e}")
         try:
             send_telegram_notification(site_config if 'site_config' in locals() else config,
                 f"❌ <b>Error Generate & Post</b>\n\n"
                 f"⚠️ {str(e)[:200]}")
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to send Telegram error notification: {e}")
 
 
 def deep_research_job(user_id, force=True, site_id=None, category=None):
@@ -739,10 +726,11 @@ signal.signal(signal.SIGINT, lambda s, f: shutdown())
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_frontend(path):
-    if path != "" and os.path.exists(os.path.join('frontend/dist', path)):
-        return send_from_directory('frontend/dist', path)
+    frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frontend', 'dist')
+    if path != "" and os.path.exists(os.path.join(frontend_dir, path)):
+        return send_from_directory(frontend_dir, path)
     else:
-        return send_from_directory('frontend/dist', 'index.html')
+        return send_from_directory(frontend_dir, 'index.html')
 
 
 if __name__ == '__main__':

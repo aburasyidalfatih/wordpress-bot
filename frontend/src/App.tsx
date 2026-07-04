@@ -58,6 +58,13 @@ function App() {
               <Route path="/queue" element={isAuthenticated ? <Layout><Queue /></Layout> : <Navigate to="/login" />} />
               <Route path="/billing" element={isAuthenticated ? <Layout><Billing /></Layout> : <Navigate to="/login" />} />
               <Route path="/admin" element={isAuthenticated && userRole === 'admin' ? <Layout><AdminDashboard /></Layout> : <Navigate to="/dashboard" />} />
+              <Route path="*" element={
+                <div className="flex flex-col items-center justify-center min-h-screen">
+                  <h1 className="text-4xl font-bold mb-4">404</h1>
+                  <p className="text-muted-foreground mb-4">Halaman tidak ditemukan</p>
+                  <a href="/" className="text-primary hover:underline">Kembali ke Beranda</a>
+                </div>
+              } />
             </Routes>
           </ErrorBoundary>
         </Suspense>

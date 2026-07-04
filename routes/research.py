@@ -78,13 +78,20 @@ def suggest_topics(user_id):
     try:
         data = request.json
         category = data.get('category')
-        count = data.get('count', 5)
+        try:
+            count = min(max(int(data.get('count', 5)), 1), 20)
+        except (TypeError, ValueError):
+            count = 5
         site_id = data.get('site_id') or request.args.get('site_id')
         language = 'id'
         if site_id:
+            try:
+                site_id = int(site_id)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'Invalid site_id'}), 400
             with db.get_session() as session:
                 from database import WordPressSite
-                site = session.query(WordPressSite).filter_by(id=int(site_id), user_id=user_id).first()
+                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
                 if site:
                     language = site.language or 'id'
         

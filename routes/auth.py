@@ -1,3 +1,4 @@
+import os
 import datetime
 import jwt
 from flask import Blueprint, request, jsonify, make_response
@@ -126,7 +127,7 @@ def api_auth_google():
             
         token = jwt.encode({
             'user_id': user.id,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
+            'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
         }, Config.SECRET_KEY, algorithm='HS256')
         
         resp = make_response(jsonify({
@@ -140,7 +141,7 @@ def api_auth_google():
                 'credits': user.credits
             }
         }))
-        resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=False, max_age=7*24*60*60)
+        resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=os.environ.get('FLASK_ENV') != 'development', max_age=7*24*60*60)
         return resp
 
 @auth_bp.route('/api/login', methods=['POST'])
@@ -158,7 +159,7 @@ def api_auth_login():
                 
             token = jwt.encode({
                 'user_id': user.id,
-                'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
+                'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
             }, Config.SECRET_KEY, algorithm='HS256')
             
             resp = make_response(jsonify({
@@ -172,7 +173,7 @@ def api_auth_login():
                     'credits': user.credits if user.credits is not None else 5
                 }
             }))
-            resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=False, max_age=7*24*60*60)
+            resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=os.environ.get('FLASK_ENV') != 'development', max_age=7*24*60*60)
             return resp
     return jsonify({'success': False, 'error': 'Invalid email or password', 'code': 401}), 401
 

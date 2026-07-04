@@ -180,6 +180,9 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
     }
   };
 
+  const callbackRef = useRef(handleCredentialResponse);
+  useEffect(() => { callbackRef.current = handleCredentialResponse; });
+
   // Load and initialize Google GIS
   useEffect(() => {
     if (!googleClientId) return;
@@ -195,7 +198,7 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
       if (window.google) {
         window.google.accounts.id.initialize({
           client_id: googleClientId,
-          callback: handleCredentialResponse,
+          callback: (response: any) => callbackRef.current(response),
           auto_select: false
         });
         if (googleBtnRef.current) {

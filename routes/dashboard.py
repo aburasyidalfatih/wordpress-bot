@@ -132,8 +132,8 @@ def sync_engagement(user_id):
         })
     except Exception as e:
         from core_extensions import logger
-        logger.error(f"Sync engagement error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"Sync engagement error: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Terjadi kesalahan saat sinkronisasi data.'}), 500
 
 @dashboard_bp.route("/optimize-categories", methods=["POST"])
 @require_jwt
@@ -161,5 +161,5 @@ def optimize_categories(user_id):
         })
     except Exception as e:
         from core_extensions import logger
-        logger.error(f"Optimize categories error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"Optimize categories error: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Terjadi kesalahan saat optimasi kategori.'}), 500

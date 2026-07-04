@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { apiFetch } from '../lib/api';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -59,6 +59,11 @@ export default function Queue() {
   const pollingDelayRef = useRef(3000);
   const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post', id: number} | null>(null);
 
+  const itemsRef = useRef(items);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+  const regeneratingIdsRef = useRef(regeneratingIds);
+  useEffect(() => { regeneratingIdsRef.current = regeneratingIds; }, [regeneratingIds]);
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -90,7 +95,7 @@ export default function Queue() {
     }
   };
 
-  const loadQueue = (silent = false) => {
+  const loadQueue = useCallback((silent = false) => {
     if (!selectedSiteId) {
       setLoading(false);
       return;
@@ -115,15 +120,11 @@ export default function Queue() {
       .finally(() => {
         if (!silent) setLoading(false);
       });
-  };
+  }, [selectedSiteId]);
 
   useEffect(() => {
-    loadQueue();
-  }, []);
-
-  useEffect(() => {
-    const hasPosting = items.some(i => i.status === 'posting');
-    const hasRegenerating = Object.values(regeneratingIds).some(Boolean);
+    const hasPosting = itemsRef.current.some(i => i.status === 'posting');
+    const hasRegenerating = Object.values(regeneratingIdsRef.current).some(Boolean);
     
     let timeoutId: ReturnType<typeof setTimeout>;
     
@@ -139,7 +140,7 @@ export default function Queue() {
     }
     
     return () => clearTimeout(timeoutId);
-  }, [items, regeneratingIds]);
+  }, [items, regeneratingIds, loadQueue]);
 
   useEffect(() => {
     loadQueue();
@@ -148,7 +149,7 @@ export default function Queue() {
     if (activeSite?.categories?.length && !newCategory) {
       setNewCategory(activeSite.categories[0].name);
     }
-  }, [selectedSiteId, sites]);
+  }, [selectedSiteId, sites, loadQueue]);
 
   const handleDelete = (id: number) => {
     setConfirmAction({ type: 'delete', id });

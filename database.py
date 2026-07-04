@@ -253,6 +253,10 @@ class ContentQueue(Base):
     post_url = Column(String(500))
     created_at = Column(DateTime, default=datetime.now)
 
+    __table_args__ = (
+        Index('idx_content_queue_user_site_status', 'user_id', 'site_id', 'status'),
+    )
+
 class SystemSetting(Base):
     __tablename__ = 'system_settings'
     
@@ -413,10 +417,11 @@ class Database:
                     ('google_id', 'VARCHAR(255)', "NULL")
                 ]:
                     res = session.execute(text(
-                        f"SELECT column_name FROM information_schema.columns "
-                        f"WHERE table_name='users' AND column_name='{col}'"
-                    )).fetchone()
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='users' AND column_name=:col"
+                    ), {'col': col}).fetchone()
                     if not res:
+                        # col, col_type, default_val are from a hardcoded whitelist above, not user input
                         session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
                         session.commit()
                         logger.info(f"Added column '{col}' to 'users' table")
@@ -606,7 +611,7 @@ class Database:
                 func.sum(PostLog.comments).label('total_comments')
             ).filter(
                 PostLog.user_id == user_id,
-                PostLog.success == True
+                PostLog.success.is_(True)
             )
             
             if site_id is not None:
@@ -626,7 +631,7 @@ class Database:
         with self.get_session() as session:
             query = session.query(PostLog).filter(
                 PostLog.user_id == user_id,
-                PostLog.success == True
+                PostLog.success.is_(True)
             )
             
             if site_id is not None:
@@ -645,7 +650,7 @@ class Database:
     
     def get_existing_titles(self, user_id, site_id=None, category_name=None, limit=50):
         with self.get_session() as session:
-            query = session.query(PostLog.title).filter(PostLog.user_id == user_id, PostLog.success == True)
+            query = session.query(PostLog.title).filter(PostLog.user_id == user_id, PostLog.success.is_(True))
             
             if site_id is not None:
                 query = query.filter(PostLog.site_id == site_id)
@@ -693,7 +698,7 @@ class Database:
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
                 ResearchData.category == category,
-                ResearchData.used == False
+                ResearchData.used.is_(False)
             ).order_by(ResearchData.created_at.desc()).first()
             
             if research and research.suggested_topics:
