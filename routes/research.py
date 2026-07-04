@@ -177,7 +177,10 @@ def manual_research(user_id):
 @require_jwt
 def generate_titles(user_id, category):
     data = request.json or {}
-    count = data.get('count', 5)
+    try:
+        count = min(max(int(data.get('count', 5)), 1), 20)
+    except (TypeError, ValueError):
+        count = 5
     site_id = data.get('site_id') or request.args.get('site_id', type=int)
     config = load_config(user_id)
     

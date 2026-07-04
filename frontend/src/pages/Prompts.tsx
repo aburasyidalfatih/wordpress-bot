@@ -35,7 +35,10 @@ export default function Prompts() {
         setLoading(false);
       })
       .catch(err => {
-        if (err.name !== 'AbortError') console.error('Failed to load prompts:', err);
+        if (err.name !== 'AbortError') {
+          console.error('Failed to load prompts:', err);
+          setLoading(false);
+        }
       });
     return () => controller.abort();
   }, [selectedSiteId]);

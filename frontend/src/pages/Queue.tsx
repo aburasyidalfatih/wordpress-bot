@@ -140,7 +140,8 @@ export default function Queue() {
     }
     
     return () => clearTimeout(timeoutId);
-  }, [items, regeneratingIds, loadQueue]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadQueue]);
 
   useEffect(() => {
     loadQueue();

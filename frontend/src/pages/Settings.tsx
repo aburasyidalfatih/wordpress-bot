@@ -28,7 +28,10 @@ export default function Settings() {
         setLoading(false);
       })
       .catch(err => {
-        if (err.name !== 'AbortError') console.error('Failed to load profile:', err);
+        if (err.name !== 'AbortError') {
+          console.error('Failed to load profile:', err);
+          setLoading(false);
+        }
       });
     return () => controller.abort();
   }, []);

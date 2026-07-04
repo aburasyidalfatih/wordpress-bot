@@ -40,7 +40,7 @@ class ArticleGenerator:
         if language == 'en':
             target_audience = f"Readers of website {target_site}"
         else:
-            target_audience = "Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia" if target_site == "kelasmaster.id" else f"Pembaca website {target_site}"
+            target_audience = f"Pembaca website {target_site}"
         
         # Context mapping untuk setiap kategori
         context_map = {
@@ -670,7 +670,7 @@ PENTING:
                     # If no content field found, remove JSON structure
                     content = re.sub(r'^\s*\{.*?"content"\s*:\s*"', '', content, flags=re.DOTALL)
                     content = re.sub(r'"\s*,?\s*"[^"]+"\s*:.*\}\s*$', '', content, flags=re.DOTALL)
-            except:
+            except Exception:
                 pass
             
             # Remove any remaining JSON artifacts
@@ -942,7 +942,7 @@ class WordPressPublisher:
                 }
             return None
         except Exception as e:
-            print(f"Error getting post stats: {e}")
+            logger.error(f"Error getting post stats: {e}")
             return None
 
     def get_recent_posts(self, limit=30):
@@ -956,10 +956,10 @@ class WordPressPublisher:
             )
             if response.status_code == 200:
                 posts = []
-                import html
+                import html as html_mod
                 for p in response.json():
                     title_rendered = p.get('title', {}).get('rendered', '')
-                    title_rendered = html.unescape(title_rendered)
+                    title_rendered = html_mod.unescape(title_rendered)
                     posts.append({
                         'title': title_rendered,
                         'url': p.get('link', '')

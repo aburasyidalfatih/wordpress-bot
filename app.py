@@ -197,10 +197,10 @@ def regenerate_image_job(user_id, log_id):
             logger.error(f"Failed to save error status: {db_err}")
 
 
-def generate_and_post(user_id, item_id=None, site_id=None):
+def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=False):
     config = load_config(user_id)
     from database import WordPressSite, User
-    credit_reserved = False
+    credit_reserved = credit_pre_reserved
     credit_consumed = False
     
     with db.get_session() as session:
@@ -313,12 +313,13 @@ def generate_and_post(user_id, item_id=None, site_id=None):
             category = site_config['selected_categories'][0]
             logger.info(f"Selected category: {category['name']} (position 1 of {len(site_config['selected_categories'])})")
 
-        credit_reserved = db.reserve_user_credits(user_id, 1)
         if not credit_reserved:
-            logger.warning(f"User {user_id} has insufficient credits when reserving post job.")
-            if item_id:
-                _set_queue_item_status(item_id, user_id, 'pending')
-            return
+            credit_reserved = db.reserve_user_credits(user_id, 1)
+            if not credit_reserved:
+                logger.warning(f"User {user_id} has insufficient credits when reserving post job.")
+                if item_id:
+                    _set_queue_item_status(item_id, user_id, 'pending')
+                return
 
         if not item_id:
             # Rotate after a credit reservation succeeds so no-credit jobs do not advance the schedule.

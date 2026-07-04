@@ -176,15 +176,16 @@ def post_queue_api(user_id, item_id):
         session.commit()
 
     try:
-        q.enqueue('app.generate_and_post', user_id, item_id, job_timeout='10m')
+        q.enqueue('app.generate_and_post', user_id, item_id, None, True, job_timeout='10m')
     except Exception as e:
+        # Refund credit on enqueue failure
+        db.refund_user_credits(user_id, 1)
         with db.get_session() as session:
             item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
             if item:
                 item.status = 'pending'
-                session.commit()
         logger.error(f"Queue post enqueue failed for item {item_id}: {e}")
-        return jsonify({'success': False, 'error': 'Failed to enqueue posting job', 'code': 500}), 500
+        return jsonify({'success': False, 'error': 'Failed to enqueue posting job'}), 500
     return jsonify({'success': True})
 
 @queue_bp.route('/api/queue/history/regenerate-image/<int:log_id>', methods=['POST'])
@@ -200,9 +201,14 @@ def regenerate_image_api(user_id, log_id):
 
     # Credit validation before enqueue
     if not db.reserve_user_credits(user_id, 1):
-        return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
+        return jsonify({'success': False, 'error': 'Kredit tidak mencukupi'}), 402
 
-    q.enqueue('app.regenerate_image_job', user_id, log_id, job_timeout='5m')
+    try:
+        q.enqueue('app.regenerate_image_job', user_id, log_id, job_timeout='5m')
+    except Exception as e:
+        db.refund_user_credits(user_id, 1)
+        logger.error(f"Regenerate image enqueue failed: {e}")
+        return jsonify({'success': False, 'error': 'Failed to enqueue job'}), 500
     return jsonify({'success': True})
 
 @queue_bp.route('/manual-post', methods=['POST'])
@@ -225,11 +231,12 @@ def manual_post(user_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
     try:
-        job = q.enqueue('app.generate_and_post', user_id, None, site_id, job_timeout='10m')
+        job = q.enqueue('app.generate_and_post', user_id, None, site_id, True, job_timeout='10m')
         return jsonify({'success': True, 'message': 'Artikel dijadwalkan untuk diposting'})
     except Exception as e:
-        logger.error(f"Manual post error: {e}")
-        return jsonify({'success': False, 'error': str(e), 'code': 500}), 500
+        db.refund_user_credits(user_id, 1)
+        logger.error(f"Manual post enqueue error: {e}")
+        return jsonify({'success': False, 'error': 'Failed to enqueue posting job'}), 500
 
 @queue_bp.route('/api/job-status/<job_id>', methods=['GET'])
 @require_jwt

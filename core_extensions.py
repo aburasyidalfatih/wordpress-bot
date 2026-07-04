@@ -3,7 +3,7 @@ import html as html_module
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
-from functools import lru_cache, wraps
+from functools import wraps
 from time import time
 import jwt
 import requests
@@ -305,7 +305,7 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
                 img_match = re.search(r'<meta property="og:image" content="([^"]+)"', resp.text)
                 if img_match:
                     image_url = img_match.group(1)
-            except:
+            except Exception:
                 pass
         
         # Post with photo
@@ -455,7 +455,7 @@ def post_to_threads(config, article, post_url, image_data=None):
                 img_match = re.search(r'<meta property="og:image" content="([^"]+)"', resp.text)
                 if img_match:
                     image_url = img_match.group(1)
-            except:
+            except Exception:
                 pass
         
         # Step 1: Create container

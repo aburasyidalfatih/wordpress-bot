@@ -91,10 +91,7 @@ def decrypt_value(value: str) -> str:
         return f.decrypt(value.encode()).decode()
     except Exception as e:
         if isinstance(value, str) and value.startswith('gAAAAA'):
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Decryption failed for ciphertext. The FERNET_KEY has likely changed. Error: {e}")
-            # If we return ciphertext, it gets re-encrypted by the UI. Return empty string so user knows to re-enter it.
             return ""
         # Assume it's plain-text already
         return value
