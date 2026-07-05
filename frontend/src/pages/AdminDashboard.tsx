@@ -744,11 +744,10 @@ export default function AdminDashboard() {
                       onChange={(e) => setConfig({ ...config, gemini_model: e.target.value })}
                       className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <option value="gemini-3.5-flash">Gemini 3.5 Flash (Recommended)</option>
-                      <option value="gemini-3.5-pro">Gemini 3.5 Pro</option>
-                      <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
-                      <option value="gemini-3.1-pro">Gemini 3.1 Pro</option>
-                      <option value="gemini-2.5-pro">Gemini 2.5 Pro (Legacy)</option>
+                      <option value="gemini-3.5-flash">Gemini 3.5 Flash (Stable / Recommended)</option>
+                      <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Stable)</option>
+                      <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro (Legacy Stable)</option>
                       <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy)</option>
                     </select>
                   </div>
@@ -756,14 +755,14 @@ export default function AdminDashboard() {
                     <Label htmlFor="gemini_image_model">Image Model</Label>
                     <select 
                       id="gemini_image_model"
-                      value={config.gemini_image_model || 'imagen-4.0-generate-001'}
+                      value={config.gemini_image_model || 'gemini-3.1-flash-image'}
                       onChange={(e) => setConfig({ ...config, gemini_image_model: e.target.value })}
                       className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image (Recommended / API Key Compatible)</option>
-                      <option value="gemini-3-pro-image">Gemini 3 Pro Image (High Quality)</option>
-                      <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image (Stable)</option>
-                      <option value="imagen-3.0-generate-001">Imagen 3.0 Generate (Legacy / OAuth 2.0 Only)</option>
+                      <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image (Stable / Recommended)</option>
+                      <option value="gemini-3-pro-image">Gemini 3 Pro Image (Stable / High Quality)</option>
+                      <option value="gemini-3.1-flash-lite-image">Gemini 3.1 Flash Lite Image (Stable / Fast)</option>
+                      <option value="gemini-3.1-flash-image-preview">Gemini 3.1 Flash Image (Preview)</option>
                     </select>
                   </div>
                 </CardContent>
