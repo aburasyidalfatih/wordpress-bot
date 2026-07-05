@@ -38,6 +38,10 @@ export interface WordPressSite {
   facebook_page_id?: string;
   facebook_access_token?: string;
   has_facebook_access_token?: boolean;
+  pinterest_enabled?: boolean;
+  pinterest_board_id?: string;
+  pinterest_access_token?: string;
+  has_pinterest_access_token?: boolean;
   twitter_api_key?: string;
   twitter_api_secret?: string;
   twitter_access_token?: string;

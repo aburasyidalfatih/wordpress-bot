@@ -155,7 +155,7 @@ export default function Sites() {
         <div className="flex flex-col md:flex-row gap-6">
           {/* Vertical Tabs */}
           <div className="w-full md:w-64 space-y-1">
-            {['wordpress', 'automation', 'telegram', 'facebook', 'twitter', 'threads'].map((tab) => (
+            {['wordpress', 'automation', 'telegram', 'facebook', 'pinterest', 'twitter', 'threads'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -473,6 +473,38 @@ export default function Sites() {
                     </div>
                   )}
 
+                  {activeTab === 'pinterest' && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                      <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
+                        <div className="space-y-0.5">
+                          <Label className="text-base font-semibold text-foreground">Pinterest Auto-Pin</Label>
+                          <p className="text-sm text-muted-foreground">Automatically post new articles to your Pinterest Board.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentSite({ ...currentSite, pinterest_enabled: !currentSite.pinterest_enabled })}
+                          className={`${currentSite.pinterest_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
+                        >
+                          <span
+                            className={`${currentSite.pinterest_enabled ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                          />
+                        </button>
+                      </div>
+                      {currentSite.pinterest_enabled && (
+                        <div className="space-y-4 pt-4 border-t border-border/50">
+                          <div className="space-y-2">
+                            <Label>Board ID</Label>
+                            <Input name="pinterest_board_id" value={currentSite.pinterest_board_id || ''} onChange={handleChange} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Access Token (Bearer)</Label>
+                            <Input name="pinterest_access_token" type="password" value={currentSite.pinterest_access_token || ''} onChange={handleChange} placeholder={currentSite.has_pinterest_access_token ? "Sudah tersimpan. Isi untuk mengganti." : "Access token"} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {activeTab === 'twitter' && (
                     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
@@ -610,7 +642,8 @@ export default function Sites() {
             <CardContent className="relative z-10 space-y-4">
               <div className="flex flex-wrap gap-2">
                 {site.telegram_enabled && <span className="bg-blue-500/10 text-blue-600 text-[10px] px-2 py-0.5 rounded-md font-semibold border border-blue-500/20">Telegram</span>}
-                {site.facebook_enabled && <span className="bg-blue-600/10 text-blue-700 text-[10px] px-2 py-0.5 rounded-md font-semibold border border-blue-600/20">Facebook</span>}
+                {site.facebook_enabled && <span className="bg-indigo-500/10 text-indigo-600 text-[10px] px-2 py-0.5 rounded-md font-semibold border border-indigo-500/20">Facebook</span>}
+                {site.pinterest_enabled && <span className="bg-red-500/10 text-red-600 text-[10px] px-2 py-0.5 rounded-md font-semibold border border-red-500/20">Pinterest</span>}
                 {site.twitter_enabled && <span className="bg-slate-800/10 dark:bg-slate-200/10 text-slate-900 dark:text-slate-100 text-[10px] px-2 py-0.5 rounded-md font-semibold border border-slate-500/20">X</span>}
                 {site.threads_enabled && <span className="bg-purple-500/10 text-purple-600 text-[10px] px-2 py-0.5 rounded-md font-semibold border border-purple-500/20">Threads</span>}
               </div>

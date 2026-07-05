@@ -25,7 +25,7 @@ from core_extensions import (
     load_config, save_config, get_cached_stats,
     require_jwt, require_pin,
     send_telegram_notification, post_to_telegram_channel,
-    post_to_facebook_page, post_to_twitter, post_to_threads
+    post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
 )
 
 # Import blueprints
@@ -255,6 +255,9 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
             'facebook_enabled': site.facebook_enabled,
             'facebook_page_id': site.facebook_page_id,
             'facebook_access_token': site.facebook_access_token,
+            'pinterest_enabled': site.pinterest_enabled,
+            'pinterest_board_id': site.pinterest_board_id,
+            'pinterest_access_token': site.pinterest_access_token,
             'twitter_enabled': site.twitter_enabled,
             'twitter_api_key': site.twitter_api_key,
             'twitter_api_secret': site.twitter_api_secret,
@@ -552,7 +555,14 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 f"🎉 Status: Published")
             
             post_to_telegram_channel(site_config, article, post_url, image_data)
-            post_to_facebook_page(site_config, article, post_url, image_data)
+            if site_config.get('facebook_enabled'):
+                logger.info("Posting to Facebook Page...")
+                post_to_facebook_page(site_config, article, post_url, image_data)
+            
+            if site_config.get('pinterest_enabled'):
+                logger.info("Posting to Pinterest...")
+                post_to_pinterest(site_config, article, post_url, image_data)
+            
             post_to_twitter(site_config, article, post_url, image_data)
             post_to_threads(site_config, article, post_url, image_data)
             

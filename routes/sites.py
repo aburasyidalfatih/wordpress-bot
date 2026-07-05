@@ -44,6 +44,10 @@ def get_sites(user_id):
                 'facebook_page_id': site.facebook_page_id,
                 'facebook_access_token': '',
                 'has_facebook_access_token': _secret_status(site.facebook_access_token),
+                'pinterest_enabled': site.pinterest_enabled,
+                'pinterest_board_id': site.pinterest_board_id,
+                'pinterest_access_token': '',
+                'has_pinterest_access_token': _secret_status(site.pinterest_access_token),
                 'twitter_enabled': site.twitter_enabled,
                 'twitter_api_key': '',
                 'twitter_api_secret': '',
@@ -130,6 +134,10 @@ def update_site(user_id, site_id):
         if 'facebook_page_id' in data: site.facebook_page_id = data['facebook_page_id']
         if 'facebook_access_token' in data and _should_update_secret(data['facebook_access_token']): site.facebook_access_token = data['facebook_access_token']
         if 'facebook_enabled' in data: site.facebook_enabled = data['facebook_enabled']
+        
+        if 'pinterest_board_id' in data: site.pinterest_board_id = data['pinterest_board_id']
+        if 'pinterest_access_token' in data and _should_update_secret(data['pinterest_access_token']): site.pinterest_access_token = data['pinterest_access_token']
+        if 'pinterest_enabled' in data: site.pinterest_enabled = data['pinterest_enabled']
         
         if 'twitter_api_key' in data and _should_update_secret(data['twitter_api_key']): site.twitter_api_key = data['twitter_api_key']
         if 'twitter_api_secret' in data and _should_update_secret(data['twitter_api_secret']): site.twitter_api_secret = data['twitter_api_secret']

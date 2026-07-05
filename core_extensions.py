@@ -357,6 +357,84 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
         logger.error(f"Facebook post error: {e}")
         return False
 
+def post_to_pinterest(config, article, post_url, image_data=None):
+    """Post article to Pinterest Board with image and description"""
+    if not config.get('pinterest_enabled'):
+        logger.info("Pinterest posting disabled")
+        return False
+    
+    board_id = config.get('pinterest_board_id')
+    access_token = config.get('pinterest_access_token')
+    
+    if not board_id or not access_token:
+        logger.warning("Pinterest Board ID or Access Token not configured")
+        return False
+        
+    if not image_data:
+        logger.warning("Pinterest requires an image, but no image data was provided")
+        return False
+        
+    try:
+        import html
+        import base64
+        
+        # Get content - handle both dict and string
+        content = article.get('content', '')
+        if isinstance(content, dict):
+            content = content.get('rendered', '')
+            
+        title = article.get('title', '')
+        if isinstance(title, dict):
+            title = title.get('rendered', '')
+        
+        title = html.unescape(title)
+        
+        # We can extract a description from excerpt or just use the title
+        description = html.unescape(article.get('excerpt', title))
+        # Remove HTML from description
+        import re
+        description = re.sub('<[^<]+>', '', description).strip()
+        if len(description) > 490:
+            description = description[:490] + '...'
+            
+        # Encode image to base64
+        img_bytes = image_data.getvalue()
+        base64_img = base64.b64encode(img_bytes).decode('utf-8')
+        
+        url = "https://api.pinterest.com/v5/pins"
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        
+        payload = {
+            "board_id": board_id,
+            "title": title[:100],  # Pinterest title max length is 100
+            "description": description,
+            "link": post_url,
+            "media_source": {
+                "source_type": "image_base64",
+                "content_type": "image/jpeg",
+                "data": base64_img
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        if response.status_code in (200, 201):
+            pin_data = response.json()
+            pin_id = pin_data.get('id')
+            logger.info(f"Pinterest post successful to Board ID: {board_id}, Pin ID: {pin_id}")
+            return True
+        else:
+            logger.error(f"Pinterest post failed: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Pinterest post error: {e}")
+        return False
+
 def post_to_twitter(config, article, post_url, image_data=None):
     """Post article to Twitter/X"""
     if not config.get('twitter_enabled'):

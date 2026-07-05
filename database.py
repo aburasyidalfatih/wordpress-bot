@@ -88,6 +88,11 @@ class WordPressSite(Base):
     _facebook_access_token = Column('facebook_access_token', String(500))
     facebook_enabled = Column(Boolean, default=False)
     
+    # Pinterest settings
+    pinterest_board_id = Column(String(200))
+    _pinterest_access_token = Column('pinterest_access_token', String(500))
+    pinterest_enabled = Column(Boolean, default=False)
+    
     # Twitter/X settings
     _twitter_api_key = Column('twitter_api_key', String(500))
     _twitter_api_secret = Column('twitter_api_secret', String(500))
@@ -139,6 +144,21 @@ class WordPressSite(Base):
     def facebook_access_token(self, value):
         from security import encrypt_value
         self._facebook_access_token = encrypt_value(value)
+        
+    @property
+    def pinterest_access_token(self):
+        from security import decrypt_value
+        if not self._pinterest_access_token:
+            return None
+        return decrypt_value(self._pinterest_access_token)
+
+    @pinterest_access_token.setter
+    def pinterest_access_token(self, value):
+        from security import encrypt_value
+        if not value:
+            self._pinterest_access_token = None
+            return
+        self._pinterest_access_token = encrypt_value(value)
         
     @property
     def twitter_api_key(self):
@@ -363,6 +383,7 @@ class Database:
                     '_wordpress_password': 'wordpress_password',
                     '_telegram_bot_token': 'telegram_bot_token',
                     '_facebook_access_token': 'facebook_access_token',
+                    '_pinterest_access_token': 'pinterest_access_token',
                     '_twitter_api_key': 'twitter_api_key',
                     '_twitter_api_secret': 'twitter_api_secret',
                     '_twitter_access_token': 'twitter_access_token',
