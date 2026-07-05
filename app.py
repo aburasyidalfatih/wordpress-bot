@@ -226,7 +226,7 @@ def regenerate_article_job(user_id, log_id):
             category_name = log.category_name
             post_id = log.post_id
             site_id = log.site_id
-            keyword = log.keywords or title
+            keyword = title
             
             if not site_id:
                 site = session.query(WordPressSite).filter_by(user_id=user_id, is_active=True).first()
