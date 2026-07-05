@@ -607,7 +607,8 @@ PENTING:
             config=types.GenerateContentConfig(
                 temperature=0.85,
                 top_p=0.9,
-                max_output_tokens=8192
+                max_output_tokens=8192,
+                response_mime_type="application/json"
             )
         )
         
@@ -627,6 +628,8 @@ PENTING:
             # Clean content from placeholders and artifacts
             content = result.get('content', '')
             if content:
+                # Replace literal \n that AI sometimes outputs inside JSON strings
+                content = content.replace('\\n', '\n')
                 # Remove any stray JSON codeblock markers AI might have embedded inside
                 content = content.replace('```json', '').replace('```', '')
                 result['content'] = content
