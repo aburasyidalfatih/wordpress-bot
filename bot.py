@@ -663,12 +663,18 @@ PENTING:
             
             # Try to extract content field from malformed JSON
             try:
-                # Look for "content": "..." pattern
-                content_match = re.search(r'"content"\s*:\s*"([^"]+(?:\\.[^"]*)*)"', content, re.DOTALL)
-                if content_match:
-                    content = content_match.group(1)
+                start_match = re.search(r'"content"\s*:\s*"', content)
+                if start_match:
+                    content_str = content[start_match.end():]
+                    
+                    # Look for the end of the content string by finding the next known JSON key
+                    end_match = re.search(r'"\s*,\s*"(?:focus_keyword|excerpt|reading_time|key_takeaways|faqs)"\s*:', content_str)
+                    if end_match:
+                        content_str = content_str[:end_match.start()]
+                        
                     # Unescape JSON string
-                    content = content.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                    content_str = content_str.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+                    content = content_str
                 else:
                     # If no content field found, remove JSON structure
                     content = re.sub(r'^\s*\{.*?"content"\s*:\s*"', '', content, flags=re.DOTALL)
