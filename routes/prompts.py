@@ -226,14 +226,31 @@ Instruksi Revisi (SANGAT PENTING):
 {json_instruction}
 {lang_instruction}"""
 
-            response = generator.client.models.generate_content(
-                model=generator.model,
-                contents=[
-                    sys_prompt,
-                    f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}"
-                ]
-            )
+            import time
+            max_retries = 3
+            response = None
+            last_error = None
             
+            for attempt in range(max_retries):
+                try:
+                    response = generator.client.models.generate_content(
+                        model=generator.model,
+                        contents=[
+                            sys_prompt,
+                            f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}"
+                        ]
+                    )
+                    break # Success!
+                except Exception as e:
+                    last_error = e
+                    # Specifically handle 503 or 500 errors by retrying
+                    if "503" in str(e) or "500" in str(e) or "Unavailable" in str(e):
+                        if attempt < max_retries - 1:
+                            time.sleep(2 * (attempt + 1))  # Exponential backoff: 2s, 4s
+                            continue
+                    # If it's a different error or we ran out of retries, throw it
+                    raise e
+                    
             if not response or not hasattr(response, 'text') or not response.text:
                 return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 400
                 
@@ -248,4 +265,9 @@ Instruksi Revisi (SANGAT PENTING):
     except Exception as e:
         from core_extensions import logger
         logger.error(f"Optimize prompt error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 400
+        error_msg = str(e)
+        if "503" in error_msg or "Unavailable" in error_msg or "high demand" in error_msg.lower():
+            error_msg = "Server AI Google Gemini sedang mengalami beban tinggi (Kapasitas Penuh). Silakan tunggu sebentar dan coba klik lagi."
+        elif "API Key" in error_msg or "403" in error_msg:
+            error_msg = "API Key Gemini tidak valid atau tidak memiliki izin akses."
+        return jsonify({'success': False, 'error': error_msg}), 400
