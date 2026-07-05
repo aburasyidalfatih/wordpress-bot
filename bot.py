@@ -567,8 +567,7 @@ PENTING:
             config=types.GenerateContentConfig(
                 temperature=0.85,
                 top_p=0.9,
-                max_output_tokens=8192,
-                response_mime_type="application/json"
+                max_output_tokens=8192
             )
         )
         
@@ -632,6 +631,10 @@ PENTING:
                     end_match = re.search(r'"\s*,\s*"(?:focus_keyword|excerpt|reading_time|key_takeaways|faqs)"\s*:', content_str)
                     if end_match:
                         content_str = content_str[:end_match.start()]
+                    else:
+                        # Clean up trailing JSON artifacts if cut off early
+                        content_str = re.sub(r'"\s*\}\s*$', '', content_str)
+                        content_str = re.sub(r'"\s*$', '', content_str)
                         
                     # Unescape JSON string
                     content_str = content_str.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
