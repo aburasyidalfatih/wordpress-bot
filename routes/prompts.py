@@ -120,7 +120,7 @@ Design Requirements:
 - Professional color scheme (blues, greens, education colors)
 - Include the title text: "{title}"
 - Add relevant visual elements, icons, or illustrations
-- "kelasmaster.id" branding subtly placed
+- "{target_site}" branding subtly placed
 - High quality, eye-catching design
 - Suitable as blog header/featured image
 

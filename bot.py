@@ -267,6 +267,8 @@ class ArticleGenerator:
             prompt = prompt.replace('{seo_section}', seo_section)
             prompt = prompt.replace('{category_desc_text}', category_desc_text)
             prompt = prompt.replace('{internal_links_text}', internal_links_text)
+            prompt = prompt.replace('{target_site}', target_site)
+            prompt = prompt.replace('{target_audience}', target_audience)
         elif language == 'en':
             prompt = f"""Write a high-quality, SEO-optimized blog article for the website {target_site} about: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
@@ -738,6 +740,7 @@ PENTING:
                     .replace('{topic}', topic)
                     .replace('{title}', title)
                     .replace('{site_name}', target_site)
+                    .replace('{target_site}', target_site)
                 ))
 
             image_prompts.extend([
