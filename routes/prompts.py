@@ -23,9 +23,9 @@ def api_prompts(user_id):
                 'article_prompt': site.article_prompt,
                 'image_prompt': site.image_prompt
             },
-            'default_article_prompt': """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website kelasmaster.id tentang: {topic}
-{existing_titles}{research_note}{seo_section}
-TARGET AUDIENCE: Kepala sekolah, founder yayasan, pengelola lembaga pendidikan di Indonesia
+            'default_article_prompt': """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic}
+{existing_titles}{research_note}{seo_section}{category_desc_text}{internal_links_text}
+TARGET AUDIENCE: {target_audience}
 
 ⚠️ PENTING - TAHUN SAAT INI: 2026
 - Jika menyebutkan tahun, gunakan 2026 atau "saat ini"

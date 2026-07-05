@@ -417,6 +417,14 @@ OUTPUT FORMAT (JSON):
     âœ“ DO NOT include the category name
     âœ“ Focus on concrete results/solutions
     âœ“ Create curiosity (curiosity gap)",
+    ✓ MUST include a specific number (7, 5, 300%, 95%, etc.)
+    ✓ MUST include a power word (Proven, Secrets, Fatal, Effective, Powerful)
+    ✓ MUST include a clear benefit or problem
+    ✓ Location if relevant (Chicago, London, etc.)
+    ✓ Year 2026 if relevant
+    ✓ DO NOT include the category name
+    ✓ Focus on concrete results/solutions
+    ✓ Create curiosity (curiosity gap)",
     
     "meta_description": "Meta description 150-160 characters with CTA and keyword",
     "content": "Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters.",
@@ -442,30 +450,26 @@ IMPORTANT:
 TARGET AUDIENCE: {target_audience}
 RELATED KEYWORDS: {context}
 
-âš ï¸ PENTING - TAHUN SAAT INI: 2026
+⚠️ PENTING - TAHUN SAAT INI: 2026
 - Jika menyebutkan tahun, gunakan 2026 atau "saat ini"
 - Jangan gunakan tahun 2024 atau 2025
-- Contoh: "Panduan Lengkap 2026" atau "Strategi Terkini"
 
 STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
-âš ï¸ TULIS DENGAN SANGAT MENDETAIL DAN PANJANG. JANGAN MERINGKAS. SETIAP SUB-HEADING HARUS TERDIRI DARI MINIMAL 4-5 PARAGRAF PANJANG DAN KOMPREHENSIF. BENTUKLAH ARTIKEL YANG SANGAT DALAM. JIKA KURANG DARI 2000 KATA, ARTIKEL INI AKAN DITOLAK.
+⚠️ TULIS DENGAN SANGAT MENDETAIL DAN PANJANG. JANGAN MERINGKAS. SETIAP SUB-HEADING HARUS TERDIRI DARI MINIMAL 4-5 PARAGRAF PANJANG DAN KOMPREHENSIF. BENTUKLAH ARTIKEL YANG SANGAT DALAM. JIKA KURANG DARI 2000 KATA, ARTIKEL INI AKAN DITOLAK.
 
 1. HOOK PEMBUKA (100 kata):
-   âš ï¸ WAJIB VARIATIF - Gunakan salah satu pendekatan ini (JANGAN selalu pakai statistik):
-   
+   ⚠️ WAJIB VARIATIF - Gunakan salah satu pendekatan ini (JANGAN selalu pakai statistik):
    A. Story/Anekdot: "Pak Budi, kepala sekolah di Bandung, hampir putus asa ketika..."
    B. Problem Statement: "Bayangkan: SPP sudah naik 20%, tapi guru tetap resign..."
    C. Pertanyaan Provokatif: "Apa yang membuat 3 dari 5 sekolah swasta gagal bertahan?"
    D. Fakta Mengejutkan: "Tahun 2026, lebih banyak sekolah tutup daripada yang buka..."
    E. Kontras: "Sekolah A penuh siswa, Sekolah B sepi. Bedanya hanya satu hal..."
-   
-   âœ“ Akhiri dengan promise: "Artikel ini akan memandu Anda..."
-   âœ— JANGAN selalu mulai dengan "Data internal kami di KelasMaster..."
-   âœ— JANGAN gunakan pola yang sama dengan artikel sebelumnya
+   ✓ Akhiri dengan promise: "Artikel ini akan memandu Anda..."
+   ✗ JANGAN selalu mulai dengan "Data internal kami di KelasMaster..."
 
 2. RINGKASAN EKSEKUTIF / TL;DR (Kotak AEO untuk Google AI Overviews):
-   - WAJIB buat kotak `<div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">`
-   - Berisi 3 poin bullet (`<ul>`) yang menjawab inti topik secara langsung.
+   - WAJIB buat kotak <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
+   - Berisi 3 poin bullet (<ul>) yang menjawab inti topik secara langsung.
    - Ini krusial untuk fitur Answer Engine Optimization 2026.
 
 3. CONTEXT (200 kata):
@@ -473,129 +477,59 @@ STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
    - Mengapa topik ini urgent dan penting
    - Siapa yang paling membutuhkan solusi ini
 
-3. KONTEN UTAMA (1500-1700 kata):
-   
+4. KONTEN UTAMA (1500-1700 kata):
    H2: Konsep Dasar & Pentingnya (300 kata)
    - Definisi clear dengan bahasa praktis
    - Mengapa ini critical untuk lembaga pendidikan
    - Contoh konkret dari sekolah Indonesia
-   
+
    H2: Implementasi Praktis Step-by-Step (600 kata)
    - Panduan actionable dengan numbered list
    - Timeline realistis (minggu/bulan)
    - Tools/template yang bisa digunakan
    - Checklist untuk memulai
-   - Budget estimation jika relevan
-   
+
    H2: Studi Kasus Nyata (400 kata)
    - Sekolah X di Kota Y, Indonesia (nama & lokasi realistis)
-   - Challenge â†’ Solution â†’ Result (dengan angka spesifik)
-   - Lesson learned yang bisa diterapkan
-   - WAJIB: Quote langsung dari kepala sekolah (buat realistis & natural)
-     Format: "Quote yang engaging dan spesifik," ujar Nama Lengkap, Kepala Sekolah X di Kota Y.
-     Contoh: "Awalnya kami ragu, tapi setelah 3 bulan implementasi, SPP collection rate naik 40%," ujar Budi Santoso, Kepala SMA Harapan Bangsa di Surabaya.
-   
+   - Challenge → Solution → Result (dengan angka spesifik)
+   - WAJIB: Quote langsung dari kepala sekolah
+     Format: "Quote," ujar Nama Lengkap, Kepala Sekolah X di Kota Y.
+
    H2: Tips & Best Practices (300 kata)
-   - Do's and Don'ts dalam format HTML table (JANGAN gunakan ASCII art atau Unicode box drawing)
+   - Analisis Perbandingan (Do's and Don'ts atau Mitos vs Fakta) dalam format HTML table
    - Common mistakes yang harus dihindari
-   - Pro tips dari praktisi (bisa tambahkan quote singkat)
    - Quick wins yang bisa langsung diterapkan
 
 4. KESIMPULAN (150 kata):
    - Recap 3-5 key takeaways
-   - Next action steps yang jelas
    - CTA: ajakan konsultasi/download resource
 
 5. FAQ (150 kata):
    - 3-5 pertanyaan umum dengan jawaban singkat
-   - Gunakan format Q&A
 
-REQUIREMENTS KUALITAS:
-
-E-E-A-T SIGNALS (WAJIB):
-âœ“ Experience: "Berdasarkan implementasi di 50+ sekolah..."
-âœ“ Expertise: Referensi Permendikbud/Kurikulum Merdeka/regulasi
-âœ“ Authoritativeness: Data statistik pendidikan Indonesia
-âœ“ Trustworthiness: Transparansi (pros & cons), update date
-âœ“ Current: Gunakan tahun 2026 untuk konteks terkini
-
-GAYA PENULISAN:
-âœ“ Tone: Profesional tapi approachable, gunakan "Anda"
-âœ“ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
+GAYA PENULISAN & SEO 2026 (SANGAT PENTING):
+✓ Tone: Profesional tapi approachable, gunakan "Anda"
+✓ Pendekatan Personal (Experience/E-E-A-T): Mulailah salah satu paragraf (misal di Context atau Kesimpulan) dengan "Berdasarkan pengalaman tim praktisi kami..." untuk mensimulasikan Kredensial Penulis (Authoritativeness).
+✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci.
+✓ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Hindari pengulangan keyword utama (keyword stuffing). Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam.
+✓ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
   - VARIASIKAN panjang kalimat secara drastis untuk ritme natural (Burstiness).
-  - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional. "Itu salah." "Faktanya sebaliknya."
-  - Kalimat sedang (15-20 kata): Untuk penjelasan standar.
+  - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional.
   - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
   - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
-âœ“ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam. JANGAN keyword stuffing.
-âœ“ Paragraf: SANGAT PENDEK. Maksimal 2-3 kalimat per paragraf. Sering-sering gunakan paragraf 1 kalimat. Wajib gunakan banyak pemisahan baris (enter) agar banyak ruang kosong untuk menyelipkan IKLAN.
-âœ“ Contoh: Selalu dari konteks Indonesia dengan nama sekolah/kota spesifik
-âœ“ Data: Sertakan statistik/angka yang relevan (tapi VARIASIKAN sumbernya)
-âœ“ Empati: Pahami pain points kepala sekolah
-âœ“ Quote: Sisipkan 1-2 quote realistis dari kepala sekolah/praktisi
-  - Format: "Quote text," ujar Nama, Jabatan di Sekolah/Kota.
-âœ“ Transisi: Gunakan transisi natural, hindari "dengan demikian", "oleh karena itu"
-  - Baik: "Hasilnya?", "Yang terjadi?", "Faktanya:", "Contohnya:"
-  - Buruk: "Dengan demikian", "Oleh karena itu", "Pada akhirnya"
+✓ Contoh selalu dari konteks Indonesia
+✓ Transisi natural: "Hasilnya?", "Yang terjadi?", "Faktanya:"
+✗ Hindari: "Dengan demikian", "Oleh karena itu", "Pada akhirnya", "Kesimpulannya"
+✗ Hindari: "Penting untuk dicatat bahwa...", "Perlu diingat bahwa..."
+✗ JANGAN gunakan ASCII art atau Unicode box drawing
+✗ Gunakan HTML table (<table>) untuk tabel, BUKAN ASCII art
 
-âš ï¸ HINDARI FRASA REPETITIF & AI:
-âœ— "Data internal kami di KelasMaster per awal 2026 menunjukkan..."
-âœ— "Berdasarkan pengalaman kami di KelasMaster..."
-âœ— "Penting untuk dicatat bahwa...", "Perlu diingat bahwa..."
-âœ— "Dalam konteks ini...", "Sangat penting untuk..."
-âœ— "Mari kita bahas...", "Sebagai kesimpulan..."
-âœ— Pola pembuka yang sama dengan artikel sebelumnya
-âœ“ Gunakan variasi: riset terbaru, studi kasus, cerita nyata, pertanyaan, dll
-âœ“ Setiap artikel HARUS punya pembuka yang UNIK dan BERBEDA
-âœ“ Gunakan bahasa conversational, bukan formal/akademis
-
-SEO OPTIMIZATION:
-âœ“ Keyword di first 100 words
-âœ“ Keyword variations di H2 headings
-âœ“ LSI keywords natural throughout
-âœ“ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
-âœ“ Optimasi untuk featured snippet (gunakan list/table)
-
-âš ï¸ LARANGAN KERAS:
-âœ— JANGAN gunakan placeholder seperti [FLOWCHART: ...], [INFOGRAPHIC: ...], [CHECKLIST: ...]
-âœ— JANGAN gunakan ASCII art atau Unicode box drawing (â”€, â”‚, â”¼, â”œ, â”¤, dll)
-âœ— JANGAN sisipkan JSON artifacts atau metadata di dalam konten
-âœ— Gunakan HTML table (<table>) untuk tabel, BUKAN ASCII art
-âœ— Jika ingin checklist, gunakan <ul> atau <ol>, BUKAN placeholder
-
-FORMAT OUTPUT (JSON):
+FORMAT OUTPUT (JSON valid, tanpa markdown code blocks):
 {{
-    "title": "Judul dengan formula CTR tinggi (50-60 karakter):
-    
-    FORMULA WAJIB (pilih salah satu):
-    1. [Angka] + [Power Word] + [Benefit] + [Proof/Lokasi]
-       Contoh: '7 Strategi Terbukti Tingkatkan PSB 300% di Jakarta'
-    
-    2. [Problem] + [Angka] + [Solution]
-       Contoh: 'Asrama Sepi? 5 Cara Dapat Occupancy 95% dalam 3 Bulan'
-    
-    3. [Social Proof] + [Benefit] + [How]
-       Contoh: '50+ Sekolah Dapat 500 Siswa Baru - Begini Caranya'
-    
-    4. [Mistake/Warning] + [Solution]
-       Contoh: '5 Kesalahan Fatal Pemasaran Sekolah (Dan Cara Mengatasinya)'
-    
-    RULES JUDUL:
-    âœ“ WAJIB ada angka spesifik (7, 5, 300%, 95%, dll)
-    âœ“ WAJIB ada power word (Terbukti, Rahasia, Fatal, Jitu, Ampuh)
-    âœ“ WAJIB ada benefit/problem yang jelas
-    âœ“ Lokasi jika relevan (Jakarta, Indonesia)
-    âœ“ Tahun 2026 jika relevan
-    âœ“ JANGAN sertakan nama kategori
-    âœ“ Fokus pada hasil/solusi konkret
-    âœ“ Bikin penasaran (curiosity gap)",
-    
+    "title": "Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)",
     "meta_description": "Meta description 150-160 karakter dengan CTA dan keyword",
-    "content": "Konten lengkap 2000-2500 kata dalam HTML dengan semantic markup (h2, h3, strong, em, ul, ol, blockquote). PENTING: Gunakan HTML table tag (<table>, <tr>, <td>) untuk tabel, JANGAN gunakan ASCII art atau Unicode box drawing characters (â”€, â”‚, â”¼, â”œ, â”¤, dll)",
+    "content": "Konten HTML lengkap 2000-2500 kata",
     "focus_keyword": "keyword utama artikel",
-    "excerpt": "Ringkasan engaging 2-3 kalimat dengan hook kuat",
-    "reading_time": "estimasi waktu baca (menit)",
-    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
     "faqs": [
         {{"question": "Pertanyaan 1", "answer": "Jawaban 1"}},
         {{"question": "Pertanyaan 2", "answer": "Jawaban 2"}}
