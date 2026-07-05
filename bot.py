@@ -1166,12 +1166,14 @@ class WordPressPublisher:
         if excerpt:
             post_data['excerpt'] = excerpt
         
-        # Add Yoast SEO meta if available
+        # Add Yoast and Rank Math SEO meta if available
         meta_fields = {}
         if meta_description:
             meta_fields['_yoast_wpseo_metadesc'] = meta_description
+            meta_fields['rank_math_description'] = meta_description
         if focus_keyword:
             meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
+            meta_fields['rank_math_focus_keyword'] = focus_keyword
         
         if meta_fields:
             post_data['meta'] = meta_fields
@@ -1332,12 +1334,14 @@ class WordPressPublisher:
         if excerpt:
             post_data['excerpt'] = excerpt
         
-        # Add Yoast SEO meta if available
+        # Add Yoast and Rank Math SEO meta if available
         meta_fields = {}
         if meta_description:
             meta_fields['_yoast_wpseo_metadesc'] = meta_description
+            meta_fields['rank_math_description'] = meta_description
         if focus_keyword:
             meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
+            meta_fields['rank_math_focus_keyword'] = focus_keyword
         
         if meta_fields:
             post_data['meta'] = meta_fields
