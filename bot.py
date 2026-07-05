@@ -544,6 +544,14 @@ PENTING:
 - Langsung return JSON object saja
 - Content harus dalam format HTML yang rapi
 - JUDUL: Fokus pada benefit/solusi, BUKAN nama kategori (contoh: "7 Strategi Meningkatkan Pendaftaran Siswa Baru" bukan "Strategi Pemasaran untuk Sekolah")"""
+        # Force strict system rules regardless of custom prompt
+        system_rules = """
+⚠️ SYSTEM OVERRIDE - STRICT INSTRUCTIONS ⚠️
+1. DO NOT write literal template labels (e.g., "H1:", "H2:", "1. HOOK PEMBUKA:", "Checklist 1:") in the final HTML content. Output ONLY the natural text and HTML tags.
+2. DO NOT use ANY emojis (like ✨, 🚀, 👍, etc.) in the content. It must look professional and academic.
+3. Your output MUST be 100% valid JSON. Do not include markdown codeblocks.
+"""
+        prompt = prompt + "\n\n" + system_rules
 
         response = self.client.models.generate_content(
             model=self.model,
