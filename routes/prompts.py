@@ -101,6 +101,13 @@ GAYA PENULISAN & SEO 2026 (SANGAT PENTING):
 ✗ JANGAN gunakan ASCII art atau Unicode box drawing
 ✗ Gunakan HTML table (<table>) untuk tabel, BUKAN ASCII art
 
+SEO OPTIMIZATION:
+✓ Keyword di first 100 words
+✓ Keyword variations di H2 headings
+✓ LSI keywords natural throughout
+✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
+✓ Optimasi untuk featured snippet (gunakan list/table)
+
 FORMAT OUTPUT (JSON valid, tanpa markdown code blocks):
 {
     "title": "Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)",
