@@ -1,4 +1,4 @@
-﻿from google import genai
+from google import genai
 from google.genai import types
 import requests
 import base64
@@ -411,7 +411,7 @@ OUTPUT FORMAT (JSON):
     âœ“ Create curiosity (curiosity gap)",
     
     "meta_description": "Meta description 150-160 characters with CTA and keyword",
-    "content": "Full content of 2000-2500 words in HTML with semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters.",
+    "content": "Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters.",
     "focus_keyword": "main keyword of the article",
     "excerpt": "Engaging summary of 2-3 sentences with a strong hook",
     "reading_time": "estimated reading time (minutes)",
@@ -620,10 +620,11 @@ PENTING:
             response_text = response_text.replace('```json', '').replace('```', '').strip()
         
         # Remove invalid control characters for JSON
-        response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', response_text)
+        # Remove invalid control characters for JSON, EXCEPT newlines and tabs
+        response_text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', '', response_text)
         
         try:
-            result = json.loads(response_text)
+            result = json.loads(response_text, strict=False)
             
             # Clean content from placeholders and artifacts
             content = result.get('content', '')
@@ -1381,15 +1382,14 @@ class WordPressPublisher:
             post_data['meta'] = meta_fields
         
         response = requests.post(
-            f"{self.api_url}/posts",
+            f"{self.api_url}/posts/{post_id}",
             headers=headers,
             json=post_data,
             timeout=30
         )
         
-        # If post created successfully, try to update Yoast meta separately
+        # If post updated successfully, try to update Yoast meta separately
         if response.status_code == 200 and meta_fields:
-            
             try:
                 # Update post meta using WordPress REST API
                 update_response = requests.post(
@@ -1402,7 +1402,7 @@ class WordPressPublisher:
             except Exception as e:
                 logger.warning(f"Could not update Yoast meta: {e}")
         
-        return response.status_code == 201, response.json() if response.status_code == 200 else response.text
+        return response.status_code == 200, response.json() if response.status_code == 200 else response.text
         
 
     def get_posts(self, page=1, per_page=100, search=None):
