@@ -259,7 +259,15 @@ class ArticleGenerator:
                     internal_links_text += f"- Judul: {post['title']} (URL: {post['url']})\n"
                 internal_links_text += "ðŸ’¡ PENTING: Sisipkan 3-5 link secara natural di dalam paragraf artikelmu. Jika kalimatmu relevan dengan salah satu judul di atas, jadikan kalimat itu sebagai anchor text menggunakan tag HTML `<a href=\"...\">teks</a>`. JANGAN membuat daftar link di akhir artikel, sisipkan secara organik di dalam teks bacaan!\n"
 
-        if language == 'en':
+        if custom_prompt:
+            prompt = custom_prompt
+            prompt = prompt.replace('{topic}', topic_focus)
+            prompt = prompt.replace('{existing_titles}', existing_titles_text)
+            prompt = prompt.replace('{research_note}', research_note)
+            prompt = prompt.replace('{seo_section}', seo_section)
+            prompt = prompt.replace('{category_desc_text}', category_desc_text)
+            prompt = prompt.replace('{internal_links_text}', internal_links_text)
+        elif language == 'en':
             prompt = f"""Write a high-quality, SEO-optimized blog article for the website {target_site} about: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
 TARGET AUDIENCE: {target_audience}
