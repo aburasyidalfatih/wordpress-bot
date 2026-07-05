@@ -243,6 +243,7 @@ def regenerate_article_job(user_id, log_id):
             wordpress_password = site.wordpress_password
             site_name = site.site_name
             language = site.language
+            article_prompt = site.article_prompt
             
         if not post_id:
             db.refund_user_credits(user_id, 1)
@@ -269,7 +270,7 @@ def regenerate_article_job(user_id, log_id):
             keyword, 
             None,
             avoid_similar=False,
-            custom_prompt=site.article_prompt,
+            custom_prompt=article_prompt,
             site_name=site_name,
             language=language,
             category_desc=None,
