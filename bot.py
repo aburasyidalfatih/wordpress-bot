@@ -550,6 +550,7 @@ PENTING:
 1. DO NOT write literal template labels (e.g., "H1:", "H2:", "1. HOOK PEMBUKA:", "Checklist 1:") in the final HTML content. Output ONLY the natural text and HTML tags.
 2. DO NOT use ANY emojis (like ✨, 🚀, 👍, etc.) in the content. It must look professional and academic.
 3. Your output MUST be 100% valid JSON. Do not include markdown codeblocks.
+4. CRITICAL: You MUST write AT LEAST 2000-2500 words for the "content" field. Do NOT shorten the article just because you are omitting the labels. Expand heavily on each section! Write at least 20 paragraphs.
 """
         prompt = prompt + "\n\n" + system_rules
 
