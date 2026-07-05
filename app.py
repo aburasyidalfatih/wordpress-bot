@@ -204,7 +204,119 @@ def regenerate_image_job(user_id, log_id):
         except Exception as db_err:
             logger.error(f"Failed to save error status: {db_err}")
 
-
+def regenerate_article_job(user_id, log_id):
+    from database import PostLog, WordPressSite
+    from bot import ArticleGenerator, WordPressPublisher
+    try:
+        config = load_config(user_id)
+        generator = ArticleGenerator(
+            config['gemini_api_key'], 
+            config.get('gemini_model', 'gemini-2.5-pro'),
+            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+        )
+        
+        with db.get_session() as session:
+            log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
+            if not log:
+                db.refund_user_credits(user_id, 1)
+                logger.error(f"Post log not found for ID {log_id}")
+                return
+            
+            title = log.title
+            category_name = log.category_name
+            post_id = log.post_id
+            site_id = log.site_id
+            keyword = log.keywords or title
+            
+            if not site_id:
+                site = session.query(WordPressSite).filter_by(user_id=user_id, is_active=True).first()
+            else:
+                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+                
+            if not site:
+                db.refund_user_credits(user_id, 1)
+                logger.error(f"No active WordPress site found for user {user_id}")
+                return
+                
+            wordpress_url = site.wordpress_url
+            wordpress_username = site.wordpress_username
+            wordpress_password = site.wordpress_password
+            site_name = site.site_name
+            language = site.language
+            
+        if not post_id:
+            db.refund_user_credits(user_id, 1)
+            logger.error("No post ID found in post log")
+            return
+            
+        publisher = WordPressPublisher(
+            wordpress_url,
+            wordpress_username,
+            wordpress_password
+        )
+            
+        logger.info(f"Regenerating article for post {post_id} - {title}")
+        
+        recent_posts_for_links = []
+        try:
+            recent_posts_for_links = publisher.get_recent_posts(limit=30)
+        except Exception:
+            pass
+            
+        article = generator.generate_article(
+            category_name, 
+            [], 
+            keyword, 
+            None,
+            avoid_similar=False,
+            custom_prompt=site.article_prompt,
+            site_name=site_name,
+            language=language,
+            category_desc=None,
+            internal_links_context=recent_posts_for_links
+        )
+        
+        if not article.get('title') or not article.get('content') or len(article.get('content', '').split()) < 50:
+            raise Exception("Generated article is empty or too short.")
+            
+        success, result = publisher.update_post_content(
+            post_id,
+            article.get('title', title),
+            article.get('content'),
+            None, # category_id (don't change)
+            None, # featured_image_id
+            article.get('meta_description'),
+            article.get('excerpt'),
+            article.get('focus_keyword'),
+            key_takeaways=article.get('key_takeaways'),
+            faqs=article.get('faqs')
+        )
+        
+        if success:
+            logger.info(f"Successfully regenerated article for post {post_id}")
+            with db.get_session() as session:
+                log = session.query(PostLog).filter_by(id=log_id).first()
+                if log:
+                    log.result = "Article regenerated successfully."
+            # Also, we might want to consume the credit.
+            logger.info(f"Consumed reserved credit for user_id={user_id}, log_id={log_id}")
+        else:
+            raise Exception(f"WordPress update failed: {result}")
+            
+    except Exception as e:
+        logger.error(f"Error in regenerate_article_job: {e}", exc_info=True)
+        try:
+            db.refund_user_credits(user_id, 1)
+            logger.info(f"Refunded reserved credit for failed article regen: user_id={user_id}, log_id={log_id}")
+        except Exception as refund_err:
+            logger.error(f"Failed to refund credit for article regen: {refund_err}")
+        try:
+            with db.get_session() as session:
+                log = session.query(PostLog).filter_by(id=log_id).first()
+                if log:
+                    log.result = f"Article regeneration failed: {str(e)}"
+        except Exception as db_err:
+            logger.error(f"Failed to save error status: {db_err}")
 def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=False):
     config = load_config(user_id)
     from database import WordPressSite, User

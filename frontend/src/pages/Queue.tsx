@@ -195,6 +195,30 @@ export default function Queue() {
     }
   };
 
+  const handleRegenerateArticle = async (logId: number) => {
+    setRegeneratingIds(prev => ({ ...prev, [logId]: true }));
+    try {
+      const res = await apiFetch(`/api/queue/history/regenerate-article/${logId}`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error('Failed: ' + (data.error || 'Server error'));
+        setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
+      }
+      if (data.success) {
+        toast.success('Regenerating article in background...');
+        setTimeout(() => {
+          setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
+        }, 120000); // 2 minutes, as it takes time to generate an article
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) console.error(e);
+      toast.error('Network error');
+      setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
+    }
+  };
+
   const handleManualAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle || !newCategory) return;
@@ -446,6 +470,20 @@ export default function Queue() {
                           <RefreshCw className="h-4 w-4 mr-2" />
                         )}
                         Regenerate Image
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                        disabled={regeneratingIds[item.id]}
+                        onClick={() => handleRegenerateArticle(item.id)}
+                      >
+                        {regeneratingIds[item.id] ? (
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                        )}
+                        Regenerate Article
                       </Button>
                       <Button variant="outline" size="icon" onClick={() => window.open(item.post_url, '_blank')} className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 z-20" title="View Post">
                         <Eye className="h-4 w-4" />

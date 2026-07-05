@@ -211,6 +211,29 @@ def regenerate_image_api(user_id, log_id):
         return jsonify({'success': False, 'error': 'Failed to enqueue job'}), 500
     return jsonify({'success': True})
 
+@queue_bp.route('/api/queue/history/regenerate-article/<int:log_id>', methods=['POST'])
+@require_jwt
+def regenerate_article_api(user_id, log_id):
+    from database import PostLog
+    with db.get_session() as session:
+        log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
+        if not log:
+            return jsonify({'success': False, 'error': 'Log not found', 'code': 404}), 404
+        if not log.post_id:
+            return jsonify({'success': False, 'error': 'Cannot regenerate article: No post ID found in WordPress', 'code': 400}), 400
+
+    # Credit validation before enqueue
+    if not db.reserve_user_credits(user_id, 1):
+        return jsonify({'success': False, 'error': 'Kredit tidak mencukupi'}), 402
+
+    try:
+        q.enqueue('app.regenerate_article_job', user_id, log_id, job_timeout='10m')
+    except Exception as e:
+        db.refund_user_credits(user_id, 1)
+        logger.error(f"Regenerate article enqueue failed: {e}")
+        return jsonify({'success': False, 'error': 'Failed to enqueue job'}), 500
+    return jsonify({'success': True})
+
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
 def manual_post(user_id):
