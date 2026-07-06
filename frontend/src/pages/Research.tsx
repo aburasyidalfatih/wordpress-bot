@@ -59,7 +59,7 @@ export default function Research() {
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalCategory, setModalCategory] = useState<string | null>(null);
-  const [titleCount, setTitleCount] = useState<number>(5);
+  const [titleCount, setTitleCount] = useState<number>(1);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkCounts, setBulkCounts] = useState<Record<string, number>>({});
   const navigate = useNavigate();
@@ -207,7 +207,7 @@ export default function Research() {
     if (!data?.categories) return;
     const initialCounts: Record<string, number> = {};
     data.categories.forEach((cat: CategoryType) => {
-      initialCounts[cat.name] = 5; // Default 5 per category
+      initialCounts[cat.name] = 1; // Default 1 per category
     });
     setBulkCounts(initialCounts);
     setBulkModalOpen(true);
