@@ -204,9 +204,9 @@ export default function Landing() {
             <div className="w-12 h-12 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
               <Sparkles className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mt-4">Penulis AI Gemini & Bulk Generate</h3>
+            <h3 className="text-lg font-bold text-white mt-4">Penulis AI & Multi-Bahasa</h3>
             <p className="mt-2 text-slate-400 text-sm leading-relaxed">
-              Menggunakan model AI Gemini untuk menghasilkan puluhan judul menarik secara massal, dan otomatis menulis konten SEO berkualitas tinggi lengkap dengan meta deskripsi.
+              Generate puluhan judul massal dan tulis konten SEO otomatis menggunakan model AI Gemini. Sistem otomatis menyesuaikan gaya penulisan untuk target audiens Lokal (Indonesia) maupun Global (Inggris).
             </p>
           </div>
 
@@ -248,9 +248,9 @@ export default function Landing() {
             <div className="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
               <Globe className="h-6 w-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mt-4">Kustomisasi Model & Prompt</h3>
+            <h3 className="text-lg font-bold text-white mt-4">Multi-Situs & Kustomisasi Prompt</h3>
             <p className="mt-2 text-slate-400 text-sm leading-relaxed">
-              Atur model teks dan gambar AI pilihan Anda. Anda juga dapat menentukan template instruksi (Prompt) tersendiri agar gaya bahasa sesuai brand Anda.
+              Kelola berbagai situs WordPress sekaligus dari 1 dashboard terpusat tanpa harus login manual berulang kali. Anda juga bebas menentukan instruksi (Prompt) AI sesuai karakter brand Anda.
             </p>
           </div>
         </div>
