@@ -401,9 +401,9 @@ export default function Queue() {
               placeholder="Article Title..." 
               value={newTitle} 
               onChange={e => setNewTitle(e.target.value)} 
-              className="flex-1"
+              className="flex-1 h-10 text-base"
             />
-            <Button type="submit" disabled={adding || !newTitle || !newCategory}>
+            <Button type="submit" disabled={adding || !newTitle || !newCategory} className="h-10 px-5 text-sm">
               <Plus className="h-4 w-4 mr-2" />
               Add to Queue
             </Button>
