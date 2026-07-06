@@ -1056,8 +1056,8 @@ class WordPressPublisher:
             content = re.sub(pattern, '', content, flags=re.IGNORECASE)
         
         # Remove ASCII art tables
-        content = re.sub(r'<pre[^>]*>.*?[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ” â””â”˜].*?</pre>', '', content, flags=re.DOTALL)
-        content = re.sub(r'[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ” â””â”˜â•”â•—â•šâ• â•‘â• â• â•£â•¦â•©â•¬]', '', content)
+        content = re.sub(r'<pre[^>]*>.*?[\u2500-\u257F].*?</pre>', '', content, flags=re.DOTALL)
+        content = re.sub(r'[\u2500-\u257F]', '', content)
         
         # Remove empty paragraphs
         content = re.sub(r'<p>\s*</p>', '', content)

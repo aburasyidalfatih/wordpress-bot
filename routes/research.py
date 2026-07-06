@@ -69,7 +69,10 @@ def get_trending(user_id, category):
         return jsonify(data)
     except Exception as e:
         logger.error(f"Trending API error: {e}")
-        return jsonify({'error': str(e)}), 500
+        error_msg = str(e)
+        if '503' in error_msg or 'high demand' in error_msg.lower():
+            error_msg = 'Server Google AI sedang sibuk karena lonjakan permintaan. Silakan coba lagi beberapa saat.'
+        return jsonify({'error': error_msg}), 500
 
 @research_bp.route('/api/suggest-topics', methods=['POST'])
 @require_jwt
@@ -98,8 +101,11 @@ def suggest_topics(user_id):
         suggestions = trending.suggest_article_topics(category, count, language=language)
         return jsonify({'suggestions': suggestions})
     except Exception as e:
-        logger.error(f"Suggest topics error: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Trending API error: {e}")
+        error_msg = str(e)
+        if '503' in error_msg or 'high demand' in error_msg.lower():
+            error_msg = 'Server Google AI sedang sibuk karena lonjakan permintaan. Silakan coba lagi beberapa saat.'
+        return jsonify({'error': error_msg}), 500
 
 @research_bp.route('/manual-research', methods=['POST'])
 @require_jwt
@@ -285,7 +291,10 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
         return jsonify({'success': True, 'message': f'{len(titles)} judul berhasil dibuat dan dimasukkan ke antrean!'})
     except Exception as e:
         logger.error(f"Generate titles error: {e}")
-        return jsonify({'success': False, 'error': f'Gagal men-generate judul: {str(e)}'}), 500
+        error_msg = str(e)
+        if '503' in error_msg or 'high demand' in error_msg.lower():
+            error_msg = 'Server Google AI sedang sibuk karena lonjakan permintaan. Silakan coba lagi beberapa saat.'
+        return jsonify({'success': False, 'error': f'Gagal men-generate judul: {error_msg}'}), 500
 
 @research_bp.route('/api/clear-research', methods=['POST'])
 @require_jwt
