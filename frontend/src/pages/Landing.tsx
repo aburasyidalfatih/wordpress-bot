@@ -160,7 +160,7 @@ export default function Landing() {
                 <span className="text-slate-600">[08:02:15]</span> 💡 Topik ditemukan: "Perkembangan AI Model Terbaru 2026". Skor tren: 92%
               </div>
               <div className="flex items-center gap-2 text-violet-400">
-                <span className="text-slate-600">[08:02:18]</span> ✍️ Menulis artikel dengan Gemini 2.5 Pro (Bahasa Indonesia, SEO Optimized)...
+                <span className="text-slate-600">[08:02:18]</span> ✍️ Menulis artikel dengan Gemini 3.5 (Bahasa Indonesia, SEO Optimized)...
               </div>
               <div className="flex items-center gap-2 text-pink-400">
                 <span className="text-slate-600">[08:03:02]</span> 🎨 Mengenerate Featured Image representatif menggunakan model visual AI...
@@ -390,7 +390,7 @@ export default function Landing() {
                 </li>
                 <li className="flex items-center gap-2.5">
                   <Check className="h-4.5 w-4.5 text-indigo-400 shrink-0" />
-                  <span>Pilihan Model Gemini 2.5 Pro & Prompt Kustom</span>
+                  <span>Pilihan Model Gemini 3.5 & Prompt Kustom</span>
                 </li>
               </ul>
             </div>
