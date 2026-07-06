@@ -201,13 +201,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3 text-sm font-medium">
             <span className="text-muted-foreground font-semibold">Website:</span>
             {loading ? (
-              <div className="h-9 w-48 animate-pulse rounded-md bg-muted"></div>
+              <div className="h-9 w-64 animate-pulse rounded-md bg-muted"></div>
             ) : (
               <div className="flex items-center gap-2">
                 <select
                   value={selectedSiteId || ''}
                   onChange={(e) => setSelectedSiteId(parseInt(e.target.value, 10))}
-                  className="h-9 w-48 rounded-lg border border-input bg-card/80 backdrop-blur-sm px-3 py-1 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent cursor-pointer font-medium text-foreground/90"
+                  className="h-9 w-64 rounded-lg border border-input bg-card/80 backdrop-blur-sm px-3 py-1 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent cursor-pointer font-medium text-foreground/90"
                 >
                   {sites.map(site => (
                     <option key={site.id} value={site.id} className="bg-background text-foreground">
