@@ -48,15 +48,15 @@ export function SortableQueueItem({ item, handleDelete, handleEdit, handlePostNo
           <div className="p-6 flex flex-1 flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/15">
+                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-600 text-white shadow-sm border border-transparent">
                   {item.category}
                 </span>
-                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border shadow-sm transition-all ${
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full shadow-sm transition-all border border-transparent ${
                   item.status === 'pending' 
-                    ? 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400' 
+                    ? 'bg-amber-500 text-white' 
                     : item.status === 'posting' 
-                    ? 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400 animate-pulse' 
-                    : 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400'
+                    ? 'bg-blue-500 text-white animate-pulse' 
+                    : 'bg-green-600 text-white'
                 }`}>
                   {item.status === 'posting' ? 'PROCESSING...' : item.status.toUpperCase()}
                 </span>
