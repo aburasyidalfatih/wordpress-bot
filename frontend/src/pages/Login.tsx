@@ -150,7 +150,7 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
         setIsLoading(false);
       })
       .catch(err => {
-        console.error("Failed to load auth config:", err);
+        if (import.meta.env.DEV) console.error("Failed to load auth config:", err);
         setIsLoading(false);
       });
   }, []);

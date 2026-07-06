@@ -293,7 +293,7 @@ class SEOResearch:
         """Scrape top 3 competitors via DuckDuckGo and extract their headers"""
         competitors = []
         if not self.ddgs:
-            return self._get_fallback_competitors(keyword, language)
+            return []
 
         try:
             region = 'us-en' if language == 'en' else 'id-id'
@@ -306,6 +306,7 @@ class SEOResearch:
                 try:
                     jina_url = f"https://r.jina.ai/{url}"
                     page_resp = requests.get(jina_url, timeout=15)
+                    time.sleep(2) # Prevent Jina AI rate limiting
                     if page_resp.status_code == 200:
                         content = page_resp.text
                         import re
@@ -330,9 +331,9 @@ class SEOResearch:
                     continue
         except Exception as e:
             logger.error(f"DDGS competitor search error: {e}")
-            return self._get_fallback_competitors(keyword, language)
+            return []
 
-        return competitors if competitors else self._get_fallback_competitors(keyword, language)
+        return competitors
 
     def get_social_insights(self, keyword, language='id'):
         """Search Quora & Reddit for real human questions"""
@@ -362,7 +363,7 @@ class SEOResearch:
         """Find top YouTube video and get transcript summary"""
         insights = []
         if not self.ddgs or not YouTubeTranscriptApi:
-            return self._get_fallback_youtube(keyword, language)
+            return []
 
         try:
             query = f"site:youtube.com {keyword}"
@@ -395,9 +396,9 @@ class SEOResearch:
                         })
         except Exception as e:
             logger.error(f"Youtube insights error: {e}")
-            return self._get_fallback_youtube(keyword, language)
+            return []
 
-        return insights if insights else self._get_fallback_youtube(keyword, language)
+        return insights
 
     def research_category(self, category_name, language='id'):
         """Deep Research a category including competitors, social, and youtube"""

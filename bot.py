@@ -1037,11 +1037,10 @@ class WordPressPublisher:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
     )
-    def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
-        headers = self._get_auth()
-        headers['Content-Type'] = 'application/json'
-        
-        # Clean content before posting
+
+    def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
+        import urllib.parse
+        import json
         
         # Remove placeholder patterns
         placeholders = [
@@ -1057,8 +1056,8 @@ class WordPressPublisher:
             content = re.sub(pattern, '', content, flags=re.IGNORECASE)
         
         # Remove ASCII art tables
-        content = re.sub(r'<pre[^>]*>.*?[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ”â””â”˜].*?</pre>', '', content, flags=re.DOTALL)
-        content = re.sub(r'[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ”â””â”˜â•”â•—â•šâ•â•‘â•â• â•£â•¦â•©â•¬]', '', content)
+        content = re.sub(r'<pre[^>]*>.*?[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ” â””â”˜].*?</pre>', '', content, flags=re.DOTALL)
+        content = re.sub(r'[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ” â””â”˜â•”â•—â•šâ• â•‘â• â• â•£â•¦â•©â•¬]', '', content)
         
         # Remove empty paragraphs
         content = re.sub(r'<p>\s*</p>', '', content)
@@ -1074,19 +1073,18 @@ class WordPressPublisher:
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(content, 'html.parser')
-            # Fix broken links
             for a in soup.find_all('a'):
                 if not a.get('href') or a.get('href').startswith('http') == False:
-                    # just keep text if invalid
                     pass
             content = str(soup)
         except Exception as e:
+            from core_extensions import logger
             logger.warning(f"Failed to sanitize HTML: {e}")
             
         # Inject Key Takeaways Box
         if key_takeaways and isinstance(key_takeaways, list):
             box = f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
-    <h3 style="margin-top:0; color:#0369a1;">âœ¨ Key Takeaways</h3>
+    <h3 style="margin-top:0; color:#0369a1;">✨ Key Takeaways</h3>
     <ul style="margin-bottom:0;">
         {''.join([f'<li>{k}</li>' for k in key_takeaways])}
     </ul>
@@ -1095,7 +1093,6 @@ class WordPressPublisher:
             
         # Inject FAQ Schema (JSON-LD)
         if faqs and isinstance(faqs, list):
-
             schema = {
                 "@context": "https://schema.org",
                 "@type": "FAQPage",
@@ -1123,7 +1120,6 @@ class WordPressPublisher:
             results = ddgs.text(f"site:youtube.com {search_term}", max_results=1)
             if results:
                 url = results[0].get('href', '')
-
                 parsed = urllib.parse.urlparse(url)
                 video_id = None
                 if 'youtube.com/watch' in url:
@@ -1134,8 +1130,6 @@ class WordPressPublisher:
                 
                 if video_id and re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
                     iframe = f'\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\n'
-                    # Insert in the middle of content
-                    # We can find the middle <h2 or <h3
                     parts = re.split(r'(<h2.*?>)', content)
                     if len(parts) >= 3:
                         mid_idx = len(parts) // 2
@@ -1146,12 +1140,10 @@ class WordPressPublisher:
                     else:
                         content += iframe
         except Exception as e:
+            from core_extensions import logger
             logger.warning(f"Failed to embed YouTube video: {e}")
         
-        
-        # Generate an evergreen slug by removing years (2020-2099)
         clean_slug = re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
-        # WordPress will automatically sanitize this string into a valid slug
         
         post_data = {
             'title': title,
@@ -1162,14 +1154,11 @@ class WordPressPublisher:
         
         if category_id:
             post_data['categories'] = [category_id]
-        
         if featured_image_id:
             post_data['featured_media'] = featured_image_id
-        
         if excerpt:
             post_data['excerpt'] = excerpt
-        
-        # Add Yoast and Rank Math SEO meta if available
+            
         meta_fields = {}
         if meta_description:
             meta_fields['_yoast_wpseo_metadesc'] = meta_description
@@ -1177,17 +1166,32 @@ class WordPressPublisher:
         if focus_keyword:
             meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
             meta_fields['rank_math_focus_keyword'] = focus_keyword
-        
+            
         if meta_fields:
             post_data['meta'] = meta_fields
-        
-        response = requests.post(
-            f"{self.api_url}/posts",
-            headers=headers,
-            json=post_data,
-            timeout=30
-        )
-        
+            
+        return post_data, meta_fields
+
+    def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
+        headers = self._get_auth()
+        headers['Content-Type'] = 'application/json'
+        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs)
+        try:
+            response = requests.post(
+                f"{self.api_url}/posts",
+                headers=headers,
+                json=post_data,
+                timeout=30
+            )
+        except requests.exceptions.Timeout:
+            # WordPress might have saved it, but took too long to respond.
+            # We return False but signal a timeout so the caller knows it might exist.
+            logger.error("Timeout while waiting for WordPress to publish the post.")
+            return False, "TIMEOUT: Post may have been created on WordPress but response timed out."
+        except Exception as e:
+            logger.error(f"Error publishing post to WordPress: {e}")
+            return False, str(e)
+            
         # If post created successfully, try to update Yoast meta separately
         if response.status_code == 201 and meta_fields:
             post_id = response.json().get('id')
@@ -1208,147 +1212,7 @@ class WordPressPublisher:
     def update_post_content(self, post_id, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
-        
-        # Clean content before posting
-        
-        # Remove placeholder patterns
-        placeholders = [
-            r'\[FLOWCHART:.*?\]',
-            r'\[INFOGRAPHIC:.*?\]',
-            r'\[CHECKLIST:.*?\]',
-            r'\[DIAGRAM:.*?\]',
-            r'\[IMAGE:.*?\]',
-            r'\[CHART:.*?\]',
-            r'\[TABLE:.*?\]',
-        ]
-        for pattern in placeholders:
-            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-        
-        # Remove ASCII art tables
-        content = re.sub(r'<pre[^>]*>.*?[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ”â””â”˜].*?</pre>', '', content, flags=re.DOTALL)
-        content = re.sub(r'[â”€â”‚â”¼â”œâ”¤â”¬â”´â”Œâ”â””â”˜â•”â•—â•šâ•â•‘â•â• â•£â•¦â•©â•¬]', '', content)
-        
-        # Remove empty paragraphs
-        content = re.sub(r'<p>\s*</p>', '', content)
-        content = re.sub(r'<p>\s*\\n\s*</p>', '', content)
-        
-        # Remove JSON artifacts at the beginning
-        content = re.sub(r'^\s*\{\s*"[^"]*"\s*:', '', content)
-        content = re.sub(r'"\s*\}\s*$', '', content)
-        
-        content = content.strip()
-        
-        # HTML Sanitizer (Fix broken tags)
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(content, 'html.parser')
-            # Fix broken links
-            for a in soup.find_all('a'):
-                if not a.get('href') or a.get('href').startswith('http') == False:
-                    # just keep text if invalid
-                    pass
-            content = str(soup)
-        except Exception as e:
-            logger.warning(f"Failed to sanitize HTML: {e}")
-            
-        # Inject Key Takeaways Box
-        if key_takeaways and isinstance(key_takeaways, list):
-            box = f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
-    <h3 style="margin-top:0; color:#0369a1;">âœ¨ Key Takeaways</h3>
-    <ul style="margin-bottom:0;">
-        {''.join([f'<li>{k}</li>' for k in key_takeaways])}
-    </ul>
-</div>"""
-            content = box + "\n" + content
-            
-        # Inject FAQ Schema (JSON-LD)
-        if faqs and isinstance(faqs, list):
-
-            schema = {
-                "@context": "https://schema.org",
-                "@type": "FAQPage",
-                "mainEntity": []
-            }
-            for faq in faqs:
-                if 'question' in faq and 'answer' in faq:
-                    schema["mainEntity"].append({
-                        "@type": "Question",
-                        "name": faq["question"],
-                        "acceptedAnswer": {
-                            "@type": "Answer",
-                            "text": faq["answer"]
-                        }
-                    })
-            if schema["mainEntity"]:
-                schema_html = f'\n<script type="application/ld+json">{json.dumps(schema)}</script>\n'
-                content += schema_html
-                
-        # YouTube Auto-Embed
-        try:
-            from duckduckgo_search import DDGS
-            search_term = focus_keyword if focus_keyword else title
-            ddgs = DDGS()
-            results = ddgs.text(f"site:youtube.com {search_term}", max_results=1)
-            if results:
-                url = results[0].get('href', '')
-
-                parsed = urllib.parse.urlparse(url)
-                video_id = None
-                if 'youtube.com/watch' in url:
-                    qs = urllib.parse.parse_qs(parsed.query)
-                    video_id = qs.get('v', [None])[0]
-                elif 'youtu.be/' in url:
-                    video_id = parsed.path.lstrip('/')
-                
-                if video_id and re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
-                    iframe = f'\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\n'
-                    # Insert in the middle of content
-                    # We can find the middle <h2 or <h3
-                    parts = re.split(r'(<h2.*?>)', content)
-                    if len(parts) >= 3:
-                        mid_idx = len(parts) // 2
-                        if mid_idx % 2 == 0:
-                            mid_idx += 1
-                        parts.insert(mid_idx, iframe)
-                        content = "".join(parts)
-                    else:
-                        content += iframe
-        except Exception as e:
-            logger.warning(f"Failed to embed YouTube video: {e}")
-        
-        
-        # Generate an evergreen slug by removing years (2020-2099)
-        clean_slug = re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
-        # WordPress will automatically sanitize this string into a valid slug
-        
-        post_data = {
-            'title': title,
-            'content': content,
-            'status': 'publish',
-            'slug': clean_slug
-        }
-        
-        if category_id:
-            post_data['categories'] = [category_id]
-        
-        if featured_image_id:
-            post_data['featured_media'] = featured_image_id
-        
-        if excerpt:
-            post_data['excerpt'] = excerpt
-        
-        # Add Yoast and Rank Math SEO meta if available
-        meta_fields = {}
-        if meta_description:
-            meta_fields['_yoast_wpseo_metadesc'] = meta_description
-            meta_fields['rank_math_description'] = meta_description
-        if focus_keyword:
-            meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
-            meta_fields['rank_math_focus_keyword'] = focus_keyword
-        
-        if meta_fields:
-            post_data['meta'] = meta_fields
-        
+        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs)
         response = requests.post(
             f"{self.api_url}/posts/{post_id}",
             headers=headers,

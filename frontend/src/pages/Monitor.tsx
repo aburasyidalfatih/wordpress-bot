@@ -60,7 +60,7 @@ export default function Monitor() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (error) {
-      console.error(error);
+      if (import.meta.env.DEV) console.error(error);
     } finally {
       setDownloading(false);
     }

@@ -316,41 +316,44 @@ class Database:
                 Base.metadata.create_all(self.engine)
             except Exception as e:
                 logger.warning(f"Database initialization conflict (expected in multi-process startup): {e}")
-            session_factory = sessionmaker(bind=self.engine)
-            self.Session = scoped_session(session_factory)
+            self.session_factory = sessionmaker(bind=self.engine)
+            self.Session = scoped_session(self.session_factory)
             
-            try:
-                self.migrate_plain_configs()
-            except Exception as em:
-                logger.warning(f"Database plain config migration warning: {em}")
-            
-            try:
-                self.migrate_add_timezone_column()
-            except Exception as em:
-                logger.warning(f"Database timezone migration warning: {em}")
-            
-            try:
-                self.migrate_add_language_column()
-            except Exception as em:
-                logger.warning(f"Database language migration warning: {em}")
-            
-            try:
-                self.migrate_credit_system_tables()
-            except Exception as em:
-                logger.warning(f"Database credit system migration warning: {em}")
-                
-            try:
-                self.migrate_add_foreign_keys()
-            except Exception as em:
-                logger.warning(f"Database foreign keys migration warning: {em}")
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
             raise
+            
+    def run_migrations(self):
+        try:
+            self.migrate_plain_configs()
+        except Exception as em:
+            logger.warning(f"Database plain config migration warning: {em}")
+        
+        try:
+            self.migrate_add_timezone_column()
+        except Exception as em:
+            logger.warning(f"Database timezone migration warning: {em}")
+        
+        try:
+            self.migrate_add_language_column()
+        except Exception as em:
+            logger.warning(f"Database language migration warning: {em}")
+        
+        try:
+            self.migrate_credit_system_tables()
+        except Exception as em:
+            logger.warning(f"Database credit system migration warning: {em}")
+            
+        try:
+            self.migrate_add_foreign_keys()
+        except Exception as em:
+            logger.warning(f"Database foreign keys migration warning: {em}")
+        logger.info("Database migrations completed successfully")
     
     @contextmanager
     def get_session(self):
-        session = self.Session()
+        session = self.session_factory()
         try:
             yield session
             session.commit()

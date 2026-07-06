@@ -47,7 +47,7 @@ class TrendingResearch:
             try:
                 pytrends = self._get_pytrends(language)
                 pytrends.build_payload([category_name], timeframe='now 7-d', geo=geo)
-                time.sleep(1)  # Rate limiting
+                time.sleep(5)  # Rate limiting
                 related = pytrends.related_queries()
                 
                 if category_name in related:
@@ -81,7 +81,7 @@ class TrendingResearch:
             geo = 'US' if language == 'en' else 'ID'
             pytrends = self._get_pytrends(language)
             pytrends.build_payload(keywords, timeframe='today 3-m', geo=geo)
-            time.sleep(1)
+            time.sleep(5)
             data = pytrends.interest_over_time()
             
             if data.empty:
@@ -113,7 +113,7 @@ class TrendingResearch:
             
             if not trending_data:
                 # Fallback: generate generic topics based on category
-                return self._generate_fallback_topics(category_name, count, language=language)
+                return []
             
             suggestions = []
             
@@ -145,163 +145,8 @@ class TrendingResearch:
                         'category': category_name
                     })
             
-            return suggestions if suggestions else self._generate_fallback_topics(category_name, count, language=language)
+            return suggestions if suggestions else []
         except Exception as e:
             logger.error(f"Suggest topics error: {e}")
-            return self._generate_fallback_topics(category_name, count, language=language)
+            return []
     
-    def _generate_fallback_topics(self, category_name, count=5, language='id'):
-        """Generate fallback topics when API fails"""
-        if language == 'en':
-            fallback_map = {
-                'Digital Education': [
-                    'Implementing AI in learning',
-                    'Best LMS platforms for schools',
-                    'Digitalization of school administration',
-                    'E-learning for modern education',
-                    'Latest education technology'
-                ],
-                'Marketing Strategy': [
-                    'School digital marketing tips',
-                    'Social media strategy for schools',
-                    'School branding strategies',
-                    'Effective student recruitment',
-                    'School website SEO'
-                ],
-                'Curriculum Development': [
-                    'Modern curriculum implementation',
-                    'Student-centered learning models',
-                    'Innovative assessment methods',
-                    'Teacher professional training',
-                    'In-house teacher training guides'
-                ],
-                'Financial Management': [
-                    'School financial management best practices',
-                    'Educational budgeting templates',
-                    'Financial transparency in schools',
-                    'Accounting software for education',
-                    'Financial compliance guidelines'
-                ],
-                'Legality and Licensing': [
-                    'School operational permit guides',
-                    'Accreditation preparation checklist',
-                    'Educational compliance tips',
-                    'School legal documentation'
-                ],
-                'HR Management': [
-                    'Teacher recruitment best practices',
-                    'Teacher performance management',
-                    'Teacher training strategies',
-                    'Staff retention in schools',
-                    'HR development in education'
-                ],
-                'Parent Services': [
-                    'School-parent communication tools',
-                    'Parent engagement strategies',
-                    'Parent portal implementation',
-                    'Family involvement in education'
-                ],
-                'SOP Creation': [
-                    'School standard operating procedures template',
-                    'School process documentation guide',
-                    'Educational quality assurance SOPs'
-                ],
-                'Dormitory Management': [
-                    'Dormitory management systems',
-                    'Boarding school management software',
-                    'Student welfare in dormitories'
-                ],
-                'School Business Unit': [
-                    'School entrepreneurship ideas',
-                    'Income generating activities for schools',
-                    'School cooperative management',
-                    'Education business ventures'
-                ],
-                'Education Hotnews': [
-                    'Viral: Inspiring educational innovations',
-                    'Trending: Latest education policy changes',
-                    'Hot topic: Viral phenomena in schools',
-                    'Viral story: Inspiring teachers changing lives'
-                ],
-                'Education Cost': [
-                    'Private school tuition trends',
-                    'University admission cost guide',
-                    'Student enrollment budgeting',
-                    'Tuition fee calculators',
-                    'Scholarships and financial aid'
-                ]
-            }
-        else:
-            fallback_map = {
-                'Digitalisasi Pendidikan': [
-                    'Implementasi AI dalam pembelajaran',
-                    'Platform LMS terbaik untuk sekolah',
-                    'Digitalisasi administrasi sekolah',
-                    'E-learning untuk pendidikan Indonesia',
-                    'Teknologi pendidikan terkini'
-                ],
-                'Strategi Pemasaran': [
-                    'Digital marketing untuk sekolah',
-                    'Social media strategy pendidikan',
-                    'SEO untuk website sekolah',
-                    'Content marketing lembaga pendidikan',
-                    'Branding sekolah di era digital'
-                ],
-                'Pengembangan Kurikulum': [
-                    'Implementasi Kurikulum Merdeka',
-                    'Pembelajaran berbasis proyek',
-                    'Assessment autentik',
-                    'Diferensiasi pembelajaran',
-                    'Kurikulum abad 21'
-                ],
-                'Manajemen Keuangan': [
-                    'Software akuntansi sekolah',
-                    'Budgeting pendidikan',
-                    'Transparansi keuangan lembaga',
-                    'Manajemen kas sekolah',
-                    'Pelaporan keuangan pendidikan'
-                ],
-                'Hotnews Pendidikan': [
-                    'Viral: Inovasi pendidikan yang menginspirasi',
-                    'Trending: Kebijakan pendidikan terbaru',
-                    'Hot topic: Fenomena viral di dunia pendidikan',
-                    'Breaking news: Prestasi siswa Indonesia',
-                    'Viral story: Guru inspiratif yang mengubah pendidikan'
-                ],
-                'Biaya Pendidikan': [
-                    'Biaya masuk sekolah swasta terbaik di Jakarta',
-                    'Panduan lengkap biaya kuliah universitas negeri',
-                    'Info PSB: Biaya pendaftaran sekolah favorit',
-                    'Perbandingan biaya sekolah internasional',
-                    'Beasiswa dan bantuan biaya pendidikan'
-                ]
-            }
-        
-        # Try to find matching category case-insensitively or use default fallback topics
-        topics = []
-        for cat, list_topics in fallback_map.items():
-            if cat.lower() in category_name.lower() or category_name.lower() in cat.lower():
-                topics = list_topics
-                break
-        
-        if not topics:
-            if language == 'en':
-                topics = [
-                    f"Understanding {category_name} deeply",
-                    f"Top 5 tips for managing {category_name}",
-                    f"Common mistakes in {category_name} and how to avoid them",
-                    f"How to implement {category_name} successfully",
-                    f"The future of {category_name} in 2026"
-                ]
-            else:
-                topics = [
-                    f"Panduan lengkap memahami {category_name}",
-                    f"5 tips sukses mengelola {category_name}",
-                    f"Kesalahan umum dalam {category_name} dan solusinya",
-                    f"Cara praktis menerapkan {category_name}",
-                    f"Tren terbaru {category_name} tahun 2026"
-                ]
-        
-        import random
-        selected = random.sample(topics, min(len(topics), count))
-        return [{'topic': t, 'type': 'fallback', 'category': category_name} for t in selected]

@@ -36,7 +36,7 @@ export default function Prompts() {
       })
       .catch(err => {
         if (err.name !== 'AbortError') {
-          console.error('Failed to load prompts:', err);
+          if (import.meta.env.DEV) console.error('Failed to load prompts:', err);
           setLoading(false);
         }
       });

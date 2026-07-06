@@ -51,7 +51,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           setProfile(data.profile);
         }
       })
-      .catch(err => { if (err.name !== 'AbortError') console.error(err); });
+      .catch(err => { if (err.name !== 'AbortError') if (import.meta.env.DEV) console.error(err); });
     return () => controller.abort();
   }, []);
 
@@ -64,7 +64,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             setProfile(data.profile);
           }
         })
-        .catch(console.error);
+        .catch(err => { if (import.meta.env.DEV) console.error(err); });
     };
     window.addEventListener('refresh-profile', handleRefresh);
     return () => window.removeEventListener('refresh-profile', handleRefresh);

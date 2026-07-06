@@ -66,7 +66,7 @@ export default function Research() {
         setLoading(false);
       })
       .catch(err => {
-        if (err.name !== 'AbortError') console.error('Failed to load research data:', err);
+        if (err.name !== 'AbortError') if (import.meta.env.DEV) console.error('Failed to load research data:', err);
       });
   }, [selectedSiteId]);
 

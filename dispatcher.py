@@ -124,5 +124,5 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error(f"Error in scheduler main loop: {e}")
             
-        # Check every 10 seconds to ensure high precision without CPU overhead
-        time.sleep(10)
+        # Check every 60 seconds to reduce CPU and DB overhead
+        time.sleep(60)

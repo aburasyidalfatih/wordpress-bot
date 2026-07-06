@@ -29,7 +29,7 @@ export default function Settings() {
       })
       .catch(err => {
         if (err.name !== 'AbortError') {
-          console.error('Failed to load profile:', err);
+          if (import.meta.env.DEV) console.error('Failed to load profile:', err);
           setLoading(false);
         }
       });

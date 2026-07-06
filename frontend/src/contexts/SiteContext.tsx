@@ -107,7 +107,7 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      console.error('Failed to fetch sites:', error);
+      if (import.meta.env.DEV) console.error('Failed to fetch sites:', error);
     } finally {
       setLoading(false);
     }

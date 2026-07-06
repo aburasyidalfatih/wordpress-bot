@@ -33,6 +33,10 @@ q = Queue('default', connection=redis_conn)
 
 # Initialize database using Config
 db = Database(Config.DATABASE_URL)
+# Run migrations only in the main process, skip if we are an RQ worker fork (check sys.argv)
+if 'rq' not in sys.argv[0] and 'worker' not in sys.argv:
+    db.run_migrations()
+
 optimizer = ContentOptimizer(db)
 trending = TrendingResearch()
 

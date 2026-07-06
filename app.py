@@ -682,9 +682,14 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
             logger.info(f"Article published successfully: {article.get('title', '')}")
         else:
             if credit_reserved and not credit_consumed:
-                db.refund_user_credits(user_id, 1)
-                credit_reserved = False
-                logger.info(f"Refunded reserved credit for failed post: user_id={user_id}, site_id={site_id}")
+                if isinstance(result, str) and "TIMEOUT" in result:
+                    logger.info(f"Not refunding credit due to TIMEOUT (post might exist): user_id={user_id}, site_id={site_id}")
+                    # We consider credit consumed to prevent abuse
+                    credit_consumed = True
+                else:
+                    db.refund_user_credits(user_id, 1)
+                    credit_reserved = False
+                    logger.info(f"Refunded reserved credit for failed post: user_id={user_id}, site_id={site_id}")
             send_telegram_notification(site_config,
                 f"❌ <b>Posting Gagal!</b>\n\n"
                 f"🌐 <b>Website:</b> {site_config['site_name']}\n"

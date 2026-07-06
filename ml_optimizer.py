@@ -13,18 +13,35 @@ class ContentOptimizer:
         
         if not performance:
             return None
+            
+        import numpy as np
+        
+        # Extract raw arrays for scaling
+        raw_engagements = np.array([cat['avg_engagement'] for cat in performance]).reshape(-1, 1)
+        raw_views = np.array([cat['total_views'] / max(cat['total_posts'], 1) for cat in performance]).reshape(-1, 1)
+        raw_comments = np.array([cat['total_comments'] / max(cat['total_posts'], 1) for cat in performance]).reshape(-1, 1)
+        
+        # Scale metrics to [0, 1] range approximately using StandardScaler
+        # (StandardScaler gives mean 0, variance 1, we can just use the scaled values directly for relative sorting)
+        if len(performance) > 1:
+            scaled_engagements = self.scaler.fit_transform(raw_engagements).flatten()
+            scaled_views = self.scaler.fit_transform(raw_views).flatten()
+            scaled_comments = self.scaler.fit_transform(raw_comments).flatten()
+        else:
+            scaled_engagements = [0]
+            scaled_views = [0]
+            scaled_comments = [0]
         
         # Calculate scores
-        for cat in performance:
-            # Normalize metrics
-            engagement_weight = 0.5
-            views_weight = 0.3
-            comments_weight = 0.2
-            
-            cat['performance_score'] = (
-                cat['avg_engagement'] * engagement_weight +
-                (cat['total_views'] / max(cat['total_posts'], 1)) * views_weight +
-                (cat['total_comments'] / max(cat['total_posts'], 1)) * comments_weight
+        engagement_weight = 0.5
+        views_weight = 0.3
+        comments_weight = 0.2
+        
+        for i, cat in enumerate(performance):
+            cat['performance_score'] = float(
+                scaled_engagements[i] * engagement_weight +
+                scaled_views[i] * views_weight +
+                scaled_comments[i] * comments_weight
             )
         
         # Sort by performance

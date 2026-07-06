@@ -60,7 +60,7 @@ export default function Dashboard() {
     apiFetch(`/api/dashboard?site_id=${selectedSiteId}&t=${Date.now()}`, { signal: controller.signal })
       .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
       .then(d => { setData(d); setLoading(false); })
-      .catch(err => { if (err.name !== 'AbortError') { console.error(err); setLoading(false); } });
+      .catch(err => { if (err.name !== 'AbortError') { if (import.meta.env.DEV) console.error(err); setLoading(false); } });
     return () => controller.abort();
   }, [selectedSiteId]);
 
