@@ -8,8 +8,6 @@ import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search
 import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
-import { ErrorState } from '@/components/ErrorState';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,8 +51,7 @@ export default function Research() {
   const { selectedSiteId } = useSiteContext();
   const [data, setData] = useState<ResearchDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [researching, setResearching] = useState(false);
+    const [researching, setResearching] = useState(false);
   const [researchingCategory, setResearchingCategory] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
@@ -275,11 +272,12 @@ export default function Research() {
         {selectedCategories.length > 0 && (
           <div className="flex gap-2">
             <AlertDialog>
-              <AlertDialogTrigger asChild>
+              <AlertDialogTrigger render={
                 <Button disabled={researching || Object.keys(researchData).length === 0} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-900/20">
                   <Trash2 className="h-4 w-4" />
                   Bersihkan Riset
                 </Button>
+              }>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>

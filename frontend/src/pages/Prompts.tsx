@@ -6,8 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
-import { ErrorState } from '@/components/ErrorState';
-import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import type { PromptsData } from '../lib/types';
 
@@ -16,11 +14,11 @@ export default function Prompts() {
   const [data, setData] = useState<PromptsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
+  
   const [articlePrompt, setArticlePrompt] = useState('');
   const [imagePrompt, setImagePrompt] = useState('');
   const [optimizing, setOptimizing] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedSiteId) {
@@ -36,12 +34,11 @@ export default function Prompts() {
         setArticlePrompt(d.config?.article_prompt || d.default_article_prompt || '');
         setImagePrompt(d.config?.image_prompt || d.default_image_prompt || '');
         setLoading(false);
-        setError(null);
       })
       .catch(err => {
         if (err.name !== 'AbortError') {
           if (import.meta.env.DEV) console.error('Failed to load prompts:', err);
-          setError(err.message);
+          toast.error(err.message);
           setLoading(false);
         }
       });

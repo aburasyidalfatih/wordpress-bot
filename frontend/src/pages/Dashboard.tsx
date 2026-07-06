@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { FileText, CheckCircle, Clock, BarChart2, AlertCircle, Lightbulb, TrendingUp, Sparkles, MessageSquare } from 'lucide-react';
 import EmptyState from '@/components/EmptyState';
 import { useSiteContext } from '@/contexts/SiteContext';
+import { ErrorState } from '@/components/ErrorState';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface DashboardRecommendation {
   type: string;

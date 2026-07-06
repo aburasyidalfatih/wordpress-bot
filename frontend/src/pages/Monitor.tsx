@@ -26,8 +26,7 @@ interface MonitorApiResponse {
 export default function Monitor() {
   const [data, setData] = useState<MonitorApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [downloading, setDownloading] = useState(false);
+    const [downloading, setDownloading] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
