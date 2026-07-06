@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Toaster } from 'sonner';
 import { useSiteContext } from '@/contexts/SiteContext';
 import { apiFetch } from '../lib/api';
 
@@ -403,6 +404,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
+      <Toaster position="bottom-right" />
     </div>
   );
 }

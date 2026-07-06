@@ -8,6 +8,19 @@ import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search
 import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
+import { ErrorState } from '@/components/ErrorState';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 export interface ResearchDataResponse {
   categories: CategoryType[];
@@ -40,6 +53,7 @@ export default function Research() {
   const { selectedSiteId } = useSiteContext();
   const [data, setData] = useState<ResearchDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [researching, setResearching] = useState(false);
   const [researchingCategory, setResearchingCategory] = useState<string | null>(null);
   const [message, setMessage] = useState('');
@@ -118,8 +132,8 @@ export default function Research() {
 
   const handleClearResearch = async () => {
     if (!selectedSiteId) return;
-    // TODO: Replace native confirm() with AlertDialog component for consistent UI
-    if (!confirm('Apakah Anda yakin ingin menghapus SEMUA hasil riset untuk website ini? Anda harus melakukan riset dari awal lagi setelahnya.')) return;
+    
+    
     
     try {
       const res = await apiFetch('/api/clear-research', {
@@ -260,10 +274,26 @@ export default function Research() {
         </div>
         {selectedCategories.length > 0 && (
           <div className="flex gap-2">
-            <Button onClick={handleClearResearch} disabled={researching || Object.keys(researchData).length === 0} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700">
-              <Trash2 className="h-4 w-4" />
-              Bersihkan Riset
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={researching || Object.keys(researchData).length === 0} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-900/20">
+                  <Trash2 className="h-4 w-4" />
+                  Bersihkan Riset
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Apakah Anda yakin?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Tindakan ini akan menghapus SEMUA hasil riset untuk website ini secara permanen. Anda harus melakukan riset dari awal lagi setelahnya.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Batal</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleClearResearch} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Ya, Hapus Riset</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <Button onClick={handleOpenBulkModal} disabled={researching} variant="outline" className="gap-2 font-semibold shadow-sm hover:shadow-md transition-all text-indigo-600 border-indigo-200 hover:bg-indigo-50">
               <Sparkles className="h-4 w-4" />
               Buat Judul Massal
@@ -277,7 +307,7 @@ export default function Research() {
       </div>
 
       {message && (
-        <div className={`p-4 rounded-xl text-sm font-medium border shadow-sm ${message.includes('fail') || message.includes('error') ? 'bg-red-50 text-red-800 border-red-200' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
+        <div aria-live="polite" className={`p-4 rounded-xl text-sm font-medium border shadow-sm ${message.includes('fail') || message.includes('error') ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-900/20' : 'bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-900/20'}`}>
           <div className="flex justify-between mb-2">
             <span>{message}</span>
             {researching && <span>{progress}%</span>}

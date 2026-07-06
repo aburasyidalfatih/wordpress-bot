@@ -630,7 +630,7 @@ export default function Sites() {
               <div className="flex justify-between items-start">
                 <div>
                   <CardTitle className="text-xl font-bold">{site.site_name}</CardTitle>
-                  <CardDescription className="mt-1.5 text-[13px] truncate max-w-[200px] text-muted-foreground/80" title={site.wordpress_url}>
+                  <CardDescription className="mt-1.5 text-[13px] truncate text-muted-foreground/80" title={site.wordpress_url}>
                     {site.wordpress_url}
                   </CardDescription>
                 </div>

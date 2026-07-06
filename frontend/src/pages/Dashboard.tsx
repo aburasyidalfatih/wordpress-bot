@@ -49,6 +49,7 @@ export default function Dashboard() {
   const { selectedSiteId } = useSiteContext();
   const [data, setData] = useState<DashboardApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedSiteId) {
@@ -59,16 +60,34 @@ export default function Dashboard() {
     const controller = new AbortController();
     apiFetch(`/api/dashboard?site_id=${selectedSiteId}&t=${Date.now()}`, { signal: controller.signal })
       .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
-      .then(d => { setData(d); setLoading(false); })
-      .catch(err => { if (err.name !== 'AbortError') { if (import.meta.env.DEV) console.error(err); setLoading(false); } });
+      .then(d => { setData(d); setLoading(false); setError(null); })
+      .catch(err => { if (err.name !== 'AbortError') { if (import.meta.env.DEV) console.error(err); setError(err.message); setLoading(false); } });
     return () => controller.abort();
   }, [selectedSiteId]);
 
+  const fetchDashboardData = () => {
+    if (!selectedSiteId) return;
+    setLoading(true); setError(null);
+    apiFetch(`/api/dashboard?site_id=${selectedSiteId}&t=${Date.now()}`)
+      .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(d => { setData(d); setLoading(false); })
+      .catch(err => { setError(err.message); setLoading(false); });
+  };
+
+  if (error) return <div className="p-6"><ErrorState message={error} onRetry={fetchDashboardData} /></div>;
+
   if (loading) return (
-    <div className="p-8 flex items-center justify-center min-h-[400px]">
-      <div className="flex flex-col items-center gap-4 text-muted-foreground">
-        <Clock className="h-8 w-8 animate-spin text-primary" />
-        Loading intelligence dashboard...
+    <div className="space-y-6 p-2 md:p-6 pb-24">
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-10 w-[200px]" />
+        <Skeleton className="h-4 w-[300px]" />
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        {[1,2,3,4].map(i => <Skeleton key={i} className="h-[120px] rounded-xl" />)}
+      </div>
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
+        <Skeleton className="h-[300px] rounded-xl" />
+        <Skeleton className="h-[300px] rounded-xl" />
       </div>
     </div>
   );

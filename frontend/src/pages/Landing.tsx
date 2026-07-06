@@ -110,7 +110,7 @@ export default function Landing() {
         </div>
 
         {/* Visual Mockup Container */}
-        <div className="mt-16 md:mt-20 relative rounded-2xl border border-slate-900 bg-slate-900/10 p-2 backdrop-blur-sm max-w-5xl mx-auto overflow-hidden shadow-2xl shadow-indigo-500/5">
+        <div aria-hidden="true" className="mt-16 md:mt-20 relative rounded-2xl border border-slate-900 bg-slate-900/10 p-2 backdrop-blur-sm max-w-5xl mx-auto overflow-hidden shadow-2xl shadow-indigo-500/5">
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent z-10" />
           <div className="rounded-xl border border-slate-900 bg-slate-950/85 p-6 md:p-8 flex flex-col gap-6 text-left">
             {/* Mockup Topbar */}

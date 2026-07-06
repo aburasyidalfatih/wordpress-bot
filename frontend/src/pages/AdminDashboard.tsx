@@ -254,7 +254,7 @@ export default function AdminDashboard() {
       </div>
 
       {/* Tabs Menu */}
-      <div className="flex border-b border-border gap-2">
+      <div className="flex overflow-x-auto whitespace-nowrap border-b border-border gap-2 no-scrollbar">
         {['overview', 'users', 'payments', 'monitor', 'settings', 'logs'].map((tab) => (
           <button
             key={tab}
@@ -262,7 +262,7 @@ export default function AdminDashboard() {
             className={`px-4 py-2 text-sm font-semibold capitalize border-b-2 transition-all -mb-px ${
               activeTab === tab 
                 ? 'border-primary text-primary' 
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
             }`}
           >
             {tab === 'payments' 

@@ -429,7 +429,7 @@ export default function Billing() {
                 {activeInvoice.payment_method === 'manual' && activeInvoice.bank_details && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 space-y-3">
-                      <h4 className="font-bold text-indigo-400">Manual Transfer Instructions</h4>
+                      <h4 className="font-bold text-indigo-700 dark:text-indigo-400">Manual Transfer Instructions</h4>
                       <p className="text-sm">Please transfer exactly <b>Rp {(activeInvoice.amount || cost).toLocaleString('id-ID')}</b> to the bank below:</p>
                       <div className="grid gap-2 text-sm font-medium mt-2 bg-background/50 p-3 rounded-lg">
                         <div className="flex justify-between"><span>Bank:</span> <span>{activeInvoice.bank_details.bank_name}</span></div>
@@ -471,7 +471,7 @@ export default function Billing() {
                 {activeInvoice.payment_method === 'tripay' && activeInvoice.tripay_data && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 space-y-2">
-                      <h4 className="font-bold text-emerald-400">Tripay Checkout Details</h4>
+                      <h4 className="font-bold text-emerald-700 dark:text-emerald-400">Tripay Checkout Details</h4>
                       <p className="text-sm">Invoice is created on {activeInvoice.tripay_data.payment_name}.</p>
                       <div className="grid gap-2 text-sm font-medium mt-2 bg-background/50 p-3 rounded-lg">
                         <div className="flex justify-between"><span>Payment Method:</span> <span>{activeInvoice.tripay_data.payment_name}</span></div>
@@ -495,7 +495,7 @@ export default function Billing() {
                 {activeInvoice.payment_method === 'paypal' && (
                   <div className="space-y-4">
                     <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 space-y-2">
-                      <h4 className="font-bold text-blue-400">PayPal Checkout Details</h4>
+                      <h4 className="font-bold text-blue-700 dark:text-blue-400">PayPal Checkout Details</h4>
                       <p className="text-sm">Paypal Order ID: <b>{activeInvoice.paypal_order_id}</b></p>
                       <p className="text-sm">Total to pay: <b>${activeInvoice.amount_usd} USD</b></p>
                       
@@ -573,7 +573,7 @@ export default function Billing() {
                         </Button>
                       </div>
                     ) : tx.receipt_url ? (
-                      <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-flex items-center text-xs text-indigo-400 hover:underline gap-1">
+                      <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-flex items-center text-xs text-indigo-700 dark:text-indigo-400 hover:underline gap-1">
                         <Eye className="h-3 w-3" /> View Receipt
                       </a>
                     ) : (

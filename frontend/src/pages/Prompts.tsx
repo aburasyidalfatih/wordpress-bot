@@ -6,6 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
+import { ErrorState } from '@/components/ErrorState';
+import { Skeleton } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 import type { PromptsData } from '../lib/types';
 
 export default function Prompts() {
@@ -13,7 +16,7 @@ export default function Prompts() {
   const [data, setData] = useState<PromptsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   const [articlePrompt, setArticlePrompt] = useState('');
   const [imagePrompt, setImagePrompt] = useState('');
@@ -27,16 +30,18 @@ export default function Prompts() {
     const controller = new AbortController();
     setLoading(true);
     apiFetch(`/api/prompts?site_id=${selectedSiteId}`, { signal: controller.signal })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
       .then(d => {
         setData(d);
         setArticlePrompt(d.config?.article_prompt || d.default_article_prompt || '');
         setImagePrompt(d.config?.image_prompt || d.default_image_prompt || '');
         setLoading(false);
+        setError(null);
       })
       .catch(err => {
         if (err.name !== 'AbortError') {
           if (import.meta.env.DEV) console.error('Failed to load prompts:', err);
+          setError(err.message);
           setLoading(false);
         }
       });
@@ -46,7 +51,7 @@ export default function Prompts() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    setMessage('');
+    
 
     const formData = new FormData();
     if (selectedSiteId) {
@@ -65,12 +70,12 @@ export default function Prompts() {
       });
       const result = await res.json();
       if (result.success) {
-        setMessage('Prompts saved successfully!');
+        toast.success('Prompts saved successfully!');
       } else {
-        setMessage('Failed to save prompts.');
+        toast.error('Failed to save prompts.');
       }
     } catch (err) {
-      setMessage('Network error.');
+      toast.error('Network error.');
     } finally {
       setSaving(false);
     }
@@ -83,7 +88,7 @@ export default function Prompts() {
   const handleOptimizePrompt = async (type: 'article' | 'image') => {
     if (!selectedSiteId) return;
     setOptimizing(type);
-    setMessage('');
+    
     
     const currentPrompt = type === 'article' ? (articlePrompt || data?.default_article_prompt) : (imagePrompt || data?.default_image_prompt);
     
