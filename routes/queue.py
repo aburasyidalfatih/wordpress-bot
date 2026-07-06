@@ -114,6 +114,28 @@ def delete_queue_api(user_id):
         session.commit()
     return jsonify({'success': True})
 
+@queue_bp.route('/api/queue/clear', methods=['POST'])
+@require_jwt
+def clear_queue_api(user_id):
+    from database import ContentQueue
+    data = request.get_json(silent=True) or {}
+    site_id = data.get('site_id')
+    if not site_id:
+        return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
+    
+    try:
+        with db.get_session() as session:
+            session.query(ContentQueue).filter_by(
+                user_id=user_id, 
+                site_id=site_id, 
+                status='pending'
+            ).delete()
+            session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Clear queue error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @queue_bp.route('/api/queue/edit/<int:item_id>', methods=['POST'])
 @require_jwt
 def edit_queue_api(user_id, item_id):

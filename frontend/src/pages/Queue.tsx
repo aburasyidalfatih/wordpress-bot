@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { RefreshCw, Plus, LayoutList, Eye, AlertCircle, Shuffle } from 'lucide-react';
+import { RefreshCw, Plus, LayoutList, Eye, AlertCircle, Shuffle, Trash2 } from 'lucide-react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableQueueItem } from './SortableQueueItem';
@@ -56,8 +56,9 @@ export default function Queue() {
   const [editKeywords, setEditKeywords] = useState('');
   const [regeneratingIds, setRegeneratingIds] = useState<Record<number, boolean>>({});
   const [shuffling, setShuffling] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const pollingDelayRef = useRef(3000);
-  const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post', id: number} | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post' | 'clear', id?: number} | null>(null);
 
   const itemsRef = useRef(items);
   useEffect(() => { itemsRef.current = items; }, [items]);
@@ -274,6 +275,31 @@ export default function Queue() {
     }
   };
 
+  const handleClearQueue = async () => {
+    if (!selectedSiteId) return;
+    setClearing(true);
+    try {
+      const res = await apiFetch('/api/queue/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_id: selectedSiteId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Semua antrean berhasil dihapus!');
+        loadQueue(true);
+      } else {
+        toast.error('Gagal menghapus antrean: ' + (data.error || 'Server error'));
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) console.error(e);
+      toast.error('Network error');
+    } finally {
+      setClearing(false);
+      setConfirmAction(null);
+    }
+  };
+
   const handlePostNow = (id: number) => {
     setConfirmAction({ type: 'post', id });
   };
@@ -401,10 +427,16 @@ export default function Queue() {
           </button>
         </div>
         {activeTab === 'queue' && (
-          <Button variant="outline" size="sm" onClick={handleShuffle} disabled={shuffling || items.length <= 1} className="mb-2">
-            <Shuffle className={`h-4 w-4 mr-2 ${shuffling ? 'animate-spin' : ''}`} />
-            Acak Urutan
-          </Button>
+          <div className="flex gap-2 mb-2">
+            <Button variant="outline" size="sm" onClick={() => setConfirmAction({ type: 'clear' })} disabled={clearing || pendingItems.length === 0} className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 dark:hover:bg-red-950/50">
+              <Trash2 className={`h-4 w-4 mr-2 ${clearing ? 'animate-spin' : ''}`} />
+              Hapus Semua Antrean
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleShuffle} disabled={shuffling || items.length <= 1}>
+              <Shuffle className={`h-4 w-4 mr-2 ${shuffling ? 'animate-spin' : ''}`} />
+              Acak Urutan
+            </Button>
+          </div>
         )}
       </div>
 
@@ -529,15 +561,21 @@ export default function Queue() {
             <AlertDialogDescription>
               {confirmAction?.type === 'delete' 
                 ? 'This action cannot be undone. This will permanently delete this title from the queue.' 
+                : confirmAction?.type === 'clear'
+                ? 'Peringatan: Semua artikel di antrean untuk situs ini akan dihapus secara permanen. Apakah Anda yakin?'
                 : 'This will immediately process and post this item right now.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => {
-              if (confirmAction?.type === 'delete') {
+            <AlertDialogAction 
+              className={confirmAction?.type === 'clear' || confirmAction?.type === 'delete' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}
+              onClick={() => {
+              if (confirmAction?.type === 'delete' && confirmAction.id) {
                 executeDelete(confirmAction.id);
-              } else if (confirmAction?.type === 'post') {
+              } else if (confirmAction?.type === 'clear') {
+                handleClearQueue();
+              } else if (confirmAction?.type === 'post' && confirmAction.id) {
                 executePostNow(confirmAction.id);
               }
             }}>
