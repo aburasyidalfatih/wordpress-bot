@@ -168,11 +168,17 @@ def api_optimize_prompt(user_id):
     if not site_id or not current_prompt:
         return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
         
-    if prompt_type == 'image':
-        if "FORMAT OUTPUT (JSON valid):" in current_prompt:
-            current_prompt = current_prompt.split("FORMAT OUTPUT (JSON valid):")[0].strip()
-        elif "FORMAT OUTPUT" in current_prompt:
-            current_prompt = current_prompt.split("FORMAT OUTPUT")[0].strip()
+    json_format_part = ""
+    if "FORMAT OUTPUT (JSON valid" in current_prompt:
+        parts = current_prompt.split("FORMAT OUTPUT (JSON valid")
+        current_prompt = parts[0].strip()
+        if prompt_type != 'image':
+            json_format_part = "\n\nFORMAT OUTPUT (JSON valid" + parts[1]
+    elif "FORMAT OUTPUT" in current_prompt:
+        parts = current_prompt.split("FORMAT OUTPUT")
+        current_prompt = parts[0].strip()
+        if prompt_type != 'image':
+            json_format_part = "\n\nFORMAT OUTPUT" + parts[1]
         
     config = load_config(user_id) or {}
     try:
@@ -207,7 +213,7 @@ def api_optimize_prompt(user_id):
                 lang_instruction = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
 
             if prompt_type == 'article':
-                json_instruction = "5. PERINGATAN FORMAT OUTPUT: Prompt asli memiliki teks instruksi \"FORMAT OUTPUT (JSON valid...)\" di bagian akhirnya. Anda HARUS mempertahankan teks instruksi tersebut apa adanya di bagian akhir prompt Anda. JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt."
+                json_instruction = "5. PERINGATAN: Bagian 'FORMAT OUTPUT' telah dipisahkan oleh sistem. Anda HANYA bertugas merevisi isi template bagian atasnya saja. JANGAN membuat blok JSON atau menyebutkan FORMAT OUTPUT sama sekali dalam respon Anda."
             else:
                 json_instruction = "5. PERINGATAN FORMAT OUTPUT: JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt gambar. JANGAN MENAMBAHKAN instruksi JSON apapun di akhir prompt."
 
@@ -259,7 +265,11 @@ Instruksi Revisi (SANGAT PENTING):
             if optimized_prompt.startswith('```'):
                 lines = optimized_prompt.split('\n')
                 if len(lines) > 2:
-                    optimized_prompt = '\n'.join(lines[1:-1])
+                    optimized_prompt = '\n'.join(lines[1:-1]).strip()
+            
+            # Re-attach the exact JSON format part
+            if json_format_part:
+                optimized_prompt = optimized_prompt + json_format_part
             
             return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
     except Exception as e:
