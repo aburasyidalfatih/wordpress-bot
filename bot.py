@@ -395,41 +395,9 @@ SEO OPTIMIZATION:
 
 OUTPUT FORMAT (JSON):
 {{
-    "title": "Title with high CTR formula (50-60 characters):
-    
-    REQUIRED FORMULA (choose one):
-    1. [Number] + [Power Word] + [Benefit] + [Proof/Location]
-       Example: '7 Proven Strategies to Increase Sales 300% in London'
-    
-    2. [Problem] + [Number] + [Solution]
-       Example: 'Low Engagement? 5 Ways to Get 95% Retention in 3 Months'
-    
-    3. [Social Proof] + [Benefit] + [How]
-       Example: '50+ Businesses Grew 500% - Here is How They Did It'
-    
-    4. [Mistake/Warning] + [Solution]
-       Example: '5 Fatal Marketing Mistakes (And How to Fix Them)'
-    
-    RULES FOR TITLE:
-    âœ“ MUST include a specific number (7, 5, 300%, 95%, etc.)
-    âœ“ MUST include a power word (Proven, Secrets, Fatal, Effective, Powerful)
-    âœ“ MUST include a clear benefit or problem
-    âœ“ Location if relevant (Chicago, London, etc.)
-    âœ“ Year 2026 if relevant
-    âœ“ DO NOT include the category name
-    âœ“ Focus on concrete results/solutions
-    âœ“ Create curiosity (curiosity gap)",
-    ✓ MUST include a specific number (7, 5, 300%, 95%, etc.)
-    ✓ MUST include a power word (Proven, Secrets, Fatal, Effective, Powerful)
-    ✓ MUST include a clear benefit or problem
-    ✓ Location if relevant (Chicago, London, etc.)
-    ✓ Year 2026 if relevant
-    ✓ DO NOT include the category name
-    ✓ Focus on concrete results/solutions
-    ✓ Create curiosity (curiosity gap)",
-    
+    "title": "Title with high CTR formula (50-60 characters) - REQUIRED: ONLY the title text. DO NOT add word count notes like (approx 450 words) or any brackets.",
     "meta_description": "Meta description 150-160 characters with CTA and keyword",
-    "content": "Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters.",
+    "content": "Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters. DO NOT put the title inside the content.",
     "focus_keyword": "main keyword of the article",
     "excerpt": "Engaging summary of 2-3 sentences with a strong hook",
     "reading_time": "estimated reading time (minutes)",
@@ -535,9 +503,9 @@ SEO OPTIMIZATION:
 
 FORMAT OUTPUT (JSON valid, tanpa markdown code blocks):
 {{
-    "title": "Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)",
+    "title": "Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter). WAJIB: HANYA berisi judul murni. JANGAN tambahkan catatan word count seperti (approx 450 words) atau kurung apapun.",
     "meta_description": "Meta description 150-160 karakter dengan CTA dan keyword",
-    "content": "Konten HTML lengkap 2000-2500 kata",
+    "content": "Konten HTML lengkap 2000-2500 kata. WAJIB: Langsung mulai dengan tag HTML paragraf pembuka, JANGAN ulangi judul di dalam konten.",
     "focus_keyword": "keyword utama artikel",
     "faqs": [
         {{"question": "Pertanyaan 1", "answer": "Jawaban 1"}},
