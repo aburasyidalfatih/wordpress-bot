@@ -586,6 +586,14 @@ PENTING:
             logger.error(f"JSON parsing failed: {e}")
             logger.error(f"Response preview: {response_text[:500]}")
             
+            extracted_title = None
+            try:
+                title_search = re.search(r'"title"\s*:\s*"([^"]+)"', response_text)
+                if title_search:
+                    extracted_title = title_search.group(1).strip()
+            except Exception:
+                pass
+            
             # Fallback if JSON parsing fails - try to extract content from malformed JSON
             content = response_text
             
@@ -620,11 +628,17 @@ PENTING:
             content = re.sub(r'\n.*?\}\s*$', '', content)  # Remove closing JSON
             
             if language == 'en':
-                title_match = content.split('\n')[0] if '\n' in content else f"Complete Guide to {topic}"
-                if title_match.startswith('#'):
-                    title_match = title_match.replace('#', '').strip()
+                fallback_title = f"Complete Guide to {topic}"
+                if extracted_title and len(extracted_title) < 200:
+                    final_title = extracted_title
+                else:
+                    title_match = content.split('\n')[0] if '\n' in content else fallback_title
+                    if title_match.startswith('#'):
+                        title_match = title_match.replace('#', '').strip()
+                    final_title = title_match[:200] if len(title_match) < 200 else fallback_title
+                    
                 return {
-                    "title": title_match[:200] if len(title_match) < 200 else f"Complete Guide to {topic}",
+                    "title": final_title,
                     "meta_description": f"Learn practical strategies and tips for {topic} to improve your organization. Complete guide with real-world case studies.",
                     "content": content,
                     "focus_keyword": topic,
@@ -637,13 +651,17 @@ PENTING:
                     ]
                 }
             else:
-                # Try to extract title if present
-                title_match = content.split('\n')[0] if '\n' in content else f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia"
-                if title_match.startswith('#'):
-                    title_match = title_match.replace('#', '').strip()
+                fallback_title = f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia"
+                if extracted_title and len(extracted_title) < 200:
+                    final_title = extracted_title
+                else:
+                    title_match = content.split('\n')[0] if '\n' in content else fallback_title
+                    if title_match.startswith('#'):
+                        title_match = title_match.replace('#', '').strip()
+                    final_title = title_match[:200] if len(title_match) < 200 else fallback_title
                 
                 return {
-                    "title": title_match[:200] if len(title_match) < 200 else f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia",
+                    "title": final_title,
                     "meta_description": f"Pelajari strategi dan tips praktis {topic} untuk meningkatkan kualitas lembaga pendidikan Anda. Panduan lengkap dengan studi kasus nyata.",
                     "content": content,
                     "focus_keyword": topic,
