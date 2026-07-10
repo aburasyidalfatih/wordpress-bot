@@ -27,9 +27,9 @@ class ArticleGenerator:
         self.image_model = image_model
     
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(Exception)
     )
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
         # Resolve custom prompt from either parameter name
@@ -674,6 +674,11 @@ PENTING:
                     ]
                 }
     
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(Exception)
+    )
     def generate_image(self, topic, title, article_content=None, custom_prompt=None, site_name=None, **kwargs):
         """Generate landscape featured image for blog"""
         target_site = site_name if site_name else "website"
