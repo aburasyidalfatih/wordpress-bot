@@ -17,6 +17,11 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.autowp-web.rule=Host(`autowp.web.id`)"
       - "traefik.http.services.autowp-web.loadbalancer.server.port=5003"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,6 +40,11 @@ services:
       - AUTOWP_RUNTIME_DIR=/app/runtime
     volumes:
       - autowp_runtime:/app/runtime
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +63,11 @@ services:
       - AUTOWP_RUNTIME_DIR=/app/runtime
     volumes:
       - autowp_runtime:/app/runtime
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +83,11 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-autowpdb}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -80,6 +100,11 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
