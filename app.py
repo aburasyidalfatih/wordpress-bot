@@ -822,70 +822,102 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
         from seo_research import SEOResearch
         seo = SEOResearch()
         
-        for category in selected_categories:
-            category_name = category['name']
+        successful_categories = 0
+        failed_categories = 0
+        
+        for cat in selected_categories:
+            category_name = cat['name']
             logger.info(f"Researching category: {category_name} on {site_name}")
             
-            # Get trending data
-            trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
-            
-            # Get suggestions
-            suggestions = trending.suggest_article_topics(category_name, count=10, language=language)
-            
-            # Get SEO research data
             try:
-                seo_data = seo.research_category(category_name, language=language)
-                keywords = seo_data.get('suggestions', [])
-                questions = seo_data.get('questions', [])
-                competitor_outlines = seo_data.get('competitor_outlines', [])
-                youtube_insights = seo_data.get('youtube_insights', [])
-                social_insights = seo_data.get('social_insights', [])
-                trend_score = seo_data.get('trend_score', 50)
+                # Get trending data
+                trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
                 
-                logger.info(f"SEO research: {len(keywords)} keywords, {len(questions)} questions, trend score: {trend_score}")
-            except Exception as e:
-                logger.error(f"SEO research error: {e}")
-                keywords = []
-                questions = []
-                competitor_outlines = []
-                youtube_insights = []
-                social_insights = []
-                trend_score = 50
-            
-            # Save to database with SEO data
-            db.save_research_data(
-                user_id=user_id,
-                site_id=site_id,
-                category=category_name,
-                trending=trending_data.get('trending_now', []) if trending_data else [],
-                rising=trending_data.get('related_rising', []) if trending_data else [],
-                top=trending_data.get('related_top', []) if trending_data else [],
-                suggestions=suggestions,
-                keywords=keywords,
-                questions=questions,
-                long_tail=[],
-                competitor_outlines=competitor_outlines,
-                youtube_insights=youtube_insights,
-                social_insights=social_insights,
-                trend_score=trend_score
-            )
-            
-            logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
+                # Get suggestions
+                suggestions = trending.suggest_article_topics(category_name, count=10, language=language)
+                
+                # Get SEO research data
+                try:
+                    seo_data = seo.research_category(category_name, language=language)
+                    keywords = seo_data.get('suggestions', [])
+                    questions = seo_data.get('questions', [])
+                    competitor_outlines = seo_data.get('competitor_outlines', [])
+                    youtube_insights = seo_data.get('youtube_insights', [])
+                    social_insights = seo_data.get('social_insights', [])
+                    trend_score = seo_data.get('trend_score', 50)
+                    
+                    logger.info(f"SEO research: {len(keywords)} keywords, {len(questions)} questions, trend score: {trend_score}")
+                except Exception as e:
+                    logger.error(f"SEO research error for {category_name}: {e}")
+                    keywords = []
+                    questions = []
+                    competitor_outlines = []
+                    youtube_insights = []
+                    social_insights = []
+                    trend_score = 50
+                
+                # Save to database with SEO data
+                db.save_research_data(
+                    user_id=user_id,
+                    site_id=site_id,
+                    category=category_name,
+                    trending=trending_data.get('trending_now', []) if trending_data else [],
+                    rising=trending_data.get('related_rising', []) if trending_data else [],
+                    top=trending_data.get('related_top', []) if trending_data else [],
+                    suggestions=suggestions,
+                    keywords=keywords,
+                    questions=questions,
+                    long_tail=[],
+                    competitor_outlines=competitor_outlines,
+                    youtube_insights=youtube_insights,
+                    social_insights=social_insights,
+                    trend_score=trend_score
+                )
+                
+                logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
+                successful_categories += 1
+                
+            except Exception as cat_error:
+                logger.error(f"Failed to research category {category_name}: {cat_error}")
+                failed_categories += 1
+        
+        # Process refunds if manual and there were failures
+        if force and failed_categories > 0:
+            db.refund_user_credits(user_id, failed_categories)
+            logger.info(f"Refunded {failed_categories} credits to user {user_id} due to research failures.")
         
         # Send notification
-        category_str = f"category '{category}'" if category else f"{len(selected_categories)} categories"
-        send_telegram_notification(site_config,
-            f"🔍 <b>Research Completed</b>\n\n"
-            f"🌐 <b>Website:</b> {site_name}\n"
-            f"✅ Researched {category_str}\n"
-            f"📊 Trending topics saved for tomorrow's articles")
-        
+        if successful_categories > 0:
+            category_str = f"category '{category}'" if category else f"{successful_categories} categories"
+            msg = (f"🔍 <b>Research Completed</b>\n\n"
+                   f"🌐 <b>Website:</b> {site_name}\n"
+                   f"✅ Researched {category_str}\n"
+                   f"📊 Trending topics saved for tomorrow's articles")
+            if failed_categories > 0:
+                msg += f"\n⚠️ Failed to research {failed_categories} categories (credits refunded if manual)."
+            
+            send_telegram_notification(site_config, msg)
+        else:
+            send_telegram_notification(site_config,
+                f"❌ <b>Research Failed</b>\n\n"
+                f"🌐 <b>Website:</b> {site_name}\n"
+                f"⚠️ Failed to research any categories. Credits refunded if manual.")
+                
     except Exception as e:
-        logger.error(f"Auto research error: {e}")
+        logger.error(f"Auto research error: {e}", exc_info=True)
+        # If the entire job fails drastically before looping completes
+        if force:
+            # We don't exactly know how many were left, so refund the ones we haven't succeeded on yet
+            total_charged = len(selected_categories)
+            refund_amount = total_charged - successful_categories if 'successful_categories' in locals() else total_charged
+            if refund_amount > 0:
+                db.refund_user_credits(user_id, refund_amount)
+                logger.info(f"Refunded {refund_amount} credits to user {user_id} due to total job failure.")
+                
         send_telegram_notification(site_config,
-            f"❌ <b>Research Failed</b>\n\n"
+            f"❌ <b>Research System Error</b>\n\n"
             f"🌐 <b>Website:</b> {site_name}\n"
-            f"Error: {str(e)}")
+            f"Error: {str(e)[:150]}")
 
 
 def bulk_update_year_task(user_id, site_id, from_year, to_year):

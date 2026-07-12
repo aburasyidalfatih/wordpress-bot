@@ -59,3 +59,10 @@ desktop.ini
 
 # Node
 node_modules/
+scratch/seed_admin.py
+kelasmaster-wp-config.php
+*.ps1
+*.db
+bot.log
+
+.zcode/

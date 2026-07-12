@@ -23,9 +23,9 @@ def api_research(user_id):
     
     # Get latest research data for each category
     research_data = {}
-    for category in selected_categories:
-        with db.get_session() as session:
-            from database import ResearchData
+    with db.get_session() as session:
+        from database import ResearchData
+        for category in selected_categories:
             latest = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
@@ -124,9 +124,14 @@ def manual_research(user_id):
         category = None
         
     try:
+        try:
+            site_id_int = int(site_id)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Format site_id tidak valid.'}), 400
+            
         with db.get_session() as session:
             from database import WordPressSite, User
-            site = session.query(WordPressSite).filter_by(id=int(site_id), user_id=user_id).first()
+            site = session.query(WordPressSite).filter_by(id=site_id_int, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
                 

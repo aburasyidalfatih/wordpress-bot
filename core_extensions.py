@@ -45,27 +45,22 @@ _config_cache = {}
 _stats_cache = {'data': None, 'timestamp': 0}
 
 def load_config(user_id=None):
-    """Load site-wide configuration.
-    
-    NOTE: All users share the admin's Gemini API key and global settings.
-    The user_id parameter is accepted for API backward-compatibility but 
-    currently always resolves to the admin's configuration.
-    For per-user settings (e.g., profile, notification prefs), use load_user_profile() instead.
+    """Load configuration for the specific user.
+    Falls back to admin if user_id is not provided.
     """
     now = time()
 
-    admin_id = None
-    try:
-        from database import User
-        with db.get_session() as session:
-            admin = session.query(User).filter_by(role='admin').first()
-            if admin:
-                admin_id = admin.id
-    except Exception as e:
-        logger.error(f"Error querying admin for config: {e}")
-        
-    # Global config is always admin-scoped (API keys belong to admin)
-    target_id = admin_id if admin_id is not None else user_id
+    target_id = user_id
+    if target_id is None:
+        try:
+            from database import User
+            with db.get_session() as session:
+                admin = session.query(User).filter_by(role='admin').first()
+                if admin:
+                    target_id = admin.id
+        except Exception as e:
+            logger.error(f"Error querying admin for config: {e}")
+            
     if target_id is None:
         target_id = 1
 
@@ -74,6 +69,13 @@ def load_config(user_id=None):
         return cached['data']
 
     config = db.get_config(target_id)
+    
+    # Fallback to admin's API key if user has none
+    if not config.get('gemini_api_key') and target_id != 1:
+        admin_config = db.get_config(1)
+        if admin_config and admin_config.get('gemini_api_key'):
+            config['gemini_api_key'] = admin_config['gemini_api_key']
+
     _config_cache[target_id] = {'data': config, 'timestamp': now}
     return config
 

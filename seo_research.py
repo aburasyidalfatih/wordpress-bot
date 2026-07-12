@@ -255,6 +255,20 @@ class SEOResearch:
             
         return list(set(insights))[:5] if insights else self._get_fallback_social(keyword, language)
 
+    def _get_fallback_social(self, keyword, language='id'):
+        """Fallback when social search fails"""
+        if language == 'en':
+            return [
+                f"What is the best way to use {keyword}?",
+                f"Why is {keyword} so popular recently?",
+                f"Can anyone explain {keyword} in simple terms?"
+            ]
+        return [
+            f"Apa pendapat kalian tentang {keyword}?",
+            f"Bagaimana cara terbaik memulai {keyword}?",
+            f"Apakah {keyword} masih relevan saat ini?"
+        ]
+
     def get_youtube_insights(self, keyword, language='id'):
         """Find top YouTube video and get transcript summary"""
         insights = []

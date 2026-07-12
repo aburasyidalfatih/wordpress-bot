@@ -92,10 +92,9 @@ def decrypt_value(value: str) -> str:
     except Exception as e:
         if isinstance(value, str) and value.startswith('gAAAAA'):
             # This is fernet ciphertext but decryption failed — key has likely changed.
-            # Return empty string rather than passing through ciphertext.
             logger.critical(f"Decryption failed for ciphertext (prefix gAAAAA). FERNET_KEY has likely changed. "
                           f"Restore from backup or re-enter the credential. Error: {e}")
-            return ""
+            raise ValueError(f"Decryption failed for sensitive value: {e}")
         # Value is not fernet-encoded — assume plaintext from migration or legacy data
         logger.warning(f"Value is not encrypted; storing plaintext is deprecated. Please re-save this configuration.")
         return value

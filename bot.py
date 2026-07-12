@@ -492,13 +492,13 @@ SEO OPTIMIZATION:
 ✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
 ✓ Optimasi untuk featured snippet (gunakan list/table)
 
-FORMAT OUTPUT (Gunakan XML-Tags berikut, BUKAN JSON):
+FORMAT OUTPUT (Gunakan XML-Tags berikut):
 
 <TITLE>Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter). WAJIB: HANYA berisi judul murni.</TITLE>
 <META_DESCRIPTION>Meta description 150-160 karakter dengan CTA dan keyword</META_DESCRIPTION>
 <FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>
 <CONTENT>
-Konten HTML lengkap 2000-2500 kata. WAJIB: Langsung mulai dengan tag HTML paragraf pembuka, JANGAN ulangi judul di dalam konten. Bebas berkreasi tanpa batasan string JSON!
+Konten HTML lengkap 2000-2500 kata. WAJIB: Langsung mulai dengan tag HTML paragraf pembuka, JANGAN ulangi judul di dalam konten. Bebas berkreasi tanpa batasan string!
 </CONTENT>
 <FAQS>
 Q: Pertanyaan 1?
@@ -509,7 +509,7 @@ A: Jawaban 2
 </FAQS>
 
 PENTING:
-- Output HARUS menggunakan TAG XML di atas. Jangan gunakan format JSON.
+- Output HARUS menggunakan TAG XML di atas.
 - Content harus dalam format HTML yang rapi
 - JUDUL: Fokus pada benefit/solusi, BUKAN nama kategori (contoh: "7 Strategi Meningkatkan Pendaftaran Siswa Baru" bukan "Strategi Pemasaran untuk Sekolah")"""
         # Force strict system rules regardless of custom prompt
@@ -1116,11 +1116,10 @@ class WordPressPublisher:
                 json=post_data,
                 timeout=30
             )
-        except requests.exceptions.Timeout:
-            # WordPress might have saved it, but took too long to respond.
-            # We return False but signal a timeout so the caller knows it might exist.
-            logger.error("Timeout while waiting for WordPress to publish the post.")
-            return False, "TIMEOUT: Post may have been created on WordPress but response timed out."
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            # WordPress might have saved it, but took too long to respond, or network failure.
+            logger.error("Transient error while waiting for WordPress to publish the post.")
+            raise  # Let @retry handle it
         except Exception as e:
             logger.error(f"Error publishing post to WordPress: {e}")
             return False, str(e)
