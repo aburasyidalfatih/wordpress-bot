@@ -70,7 +70,7 @@ export default function Research() {
       return;
     }
     setLoading(true);
-    apiFetch(`/api/research_data?site_id=${selectedSiteId}`, { signal })
+    apiFetch(`/api/research_data?site_id=${selectedSiteId}&_t=${Date.now()}`, { signal })
       .then(res => res.json())
       .then(d => {
         setData(d);
