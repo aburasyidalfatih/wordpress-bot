@@ -451,8 +451,10 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         if item_id:
             from database import ContentQueue
             with db.get_session() as session:
-                queue_item = session.query(ContentQueue).filter_by(
-                    id=item_id, user_id=user_id, status='pending'
+                queue_item = session.query(ContentQueue).filter(
+                    ContentQueue.id == item_id,
+                    ContentQueue.user_id == user_id,
+                    ContentQueue.status.in_(['pending', 'posting'])
                 ).with_for_update().first()
                 if queue_item:
                     # Update status to posting
