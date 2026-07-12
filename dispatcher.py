@@ -70,50 +70,43 @@ def dispatch_jobs():
                     try:
                         hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
                         if current_hour in hours_list:
-                            lock_key = f"scheduler:last_run_post:{site_id}"
-                            last_run = redis_conn.get(lock_key)
-                            if last_run:
-                                last_run = last_run.decode('utf-8')
+                            lock_key = f"scheduler:last_run_post:{site_id}:{current_hour_str}"
+                            lock_set = redis_conn.set(lock_key, "1", nx=True, ex=7200)
+                            if not lock_set:
+                                continue
+                            delay_minutes = random.randint(0, 50)
                             
-                            if last_run != current_hour_str:
-                                # Atomic lock: only set if not already claimed for this hour
-                                lock_set = redis_conn.set(lock_key, current_hour_str, nx=True, ex=172800)  # TTL 48h
-                                if not lock_set:
-                                    continue  # Another dispatcher instance already claimed this hour
-                                
-                                delay_minutes = random.randint(0, 50)
-                                
-                                # Check if there is a pending item in ContentQueue (pick oldest pending)
-                                from models import ContentQueue
-                                queue_item = session.query(ContentQueue).filter_by(
-                                    user_id=user_id, 
-                                    site_id=site_id, 
-                                    status='pending'
-                                ).order_by(ContentQueue.created_at.asc()).first()
-                                
-                                item_id = None
+                            # Check if there is a pending item in ContentQueue (pick oldest pending)
+                            from models import ContentQueue
+                            queue_item = session.query(ContentQueue).filter_by(
+                                user_id=user_id, 
+                                site_id=site_id, 
+                                status='pending'
+                            ).order_by(ContentQueue.created_at.asc()).first()
+                            
+                            item_id = None
+                            if queue_item:
+                                item_id = queue_item.id
+                                queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
+                                session.commit()
+                            
+                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
+                            try:
+                                q.enqueue_in(
+                                    timedelta(minutes=delay_minutes),
+                                    'tasks.article_jobs.generate_and_post',
+                                    user_id,
+                                    item_id,
+                                    site_id,
+                                    job_timeout='10m'
+                                )
+                            except Exception:
+                                # Rollback: release lock and revert queue item status
+                                redis_conn.delete(lock_key)
                                 if queue_item:
-                                    item_id = queue_item.id
-                                    queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
+                                    queue_item.status = 'pending'
                                     session.commit()
-                                
-                                logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
-                                try:
-                                    q.enqueue_in(
-                                        timedelta(minutes=delay_minutes),
-                                        'tasks.article_jobs.generate_and_post',
-                                        user_id,
-                                        item_id,
-                                        site_id,
-                                        job_timeout='10m'
-                                    )
-                                except Exception:
-                                    # Rollback: release lock and revert queue item status
-                                    redis_conn.delete(lock_key)
-                                    if queue_item:
-                                        queue_item.status = 'pending'
-                                        session.commit()
-                                    raise
+                                raise
                     except Exception as e:
                         logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
             except Exception as loop_err:

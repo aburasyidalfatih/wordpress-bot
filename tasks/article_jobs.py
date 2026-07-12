@@ -24,7 +24,7 @@ def _set_queue_item_status(item_id, user_id, status, post_url=None):
 def regenerate_image_job(user_id, log_id):
     from models import PostLog, WordPressSite
     from services.article_generator import ArticleGenerator
-from services.wp_publisher import WordPressPublisher
+    from services.wp_publisher import WordPressPublisher
     try:
         config = load_config(user_id)
         generator = ArticleGenerator(
@@ -130,7 +130,7 @@ from services.wp_publisher import WordPressPublisher
 def regenerate_article_job(user_id, log_id):
     from models import PostLog, WordPressSite
     from services.article_generator import ArticleGenerator
-from services.wp_publisher import WordPressPublisher
+    from services.wp_publisher import WordPressPublisher
     try:
         config = load_config(user_id)
         generator = ArticleGenerator(
