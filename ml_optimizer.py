@@ -1,6 +1,5 @@
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from collections import defaultdict
 
 class ContentOptimizer:
     def __init__(self, db):
@@ -13,16 +12,14 @@ class ContentOptimizer:
         
         if not performance:
             return None
-            
-        import numpy as np
         
         # Extract raw arrays for scaling
         raw_engagements = np.array([cat['avg_engagement'] for cat in performance]).reshape(-1, 1)
         raw_views = np.array([cat['total_views'] / max(cat['total_posts'], 1) for cat in performance]).reshape(-1, 1)
         raw_comments = np.array([cat['total_comments'] / max(cat['total_posts'], 1) for cat in performance]).reshape(-1, 1)
         
-        # Scale metrics to [0, 1] range approximately using StandardScaler
-        # (StandardScaler gives mean 0, variance 1, we can just use the scaled values directly for relative sorting)
+        # StandardScaler maps data to mean=0, std=1 (range typically -2 to +2).
+        # Positive scores indicate above-average performance.
         if len(performance) > 1:
             scaled_engagements = self.scaler.fit_transform(raw_engagements).flatten()
             scaled_views = self.scaler.fit_transform(raw_views).flatten()
@@ -65,9 +62,9 @@ class ContentOptimizer:
         
         recommendations = []
         
-        # Recommend increasing frequency for top performers
+        # Recommend increasing frequency for top performers (>0.5 standard deviations above mean)
         for cat in top_performers:
-            if cat['performance_score'] > 10:
+            if cat['performance_score'] > 0.5:
                 recommendations.append({
                     'type': 'increase_frequency',
                     'category': cat['category'],
@@ -75,9 +72,9 @@ class ContentOptimizer:
                     'action': 'Tingkatkan frekuensi posting untuk kategori ini'
                 })
         
-        # Recommend content improvement for low performers
+        # Recommend content improvement for low performers (< -0.5 standard deviations below mean)
         for cat in low_performers:
-            if cat['performance_score'] < 5 and cat['total_posts'] > 2:
+            if cat['performance_score'] < -0.5 and cat['total_posts'] > 2:
                 recommendations.append({
                     'type': 'improve_content',
                     'category': cat['category'],
@@ -114,6 +111,13 @@ class ContentOptimizer:
     def predict_engagement(self, category_name, user_id, site_id=None):
         """Predict expected engagement for a category"""
         performance = self.db.get_category_performance(user_id, site_id=site_id)
+        
+        if not performance:
+            return {
+                'predicted_views': 0,
+                'predicted_engagement': 0,
+                'confidence': 'low'
+            }
         
         for cat in performance:
             if cat['category'] == category_name:

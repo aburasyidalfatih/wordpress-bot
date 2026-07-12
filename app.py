@@ -28,6 +28,36 @@ from core_extensions import (
     post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
 )
 
+# ---- Rate Limiting ----
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+# RATELIMIT_STORAGE_URI can be set via env var to point to Redis
+_rate_limit_uri = os.getenv('RATELIMIT_STORAGE_URI', Config.REDIS_URL)
+
+def _rate_limit_key():
+    """Use user_id from JWT if available, otherwise fall back to IP."""
+    try:
+        token = request.cookies.get('auth_token') or (
+            request.headers.get('Authorization', '').removeprefix('Bearer ')
+        )
+        if token:
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+            user_id = payload.get('user_id')
+            if user_id:
+                return f"user:{user_id}"
+    except Exception:
+        pass
+    return get_remote_address()
+
+limiter = Limiter(
+    key_func=_rate_limit_key,
+    storage_uri=_rate_limit_uri,
+    default_limits=["200 per day", "50 per hour"],
+    strategy="fixed-window"
+)
+# ---- End Rate Limiting ----
+
 # Import blueprints
 from routes.auth import auth_bp
 from routes.queue import queue_bp
@@ -68,6 +98,7 @@ except Exception as e:
 
 app = Flask(__name__)
 app.config.from_object(Config)
+limiter.init_app(app)
 
 from security import generate_csrf_token
 app.jinja_env.globals['csrf_token'] = generate_csrf_token
@@ -420,7 +451,9 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         if item_id:
             from database import ContentQueue
             with db.get_session() as session:
-                queue_item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
+                queue_item = session.query(ContentQueue).filter_by(
+                    id=item_id, user_id=user_id, status='pending'
+                ).with_for_update().first()
                 if queue_item:
                     # Update status to posting
                     queue_item.status = 'posting'
@@ -867,14 +900,14 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
                 return
             
             site_config = {
-                'url': site.url,
-                'username': site.username,
-                'password': site.app_password,
+                'wordpress_url': site.wordpress_url,
+                'wordpress_username': site.wordpress_username,
+                'wordpress_password': site.wordpress_password,
                 'site_name': site.site_name
             }
-            
-        from bot import WordPressBot
-        bot = WordPressBot(site_config)
+        
+        from bot import WordPressPublisher
+        bot = WordPressPublisher(site_config['wordpress_url'], site_config['wordpress_username'], site_config['wordpress_password'])
         
         # Get all posts
         page = 1
@@ -935,8 +968,8 @@ def shutdown():
 
 # Register shutdown handlers
 atexit.register(shutdown)
-signal.signal(signal.SIGTERM, lambda s, f: shutdown())
-signal.signal(signal.SIGINT, lambda s, f: shutdown())
+signal.signal(signal.SIGTERM, lambda s, f: (shutdown(), os._exit(0)))
+signal.signal(signal.SIGINT, lambda s, f: (shutdown(), os._exit(0)))
 
 
 # Static frontend serving
@@ -948,6 +981,23 @@ def serve_frontend(path):
         return send_from_directory(frontend_dir, path)
     else:
         return send_from_directory(frontend_dir, 'index.html')
+
+
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses."""
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('X-XSS-Protection', '1; mode=block')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    # CSP: allow self, google APIs (fonts/auth), and inline styles for dynamic content
+    if 'Content-Type' in response.headers and 'text/html' in response.headers['Content-Type']:
+        response.headers.setdefault(
+            'Content-Security-Policy',
+            "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-src 'self' https://www.youtube.com;"
+        )
+    return response
 
 
 if __name__ == '__main__':

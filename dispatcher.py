@@ -75,9 +75,14 @@ def dispatch_jobs():
                                 last_run = last_run.decode('utf-8')
                             
                             if last_run != current_hour_str:
+                                # Atomic lock: only set if not already claimed for this hour
+                                lock_set = redis_conn.set(lock_key, current_hour_str, nx=True, ex=172800)  # TTL 48h
+                                if not lock_set:
+                                    continue  # Another dispatcher instance already claimed this hour
+                                
                                 delay_minutes = random.randint(0, 50)
                                 
-                                # Check if there is a pending item in ContentQueue (pick top/newest)
+                                # Check if there is a pending item in ContentQueue (pick oldest pending)
                                 from database import ContentQueue
                                 queue_item = session.query(ContentQueue).filter_by(
                                     user_id=user_id, 
@@ -101,8 +106,9 @@ def dispatch_jobs():
                                         site_id,
                                         job_timeout='10m'
                                     )
-                                    redis_conn.set(lock_key, current_hour_str)
                                 except Exception:
+                                    # Rollback: release lock and revert queue item status
+                                    redis_conn.delete(lock_key)
                                     if queue_item:
                                         queue_item.status = 'pending'
                                         session.commit()

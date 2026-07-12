@@ -22,4 +22,5 @@ beautifulsoup4==4.12.3
 duckduckgo-search==6.3.2
 youtube-transcript-api==0.6.3
 gunicorn==21.2.0
+Flask-Limiter[redis]==3.5.0
 tzdata

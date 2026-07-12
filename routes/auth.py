@@ -6,10 +6,28 @@ from flask import session
 from werkzeug.security import check_password_hash, generate_password_hash
 import requests
 
-from core_extensions import db, logger, require_jwt, send_email_notification, send_whatsapp_notification
+from core_extensions import db, logger, require_jwt, send_email_notification, send_whatsapp_notification, redis_conn
 from config import Config
 
 auth_bp = Blueprint('auth', __name__)
+
+def _check_rate_limit(key_prefix, max_attempts, window_seconds):
+    """Simple Redis-based rate limiter. Returns (is_allowed, remaining_seconds)."""
+    import time
+    if redis_conn is None:
+        return True, 0
+    client_ip = request.remote_addr or '127.0.0.1'
+    key = f"ratelimit:{key_prefix}:{client_ip}"
+    current = redis_conn.get(key)
+    now = int(time.time())
+    if current and int(current) >= max_attempts:
+        ttl = redis_conn.ttl(key)
+        return False, max(ttl, 1)
+    pipe = redis_conn.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, window_seconds)
+    pipe.execute()
+    return True, 0
 
 def is_configured_admin_email(email):
     return (email or '').strip().lower() in Config.ADMIN_EMAILS
@@ -146,6 +164,9 @@ def api_auth_google():
 
 @auth_bp.route('/api/login', methods=['POST'])
 def api_auth_login():
+    allowed, retry_sec = _check_rate_limit('login', max_attempts=5, window_seconds=300)
+    if not allowed:
+        return jsonify({'success': False, 'error': f'Too many login attempts. Try again in {retry_sec} seconds.'}), 429
     data = request.json or {}
     email = data.get('email', '')
     password = data.get('password', '')

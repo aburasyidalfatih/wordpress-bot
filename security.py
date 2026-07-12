@@ -71,29 +71,33 @@ def get_fernet():
     return _fernet_instance
 
 def encrypt_value(value: str) -> str:
-    """Encrypt a string value using Fernet."""
+    """Encrypt a string value using Fernet. Raises RuntimeError on failure — never returns plaintext."""
     if not value:
         return value
     try:
         f = get_fernet()
         return f.encrypt(value.encode()).decode()
     except Exception as e:
-        logger.error(f"Encryption error: {e}")
-        return value
+        logger.critical(f"Encryption error: {e}. Refusing to store plaintext; configuration may not be saved.")
+        raise RuntimeError(f"Failed to encrypt sensitive value: {e}") from e
 
 def decrypt_value(value: str) -> str:
-    """Decrypt a string value using Fernet. Returns original value if not encrypted."""
+    """Decrypt a string value using Fernet. Returns empty string for ciphertext that cannot be decrypted
+    (FERNET_KEY has changed). Returns plaintext as-is if value is not fernet-encoded."""
     if not value:
         return value
     try:
         f = get_fernet()
-        # If it's encrypted, decrypt it. If it fails, it might be plain-text
         return f.decrypt(value.encode()).decode()
     except Exception as e:
         if isinstance(value, str) and value.startswith('gAAAAA'):
-            logger.warning(f"Decryption failed for ciphertext. The FERNET_KEY has likely changed. Error: {e}")
+            # This is fernet ciphertext but decryption failed — key has likely changed.
+            # Return empty string rather than passing through ciphertext.
+            logger.critical(f"Decryption failed for ciphertext (prefix gAAAAA). FERNET_KEY has likely changed. "
+                          f"Restore from backup or re-enter the credential. Error: {e}")
             return ""
-        # Assume it's plain-text already
+        # Value is not fernet-encoded — assume plaintext from migration or legacy data
+        logger.warning(f"Value is not encrypted; storing plaintext is deprecated. Please re-save this configuration.")
         return value
 
 import secrets

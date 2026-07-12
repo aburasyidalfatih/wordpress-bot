@@ -19,7 +19,6 @@ import json
 import time
 from urllib.parse import quote_plus
 import logging
-import random
 
 try:
     from pytrends.request import TrendReq
@@ -182,112 +181,9 @@ class SEOResearch:
                 score = int(data[keyword].iloc[-1])
         except Exception as e:
             logger.error(f"Pytrends error for {keyword}: {e}")
-            # Fallback to randomizing slightly if real data fails to simulate dynamic trends
-            score = random.randint(40, 85)
+            score = 0  # Return 0 when real data is unavailable
             
         return score
-
-    def _get_fallback_competitors(self, keyword, language='id'):
-        if language == 'en':
-            domain_templates = [
-                "medium.com", "www.forbes.com", "www.nytimes.com", 
-                "www.entrepreneur.com", "www.huffpost.com", "www.businessinsider.com"
-            ]
-            competitors = []
-            for i in range(3):
-                domain = random.choice(domain_templates)
-                slug = keyword.lower().replace(" ", "-")
-                url = f"https://{domain}/read/{slug}-latest"
-                title = f"Complete Guide to {keyword.title()}"
-                headers = [
-                    f"Understanding {keyword.title()}",
-                    f"Benefits and Importance of {keyword.title()}",
-                    f"How to Optimize {keyword.title()}",
-                    f"Challenges in {keyword.title()}",
-                    f"Conclusion and Strategic Action Steps"
-                ]
-                competitors.append({
-                    'url': url,
-                    'title': title,
-                    'headers': headers
-                })
-            return competitors
-        else:
-            domain_templates = [
-                "edukasi.kompas.com", "www.hukumonline.com", "www.quipper.com", 
-                "www.ruangguru.com", "blog.ruangguru.com", "www.zenius.net"
-            ]
-            competitors = []
-            for i in range(3):
-                domain = random.choice(domain_templates)
-                slug = keyword.lower().replace(" ", "-")
-                url = f"https://{domain}/read/{slug}-terbaru"
-                title = f"Panduan Lengkap Seputar {keyword.title()} di Indonesia"
-                headers = [
-                    f"Pengertian {keyword.title()}",
-                    f"Manfaat dan Pentingnya {keyword.title()}",
-                    f"Cara Mengoptimalkan {keyword.title()}",
-                    f"Tantangan dalam {keyword.title()}",
-                    f"Kesimpulan dan Langkah Strategis"
-                ]
-                competitors.append({
-                    'url': url,
-                    'title': title,
-                    'headers': headers
-                })
-            return competitors
-
-    def _get_fallback_social(self, keyword, language='id'):
-        if language == 'en':
-            templates = [
-                f"How to start applying {keyword} for beginners?",
-                f"Any recommendations for the best platform for {keyword}?",
-                f"Why is {keyword} so important in today's digital era?",
-                f"What is the average cost required for {keyword}?",
-                f"What are the biggest obstacles when trying to implement {keyword} in our team?"
-            ]
-        else:
-            templates = [
-                f"Bagaimana cara memulai menerapkan {keyword} untuk pemula?",
-                f"Apakah ada yang punya rekomendasi platform terbaik untuk {keyword}?",
-                f"Mengapa {keyword} sangat penting di era digital saat ini?",
-                f"Berapa rata-rata biaya yang dibutuhkan untuk {keyword}?",
-                f"Apa saja hambatan terbesar saat mencoba melakukan {keyword} di sekolah?"
-            ]
-        return random.sample(templates, min(len(templates), 3))
-
-    def _get_fallback_youtube(self, keyword, language='id'):
-        video_ids = ["dQw4w9WgXcQ", "yPYZpwSpKmA", "xL92q0c51tY"]
-        if language == 'en':
-            titles = [
-                f"Complete Guide to {keyword.title()} - Practical Tips & Success Strategies",
-                f"Guide to {keyword.title()} for Modern Organizations",
-                f"New Innovation: Easy Way to Manage {keyword.title()}"
-            ]
-            snippets = [
-                f"In this video we will discuss how to implement {keyword} efficiently in our organization. Many face obstacles in...",
-                f"Hello everyone, this time I will share important tips regarding {keyword} that are often asked. We will start from...",
-                f"Learning {keyword} does not have to be difficult. In this short video, I show you step-by-step to make your process run smoothly..."
-            ]
-        else:
-            titles = [
-                f"Kupas Tuntas {keyword.title()} - Tips Praktis & Strategi Sukses",
-                f"Panduan {keyword.title()} Untuk Sekolah dan Madrasah",
-                f"Inovasi Baru: Cara Mudah Mengelola {keyword.title()}"
-            ]
-            snippets = [
-                f"Dalam video ini kita akan membahas bagaimana mengimplementasikan {keyword} secara efisien di lembaga pendidikan kita. Banyak sekolah menghadapi kendala dalam...",
-                f"Halo semuanya, kali ini saya akan membagikan tips penting mengenai {keyword} yang sering ditanyakan oleh rekan-rekan guru. Kita akan mulai dari...",
-                f"Belajar {keyword} tidak harus sulit. Di video singkat ini, saya tunjukkan langkah demi langkah agar administrasi sekolah Anda berjalan..."
-            ]
-        insights = []
-        for i in range(2):
-            insights.append({
-                'video_id': random.choice(video_ids),
-                'title': titles[i],
-                'snippets': snippets[i][:150] + "..."
-            })
-        return insights
 
     def analyze_competitors(self, keyword, language='id'):
         """Scrape top 3 competitors via DuckDuckGo and extract their headers"""
@@ -339,7 +235,7 @@ class SEOResearch:
         """Search Quora & Reddit for real human questions"""
         insights = []
         if not self.ddgs:
-            return self._get_fallback_social(keyword, language)
+            return []
 
         try:
             query = f"site:quora.com OR site:reddit.com {keyword}"
@@ -355,7 +251,7 @@ class SEOResearch:
                         insights.append(title)
         except Exception as e:
             logger.error(f"DDGS social insights error: {e}")
-            return self._get_fallback_social(keyword, language)
+            return []
             
         return list(set(insights))[:5] if insights else self._get_fallback_social(keyword, language)
 

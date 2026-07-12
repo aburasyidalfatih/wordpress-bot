@@ -29,7 +29,7 @@ class ArticleGenerator:
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type(Exception)
+        retry=retry_if_exception_type((genai.errors.ServerError, genai.errors.APIError, ConnectionError, TimeoutError))
     )
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
         # Resolve custom prompt from either parameter name
@@ -393,25 +393,16 @@ SEO OPTIMIZATION:
 âœ— Use HTML table (<table>) for tables, NOT ASCII art
 âœ— If you want a checklist, use <ul> or <ol>, NOT placeholders
 
-OUTPUT FORMAT (JSON):
-{{
-    "title": "Title with high CTR formula (50-60 characters) - REQUIRED: ONLY the title text. DO NOT add word count notes like (approx 450 words) or any brackets.",
-    "meta_description": "Meta description 150-160 characters with CTA and keyword",
-    "content": "Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters. DO NOT put the title inside the content.",
-    "focus_keyword": "main keyword of the article",
-    "excerpt": "Engaging summary of 2-3 sentences with a strong hook",
-    "reading_time": "estimated reading time (minutes)",
-    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"],
-    "faqs": [
-        {{"question": "Question 1", "answer": "Answer 1"}},
-        {{"question": "Question 2", "answer": "Answer 2"}}
-    ]
-}}
+OUTPUT FORMAT (XML TAGS - MANDATORY):
+<TITLE>Title with high CTR formula (50-60 characters) - ONLY the title text. DO NOT add word count notes or brackets.</TITLE>
+<META_DESCRIPTION>Meta description 150-160 characters with CTA and keyword</META_DESCRIPTION>
+<CONTENT>Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters. DO NOT put the title inside the content.</CONTENT>
+<FOCUS_KEYWORD>main keyword of the article</FOCUS_KEYWORD>
 
 IMPORTANT:
-- Output MUST be valid JSON without markdown code blocks
-- DO NOT use ```json or ``` in output
-- Return ONLY the JSON object
+- Output MUST use XML tags as shown above. DO NOT output JSON.
+- DO NOT use ```xml or ``` in output
+- Return ONLY the XML tagged content
 - Content must be cleanly formatted in HTML
 """
         else:
@@ -888,66 +879,71 @@ class WordPressPublisher:
         retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
     )
     def upload_image(self, image_data, title):
-        """Upload image via WordPress REST API"""
+        """Upload image via WordPress REST API.
+        
+        Transient network errors (ConnectionError, Timeout) propagate to trigger retry.
+        Non-transient errors (bad status, data issues) are caught and return None immediately."""
+        if isinstance(image_data, BytesIO):
+            image_bytes = image_data.getvalue()
+            sanitized_title = sanitize_filename(title[:50])
+            filename = f'{sanitized_title}.webp'
+            mime_type = 'image/webp'
+        else:
+            # Download image from URL — transient errors propagate for retry
+            response = requests.get(image_data, timeout=30)
+            if response.status_code != 200:
+                logger.error(f"Failed to download image: {response.status_code}")
+                return None
+            image_bytes = response.content
+            sanitized_title = sanitize_filename(title[:50])
+            filename = f'{sanitized_title}.jpg'
+            mime_type = 'image/jpeg'
+        
+        # Upload via WordPress REST API — transient errors propagate for retry
+        headers = self._get_auth()
+        headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        headers['Content-Type'] = mime_type
+        
         try:
-            if isinstance(image_data, BytesIO):
-                image_bytes = image_data.getvalue()
-                sanitized_title = sanitize_filename(title[:50])
-                filename = f'{sanitized_title}.webp'
-                mime_type = 'image/webp'
-            else:
-                response = requests.get(image_data, timeout=30)
-                if response.status_code != 200:
-                    logger.error(f"Failed to download image: {response.status_code}")
-                    return None
-                image_bytes = response.content
-                sanitized_title = sanitize_filename(title[:50])
-                filename = f'{sanitized_title}.jpg'
-                mime_type = 'image/jpeg'
-            
-            # Upload via WordPress REST API
-            headers = self._get_auth()
-            headers['Content-Disposition'] = f'attachment; filename="{filename}"'
-            headers['Content-Type'] = mime_type
-            
             response = requests.post(
                 f"{self.api_url}/media",
                 headers=headers,
                 data=image_bytes,
                 timeout=60
             )
-            
-            if response.status_code == 201:
-                media_data = response.json()
-                media_id = media_data['id']
-                logger.info(f"Image uploaded successfully via REST API: {media_id}")
-                
-                # Update SEO metadata (Alt Text, Description, Title)
-                try:
-                    update_headers = self._get_auth()
-                    update_headers['Content-Type'] = 'application/json'
-                    metadata_payload = {
-                        'title': title,
-                        'alt_text': title,
-                        'description': f"Illustration for article about: {title}"
-                    }
-                    requests.post(
-                        f"{self.api_url}/media/{media_id}",
-                        headers=update_headers,
-                        json=metadata_payload,
-                        timeout=30
-                    )
-                    logger.info(f"Image SEO metadata updated for media ID: {media_id}")
-                except Exception as meta_e:
-                    logger.error(f"Failed to update image metadata: {meta_e}")
-                    
-                return media_id
-            else:
-                logger.error(f"Failed to upload image: {response.status_code} - {response.text}")
-                return None
-                
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            raise  # Let @retry handle transient errors
         except Exception as e:
-            logger.error(f"Error uploading image: {e}")
+            logger.error(f"Error uploading image (non-retryable): {e}")
+            return None
+        
+        if response.status_code == 201:
+            media_data = response.json()
+            media_id = media_data['id']
+            logger.info(f"Image uploaded successfully via REST API: {media_id}")
+            
+            # Update SEO metadata (Alt Text, Description, Title)
+            try:
+                update_headers = self._get_auth()
+                update_headers['Content-Type'] = 'application/json'
+                metadata_payload = {
+                    'title': title,
+                    'alt_text': title,
+                    'description': f"Illustration for article about: {title}"
+                }
+                requests.post(
+                    f"{self.api_url}/media/{media_id}",
+                    headers=update_headers,
+                    json=metadata_payload,
+                    timeout=30
+                )
+                logger.info(f"Image SEO metadata updated for media ID: {media_id}")
+            except Exception as meta_e:
+                logger.error(f"Failed to update image metadata: {meta_e}")
+                
+            return media_id
+        else:
+            logger.error(f"Failed to upload image: {response.status_code} - {response.text}")
             return None
     
     def get_categories(self):
@@ -970,12 +966,6 @@ class WordPressPublisher:
             logger.error(f"Error fetching categories: {e}")
             return []
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
-    )
-
     def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
         import urllib.parse
         import json
@@ -1110,6 +1100,11 @@ class WordPressPublisher:
             
         return post_data, meta_fields
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+    )
     def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'

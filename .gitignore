@@ -13,12 +13,31 @@ logs/
 *.sqlite
 *.sqlite3
 temp*.html
+temp_log.txt
 runtime/
 scratch/
 legacy_sqlite_backup/
 venv/
 .vscode/
 .idea/
+
+# Operational scripts & one-off utilities
+*.ps1
+debug_out.txt
+categories.json
+backups/
+DESIGN-mongodb.md
+
+# Client-site PHP operational files
+create_pages.php
+get_views.php
+update_categories.php
+update_tagline.php
+
+# Ad-hoc test scripts
+test_image_prompt.py
+test_json.py
+test_strict.py
 
 # Security - certificates & keys
 *.pem

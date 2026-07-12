@@ -45,6 +45,13 @@ _config_cache = {}
 _stats_cache = {'data': None, 'timestamp': 0}
 
 def load_config(user_id=None):
+    """Load site-wide configuration.
+    
+    NOTE: All users share the admin's Gemini API key and global settings.
+    The user_id parameter is accepted for API backward-compatibility but 
+    currently always resolves to the admin's configuration.
+    For per-user settings (e.g., profile, notification prefs), use load_user_profile() instead.
+    """
     now = time()
 
     admin_id = None
@@ -57,6 +64,7 @@ def load_config(user_id=None):
     except Exception as e:
         logger.error(f"Error querying admin for config: {e}")
         
+    # Global config is always admin-scoped (API keys belong to admin)
     target_id = admin_id if admin_id is not None else user_id
     if target_id is None:
         target_id = 1
@@ -102,6 +110,7 @@ def require_jwt(f):
             
         logger.debug(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
         if not token:
+            return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
             return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
             
         try:

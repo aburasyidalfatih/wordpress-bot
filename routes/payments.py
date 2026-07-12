@@ -369,7 +369,7 @@ def tripay_webhook():
             hashlib.sha256
         ).hexdigest()
         
-        if signature != calculated_signature:
+        if not hmac.compare_digest(signature, calculated_signature):
             logger.warning("Tripay webhook signature mismatch!")
             return jsonify({'success': False, 'message': 'Signature mismatch'}), 400
             

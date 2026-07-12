@@ -15,3 +15,13 @@ temp*.html
 runtime/
 legacy_sqlite_backup/
 .env
+# Exclude sensitive operational files that shouldn't be in the image
+*.php
+*.ps1
+debug_out.txt
+categories.json
+temp_log.txt
+backups/
+*.sql
+*.psd
+*.zip
