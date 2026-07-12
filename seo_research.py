@@ -76,7 +76,20 @@ class SEOResearch:
                     suggestions = data[1][:limit]
         except Exception as e:
             logger.error(f"Error getting keyword suggestions: {e}")
-        return suggestions
+            
+        if not suggestions:
+            # Fallback if Google Autocomplete fails or yields nothing
+            if language == 'en':
+                suggestions = [
+                    f"best {keyword}", f"{keyword} tips", f"{keyword} tutorial", 
+                    f"how to start with {keyword}", f"{keyword} for beginners"
+                ]
+            else:
+                suggestions = [
+                    f"tips {keyword}", f"panduan {keyword}", f"belajar {keyword}",
+                    f"cara memulai {keyword}", f"{keyword} untuk pemula"
+                ]
+        return suggestions[:limit]
 
     def get_related_questions(self, keyword, limit=10, language='id'):
         """Generate related questions dynamically via Google Autocomplete using question modifiers"""
@@ -181,7 +194,7 @@ class SEOResearch:
                 score = int(data[keyword].iloc[-1])
         except Exception as e:
             logger.error(f"Pytrends error for {keyword}: {e}")
-            score = 0  # Return 0 when real data is unavailable
+            score = 50  # Fallback to average score when real data is unavailable
             
         return score
 
@@ -251,7 +264,7 @@ class SEOResearch:
                         insights.append(title)
         except Exception as e:
             logger.error(f"DDGS social insights error: {e}")
-            return []
+            return self._get_fallback_social(keyword, language)
             
         return list(set(insights))[:5] if insights else self._get_fallback_social(keyword, language)
 
