@@ -11,7 +11,7 @@ import jwt
 
 from core_extensions import db, logger, require_jwt, send_email_notification, send_whatsapp_notification
 from config import Config
-from database import User, Transaction
+from models import User, Transaction
 
 payments_bp = Blueprint('payments', __name__)
 VALID_PAYMENT_METHODS = {'manual', 'tripay', 'paypal'}

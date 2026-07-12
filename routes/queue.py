@@ -3,7 +3,7 @@ from rq.job import Job
 from rq.exceptions import NoSuchJobError
 
 from core_extensions import db, q, redis_conn, logger, load_config, require_jwt
-from bot import ArticleGenerator
+from services.article_generator import ArticleGenerator
 
 queue_bp = Blueprint('queue', __name__)
 
@@ -15,7 +15,7 @@ def api_queue(user_id):
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
     with db.get_session() as session:
-        from database import ContentQueue, WordPressSite
+        from models import ContentQueue, WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
@@ -39,7 +39,7 @@ def api_queue(user_id):
 @queue_bp.route('/api/queue', methods=['POST'])
 @require_jwt
 def add_queue_api(user_id):
-    from database import ContentQueue, WordPressSite
+    from models import ContentQueue, WordPressSite
     data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     title = data.get('title')
@@ -70,7 +70,7 @@ def add_queue_api(user_id):
 @require_jwt
 def shuffle_queue(user_id):
     import random
-    from database import ContentQueue
+    from models import ContentQueue
     data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     if not site_id:
@@ -104,7 +104,7 @@ def shuffle_queue(user_id):
 @queue_bp.route('/api/queue', methods=['DELETE'])
 @require_jwt
 def delete_queue_api(user_id):
-    from database import ContentQueue
+    from models import ContentQueue
     data = request.get_json(silent=True) or {}
     item_id = data.get('id')
     if not item_id:
@@ -121,7 +121,7 @@ def delete_queue_api(user_id):
 @queue_bp.route('/api/queue/clear', methods=['POST'])
 @require_jwt
 def clear_queue_api(user_id):
-    from database import ContentQueue
+    from models import ContentQueue
     data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     if not site_id:
@@ -143,7 +143,7 @@ def clear_queue_api(user_id):
 @queue_bp.route('/api/queue/edit/<int:item_id>', methods=['POST'])
 @require_jwt
 def edit_queue_api(user_id, item_id):
-    from database import ContentQueue
+    from models import ContentQueue
     data = request.get_json(silent=True) or {}
     title = data.get('title')
     target_keywords = data.get('target_keywords', '')
@@ -161,7 +161,7 @@ def edit_queue_api(user_id, item_id):
 @queue_bp.route('/api/queue/reorder', methods=['POST'])
 @require_jwt
 def reorder_queue_api(user_id):
-    from database import ContentQueue
+    from models import ContentQueue
     data = request.get_json(silent=True) or {}
     ids = data.get('ids', [])
     
@@ -183,7 +183,7 @@ def reorder_queue_api(user_id):
 @queue_bp.route('/api/queue/post/<int:item_id>', methods=['POST'])
 @require_jwt
 def post_queue_api(user_id, item_id):
-    from database import ContentQueue, User
+    from models import ContentQueue, User
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
@@ -202,7 +202,7 @@ def post_queue_api(user_id, item_id):
         session.commit()
 
     try:
-        q.enqueue('app.generate_and_post', user_id, item_id, None, True, job_timeout='10m')
+        q.enqueue('tasks.article_jobs.generate_and_post', user_id, item_id, None, True, job_timeout='10m')
     except Exception as e:
         # Refund credit on enqueue failure
         db.refund_user_credits(user_id, 1)
@@ -217,7 +217,7 @@ def post_queue_api(user_id, item_id):
 @queue_bp.route('/api/queue/history/regenerate-image/<int:log_id>', methods=['POST'])
 @require_jwt
 def regenerate_image_api(user_id, log_id):
-    from database import PostLog
+    from models import PostLog
     with db.get_session() as session:
         log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
         if not log:
@@ -230,7 +230,7 @@ def regenerate_image_api(user_id, log_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi'}), 402
 
     try:
-        q.enqueue('app.regenerate_image_job', user_id, log_id, job_timeout='5m')
+        q.enqueue('tasks.article_jobs.regenerate_image_job', user_id, log_id, job_timeout='5m')
     except Exception as e:
         db.refund_user_credits(user_id, 1)
         logger.error(f"Regenerate image enqueue failed: {e}")
@@ -240,7 +240,7 @@ def regenerate_image_api(user_id, log_id):
 @queue_bp.route('/api/queue/history/regenerate-article/<int:log_id>', methods=['POST'])
 @require_jwt
 def regenerate_article_api(user_id, log_id):
-    from database import PostLog
+    from models import PostLog
     with db.get_session() as session:
         log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
         if not log:
@@ -253,7 +253,7 @@ def regenerate_article_api(user_id, log_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi'}), 402
 
     try:
-        q.enqueue('app.regenerate_article_job', user_id, log_id, job_timeout='10m')
+        q.enqueue('tasks.article_jobs.regenerate_article_job', user_id, log_id, job_timeout='10m')
     except Exception as e:
         db.refund_user_credits(user_id, 1)
         logger.error(f"Regenerate article enqueue failed: {e}")
@@ -263,7 +263,7 @@ def regenerate_article_api(user_id, log_id):
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
 def manual_post(user_id):
-    from database import User, WordPressSite
+    from models import User, WordPressSite
     data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     if not site_id:
@@ -280,7 +280,7 @@ def manual_post(user_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
     try:
-        job = q.enqueue('app.generate_and_post', user_id, None, site_id, True, job_timeout='10m')
+        job = q.enqueue('tasks.article_jobs.generate_and_post', user_id, None, site_id, True, job_timeout='10m')
         return jsonify({'success': True, 'message': 'Artikel dijadwalkan untuk diposting'})
     except Exception as e:
         db.refund_user_credits(user_id, 1)
@@ -329,7 +329,7 @@ def test_generate(user_id):
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404

@@ -82,7 +82,7 @@ def api_auth_google():
         return jsonify({'success': False, 'error': 'Google token did not provide an email'}), 400
         
     with db.get_session() as session:
-        from database import User
+        from models import User
         user = session.query(User).filter_by(google_id=google_id).first()
         if not user:
             user = session.query(User).filter_by(email=email).first()
@@ -172,7 +172,7 @@ def api_auth_login():
     password = data.get('password', '')
     logger.info(f"Login attempt for email: {email}")
     with db.get_session() as session:
-        from database import User
+        from models import User
         user = session.query(User).filter_by(email=email).first()
         if user and user.password_hash and check_password_hash(user.password_hash, password):
             if not user.is_active:
@@ -202,7 +202,7 @@ def api_auth_login():
 @require_jwt
 def api_auth_verify(user_id):
     with db.get_session() as session:
-        from database import User
+        from models import User
         user = session.query(User).filter_by(id=user_id).first()
         if not user:
             return jsonify({'authenticated': False, 'error': 'User not found'}), 404

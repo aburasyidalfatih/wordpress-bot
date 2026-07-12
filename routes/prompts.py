@@ -12,7 +12,7 @@ def api_prompts(user_id):
         return jsonify({'success': False, 'error': 'site_id is required'}), 400
         
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -146,7 +146,7 @@ def save_prompts(user_id):
     image_prompt = request.form.get('image_prompt')
     
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -183,7 +183,7 @@ def api_optimize_prompt(user_id):
     config = load_config(user_id) or {}
     try:
         with db.get_session() as session:
-            from database import WordPressSite
+            from models import WordPressSite
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -194,7 +194,7 @@ def api_optimize_prompt(user_id):
             cats = site.categories or []
             categories = ", ".join([c.get('name', '') if isinstance(c, dict) else str(c) for c in cats])
             
-            from bot import ArticleGenerator
+            from services.article_generator import ArticleGenerator
             
             api_key = config.get('gemini_api_key')
             if not api_key:

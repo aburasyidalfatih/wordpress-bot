@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from core_extensions import db, optimizer, require_jwt, load_config
-from bot import WordPressPublisher
+from services.wp_publisher import WordPressPublisher
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -13,7 +13,7 @@ def api_dashboard(user_id):
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
@@ -25,7 +25,7 @@ def api_dashboard(user_id):
             
         logs = db.get_logs(user_id, site_id=site_id, limit=20)
         
-        from database import ContentQueue
+        from models import ContentQueue
         active_queue = session.query(ContentQueue).filter_by(
             user_id=user_id, site_id=site_id, status='posting'
         ).order_by(ContentQueue.created_at.desc()).all()
@@ -98,7 +98,7 @@ def sync_engagement(user_id):
         
     try:
         with db.get_session() as session:
-            from database import WordPressSite
+            from models import WordPressSite
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -145,7 +145,7 @@ def optimize_categories(user_id):
         
     try:
         with db.get_session() as session:
-            from database import WordPressSite
+            from models import WordPressSite
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404

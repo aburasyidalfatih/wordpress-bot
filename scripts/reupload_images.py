@@ -3,9 +3,11 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bot import WordPressPublisher, ArticleGenerator
+from services.article_generator import ArticleGenerator
+from services.wp_publisher import WordPressPublisher
 from config import Config
-from database import Database, WordPressSite
+from database import Database
+from models import WordPressSite
 
 db = Database(Config.DATABASE_URL)
 with db.get_session() as session:

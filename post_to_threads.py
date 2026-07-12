@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import Database, PostLog, WordPressSite
+from database import Database
+from models import PostLog, WordPressSite
 from config import Config
 
 load_dotenv()

@@ -1,7 +1,7 @@
 import requests
 from flask import Blueprint, request, jsonify
 from core_extensions import db, logger, require_jwt, send_telegram_notification
-from bot import WordPressPublisher
+from services.wp_publisher import WordPressPublisher
 
 sites_bp = Blueprint('sites', __name__)
 
@@ -15,7 +15,7 @@ def _should_update_secret(value):
 @require_jwt
 def get_sites(user_id):
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         sites = session.query(WordPressSite).filter_by(user_id=user_id).order_by(WordPressSite.created_at.desc()).all()
         return jsonify({
             'success': True,
@@ -75,7 +75,7 @@ def create_site(user_id):
         return jsonify({'success': False, 'error': 'WordPress URL is required'}), 400
         
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = WordPressSite(
             user_id=user_id,
             site_name=data.get('site_name', 'New Website'),
@@ -97,7 +97,7 @@ def create_site(user_id):
 def update_site(user_id, site_id):
     data = request.get_json(silent=True) or {}
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -159,7 +159,7 @@ def update_site(user_id, site_id):
 @require_jwt
 def delete_site(user_id, site_id):
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -172,7 +172,7 @@ def delete_site(user_id, site_id):
 @require_jwt
 def fetch_categories(user_id, site_id):
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -219,7 +219,7 @@ def fetch_categories(user_id, site_id):
 @require_jwt
 def test_telegram(user_id, site_id):
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -259,7 +259,7 @@ def test_telegram(user_id, site_id):
 @require_jwt
 def next_category(user_id, site_id):
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -282,7 +282,7 @@ def next_category(user_id, site_id):
 @require_jwt
 def get_prompts(user_id, site_id):
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -333,7 +333,7 @@ STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
 def save_prompts(user_id, site_id):
     data = request.get_json(silent=True) or {}
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404

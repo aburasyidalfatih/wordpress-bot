@@ -6,7 +6,7 @@ settings_bp = Blueprint('settings', __name__)
 @settings_bp.route('/api/settings')
 @require_jwt
 def api_settings(user_id):
-    from database import User
+    from models import User
     is_admin = False
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
@@ -44,7 +44,7 @@ def save_config_route(user_id):
 @settings_bp.route('/api/profile', methods=['GET', 'POST'])
 @require_jwt
 def api_profile(user_id):
-    from database import User
+    from models import User
     from werkzeug.security import generate_password_hash
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()

@@ -136,7 +136,7 @@ def health():
     try:
         # Check DB connection
         with db.get_session() as session:
-            from database import User
+            from models import User
             session.query(User).first()
         
         # Check Redis connection

@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from redis import Redis
 from rq import Queue
-from database import Database, WordPressSite, User
+from database import Database
+from models import WordPressSite, User
 from config import Config
 
 # Setup logging
@@ -83,7 +84,7 @@ def dispatch_jobs():
                                 delay_minutes = random.randint(0, 50)
                                 
                                 # Check if there is a pending item in ContentQueue (pick oldest pending)
-                                from database import ContentQueue
+                                from models import ContentQueue
                                 queue_item = session.query(ContentQueue).filter_by(
                                     user_id=user_id, 
                                     site_id=site_id, 
@@ -100,7 +101,7 @@ def dispatch_jobs():
                                 try:
                                     q.enqueue_in(
                                         timedelta(minutes=delay_minutes),
-                                        'app.generate_and_post',
+                                        'tasks.article_jobs.generate_and_post',
                                         user_id,
                                         item_id,
                                         site_id,

@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
 
-from database import Database, WordPressSite
+from database import Database
+from models import WordPressSite
 from config import Config
 from trending_research import TrendingResearch
 

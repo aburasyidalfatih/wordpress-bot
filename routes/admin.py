@@ -3,7 +3,8 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from core_extensions import db, logger, require_admin, send_email_notification, send_whatsapp_notification
-from database import User, Transaction, Config as DBConfig, WordPressSite, PostLog, ResearchData, ContentQueue
+from database import Config as DBConfig
+from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
 
 admin_bp = Blueprint('admin', __name__)
 

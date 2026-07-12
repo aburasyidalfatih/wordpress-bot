@@ -53,7 +53,7 @@ def load_config(user_id=None):
     target_id = user_id
     if target_id is None:
         try:
-            from database import User
+            from models import User
             with db.get_session() as session:
                 admin = session.query(User).filter_by(role='admin').first()
                 if admin:
@@ -133,7 +133,7 @@ def require_admin(f):
     @wraps(f)
     @require_jwt
     def decorated_function(user_id, *args, **kwargs):
-        from database import User
+        from models import User
         with db.get_session() as session:
             user = session.query(User).filter_by(id=user_id).first()
             if not user or user.role != 'admin':

@@ -104,7 +104,7 @@ def main():
         # Load config dari PostgreSQL DATABASE_URL
         db = Database(Config.DATABASE_URL)
         with db.get_session() as session:
-            from database import WordPressSite
+            from models import WordPressSite
             site = session.query(WordPressSite).first()
             if site:
                 wp_url = site.wordpress_url

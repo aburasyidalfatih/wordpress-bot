@@ -14,7 +14,7 @@ def api_research(user_id):
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
     with db.get_session() as session:
-        from database import WordPressSite
+        from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
@@ -24,7 +24,7 @@ def api_research(user_id):
     # Get latest research data for each category
     research_data = {}
     with db.get_session() as session:
-        from database import ResearchData
+        from models import ResearchData
         for category in selected_categories:
             latest = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
@@ -60,7 +60,7 @@ def get_trending(user_id, category):
     language = 'id'
     if site_id:
         with db.get_session() as session:
-            from database import WordPressSite
+            from models import WordPressSite
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if site:
                 language = site.language or 'id'
@@ -93,7 +93,7 @@ def suggest_topics(user_id):
             except (TypeError, ValueError):
                 return jsonify({'success': False, 'error': 'Invalid site_id'}), 400
             with db.get_session() as session:
-                from database import WordPressSite
+                from models import WordPressSite
                 site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
                 if site:
                     language = site.language or 'id'
@@ -130,7 +130,7 @@ def manual_research(user_id):
             return jsonify({'success': False, 'error': 'Format site_id tidak valid.'}), 400
             
         with db.get_session() as session:
-            from database import WordPressSite, User
+            from models import WordPressSite, User
             site = session.query(WordPressSite).filter_by(id=site_id_int, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
@@ -167,7 +167,7 @@ def manual_research(user_id):
 
         # Enqueue outside the validation query. If Redis/RQ fails, refund the user.
         try:
-            job = q.enqueue('app.deep_research_job', user_id, True, site_id, category)
+            job = q.enqueue('tasks.research_jobs.deep_research_job', user_id, True, site_id, category)
         except Exception as enqueue_error:
             db.refund_user_credits(user_id, required_credits)
             logger.error(f"Manual research enqueue failed, refunded {required_credits} credits: {enqueue_error}")
@@ -201,7 +201,7 @@ def generate_titles(user_id, category):
     try:
         # Get keywords from research data
         with db.get_session() as session:
-            from database import ResearchData, ContentQueue, WordPressSite
+            from models import ResearchData, ContentQueue, WordPressSite
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
@@ -224,7 +224,7 @@ def generate_titles(user_id, category):
                     break
         
         # Use ArticleGenerator to suggest titles
-        from bot import ArticleGenerator
+        from services.article_generator import ArticleGenerator
         generator = ArticleGenerator(
             config['gemini_api_key'], 
             config.get('gemini_model', 'gemini-2.5-pro'),
@@ -312,7 +312,7 @@ def clear_research(user_id):
         
     try:
         with db.get_session() as session:
-            from database import ResearchData
+            from models import ResearchData
             deleted_count = session.query(ResearchData).filter_by(site_id=site_id, user_id=user_id).delete()
             session.commit()
             
