@@ -501,22 +501,24 @@ SEO OPTIMIZATION:
 ✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
 ✓ Optimasi untuk featured snippet (gunakan list/table)
 
-FORMAT OUTPUT (JSON valid, tanpa markdown code blocks):
-{{
-    "title": "Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter). WAJIB: HANYA berisi judul murni. JANGAN tambahkan catatan word count seperti (approx 450 words) atau kurung apapun.",
-    "meta_description": "Meta description 150-160 karakter dengan CTA dan keyword",
-    "content": "Konten HTML lengkap 2000-2500 kata. WAJIB: Langsung mulai dengan tag HTML paragraf pembuka, JANGAN ulangi judul di dalam konten.",
-    "focus_keyword": "keyword utama artikel",
-    "faqs": [
-        {{"question": "Pertanyaan 1", "answer": "Jawaban 1"}},
-        {{"question": "Pertanyaan 2", "answer": "Jawaban 2"}}
-    ]
-}}
+FORMAT OUTPUT (Gunakan XML-Tags berikut, BUKAN JSON):
+
+<TITLE>Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter). WAJIB: HANYA berisi judul murni.</TITLE>
+<META_DESCRIPTION>Meta description 150-160 karakter dengan CTA dan keyword</META_DESCRIPTION>
+<FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>
+<CONTENT>
+Konten HTML lengkap 2000-2500 kata. WAJIB: Langsung mulai dengan tag HTML paragraf pembuka, JANGAN ulangi judul di dalam konten. Bebas berkreasi tanpa batasan string JSON!
+</CONTENT>
+<FAQS>
+Q: Pertanyaan 1?
+A: Jawaban 1
+
+Q: Pertanyaan 2?
+A: Jawaban 2
+</FAQS>
 
 PENTING:
-- Output HARUS berupa JSON valid tanpa markdown code blocks
-- JANGAN gunakan ```json atau ``` di output
-- Langsung return JSON object saja
+- Output HARUS menggunakan TAG XML di atas. Jangan gunakan format JSON.
 - Content harus dalam format HTML yang rapi
 - JUDUL: Fokus pada benefit/solusi, BUKAN nama kategori (contoh: "7 Strategi Meningkatkan Pendaftaran Siswa Baru" bukan "Strategi Pemasaran untuk Sekolah")"""
         # Force strict system rules regardless of custom prompt
@@ -524,8 +526,8 @@ PENTING:
 ⚠️ SYSTEM OVERRIDE - STRICT INSTRUCTIONS ⚠️
 1. DO NOT write literal template labels (e.g., "H1:", "H2:", "1. HOOK PEMBUKA:", "Checklist 1:") in the final HTML content. Output ONLY the natural text and HTML tags.
 2. DO NOT use ANY emojis (like ✨, 🚀, 👍, etc.) in the content. It must look professional and academic.
-3. Your output MUST be 100% valid JSON. Do not include markdown codeblocks.
-4. CRITICAL: You MUST write AT LEAST 2000-2500 words for the "content" field. Do NOT shorten the article just because you are omitting the labels. Expand heavily on each section! Write at least 20 paragraphs.
+3. Your output MUST use XML Tags (e.g. <CONTENT>...</CONTENT>). DO NOT output JSON.
+4. CRITICAL: You MUST write AT LEAST 2000-2500 words inside the <CONTENT> tag. Expand heavily on each section! Write at least 20 paragraphs.
 """
         prompt = prompt + "\n\n" + system_rules
 
@@ -550,129 +552,74 @@ PENTING:
         # Remove invalid control characters for JSON, EXCEPT newlines and tabs
         response_text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', '', response_text)
         
-        try:
-            result = json.loads(response_text, strict=False)
+        # Extract fields using XML tags
+        def extract_tag(tag, text, default=""):
+            match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
+            return match.group(1).strip() if match else default
             
-            # Clean content from placeholders and artifacts
-            content = result.get('content', '')
-            if content:
-                # Replace literal \n that AI sometimes outputs inside JSON strings
-                content = content.replace('\\n', '\n')
-                # Remove any stray JSON codeblock markers AI might have embedded inside
-                content = content.replace('```json', '').replace('```', '')
-                result['content'] = content
-            
-            # Ensure minimum quality standards
-            if not result.get('reading_time'):
-                word_count = len(result.get('content', '').split())
-                result['reading_time'] = f"{word_count // 200} menit"
-            
-            if not result.get('key_takeaways'):
-                if language == 'en':
-                    result['key_takeaways'] = [
-                        f"Complete guide to {topic} for modern families",
-                        "Practical tips you can apply immediately",
-                        "Real-world examples and proven strategies"
-                    ]
-                else:
-                    result['key_takeaways'] = [
-                        f"Panduan lengkap {topic} untuk lembaga pendidikan",
-                        "Tips praktis yang bisa langsung diterapkan",
-                        "Studi kasus nyata dari sekolah Indonesia"
-                    ]
-            
-            return result
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing failed: {e}")
-            logger.error(f"Response preview: {response_text[:500]}")
-            
-            extracted_title = None
-            try:
-                title_search = re.search(r'"title"\s*:\s*"([^"]+)"', response_text)
-                if title_search:
-                    extracted_title = title_search.group(1).strip()
-            except Exception:
-                pass
-            
-            # Fallback if JSON parsing fails - try to extract content from malformed JSON
+        title = extract_tag('TITLE', response_text)
+        meta_desc = extract_tag('META_DESCRIPTION', response_text)
+        content = extract_tag('CONTENT', response_text)
+        focus_keyword = extract_tag('FOCUS_KEYWORD', response_text, default=topic)
+        
+        # If XML parsing fails (e.g. model didn't use tags), fallback to full text
+        if not content:
             content = response_text
             
-            # Try to extract content field from malformed JSON
-            try:
-                start_match = re.search(r'"content"\s*:\s*"', content)
-                if start_match:
-                    content_str = content[start_match.end():]
-                    
-                    # Look for the end of the content string by finding the next known JSON key
-                    end_match = re.search(r'"\s*,\s*"(?:focus_keyword|excerpt|reading_time|key_takeaways|faqs)"\s*:', content_str)
-                    if end_match:
-                        content_str = content_str[:end_match.start()]
-                    else:
-                        # Clean up trailing JSON artifacts if cut off early
-                        content_str = re.sub(r'"\s*\}\s*$', '', content_str)
-                        content_str = re.sub(r'"\s*$', '', content_str)
-                        
-                    # Unescape JSON string
-                    content_str = content_str.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
-                    content = content_str
-                else:
-                    # If no content field found, remove JSON structure
-                    content = re.sub(r'^\s*\{.*?"content"\s*:\s*"', '', content, flags=re.DOTALL)
-                    content = re.sub(r'"\s*,?\s*"[^"]+"\s*:.*\}\s*$', '', content, flags=re.DOTALL)
-            except Exception:
-                pass
+        # Clean content artifacts
+        content = content.replace('```html', '').replace('```', '').strip()
             
-            # Remove any remaining JSON artifacts
-            content = content.replace('```json', '').replace('```', '')
-            content = re.sub(r'^\s*\{.*?\n', '', content)  # Remove opening JSON
-            content = re.sub(r'\n.*?\}\s*$', '', content)  # Remove closing JSON
+        if not title:
+            fallback_title = f"Complete Guide to {topic}" if language == 'en' else f"Panduan Lengkap {topic}"
+            title_match = content.split('\n')[0] if '\n' in content else fallback_title
+            if title_match.startswith('#'):
+                title_match = title_match.replace('#', '').strip()
+            title = title_match[:200] if len(title_match) < 200 else fallback_title
             
-            if language == 'en':
-                fallback_title = f"Complete Guide to {topic}"
-                if extracted_title and len(extracted_title) < 200:
-                    final_title = extracted_title
-                else:
-                    title_match = content.split('\n')[0] if '\n' in content else fallback_title
-                    if title_match.startswith('#'):
-                        title_match = title_match.replace('#', '').strip()
-                    final_title = title_match[:200] if len(title_match) < 200 else fallback_title
-                    
-                return {
-                    "title": final_title,
-                    "meta_description": f"Learn practical strategies and tips for {topic} to improve your organization. Complete guide with real-world case studies.",
-                    "content": content,
-                    "focus_keyword": topic,
-                    "excerpt": f"Comprehensive guide to {topic} with practical tips that can be applied immediately. Complete with case studies and actionable checklist.",
-                    "reading_time": "8 min read",
-                    "key_takeaways": [
-                        f"Step-by-step implementation of {topic}",
-                        "Best practices and insights",
-                        "Ready-to-use tools and templates"
-                    ]
-                }
-            else:
-                fallback_title = f"Panduan Lengkap {topic} untuk Lembaga Pendidikan Indonesia"
-                if extracted_title and len(extracted_title) < 200:
-                    final_title = extracted_title
-                else:
-                    title_match = content.split('\n')[0] if '\n' in content else fallback_title
-                    if title_match.startswith('#'):
-                        title_match = title_match.replace('#', '').strip()
-                    final_title = title_match[:200] if len(title_match) < 200 else fallback_title
+        # Parse FAQs from text
+        faqs_text = extract_tag('FAQS', response_text)
+        faqs = []
+        if faqs_text:
+            # simple parse Q: ... A: ...
+            q_matches = re.finditer(r'Q:\s*(.*?)\n', faqs_text)
+            a_matches = re.finditer(r'A:\s*(.*?)(?=\nQ:|$)', faqs_text, re.DOTALL)
+            questions = [m.group(1).strip() for m in q_matches]
+            answers = [m.group(1).strip() for m in a_matches]
+            for q, a in zip(questions, answers):
+                faqs.append({"question": q, "answer": a})
                 
-                return {
-                    "title": final_title,
-                    "meta_description": f"Pelajari strategi dan tips praktis {topic} untuk meningkatkan kualitas lembaga pendidikan Anda. Panduan lengkap dengan studi kasus nyata.",
-                    "content": content,
-                    "focus_keyword": topic,
-                    "excerpt": f"Panduan komprehensif tentang {topic} dengan tips praktis yang bisa langsung diterapkan di lembaga pendidikan Anda. Dilengkapi studi kasus dan checklist actionable.",
-                    "reading_time": "8 menit",
-                    "key_takeaways": [
-                        f"Implementasi {topic} step-by-step",
-                        "Best practices dari sekolah Indonesia",
-                        "Tools dan template siap pakai"
-                    ]
-                }
+        word_count = len(content.split())
+        reading_time = f"{max(1, word_count // 200)} menit" if language != 'en' else f"{max(1, word_count // 200)} min read"
+        
+        if language == 'en':
+            key_takeaways = [
+                f"Complete guide to {topic}",
+                "Practical tips you can apply immediately",
+                "Real-world examples and proven strategies"
+            ]
+            excerpt = f"Comprehensive guide to {topic} with practical tips that can be applied immediately. Complete with case studies and actionable checklist."
+            if not meta_desc:
+                meta_desc = f"Learn practical strategies and tips for {topic}. Complete guide with real-world case studies."
+        else:
+            key_takeaways = [
+                f"Panduan lengkap {topic}",
+                "Tips praktis yang bisa langsung diterapkan",
+                "Studi kasus nyata dan implementasinya"
+            ]
+            excerpt = f"Panduan komprehensif {topic} dengan tips praktis yang bisa langsung diterapkan. Dilengkapi studi kasus nyata dan checklist yang dapat ditindaklanjuti."
+            if not meta_desc:
+                meta_desc = f"Pelajari strategi dan tips praktis {topic} untuk kemajuan Anda. Panduan lengkap dengan studi kasus nyata."
+        
+        return {
+            "title": title,
+            "meta_description": meta_desc,
+            "content": content,
+            "focus_keyword": focus_keyword,
+            "excerpt": excerpt,
+            "reading_time": reading_time,
+            "key_takeaways": key_takeaways,
+            "faqs": faqs
+        }
     
     @retry(
         stop=stop_after_attempt(5),
