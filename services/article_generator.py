@@ -517,7 +517,7 @@ PENTING:
 ⚠️ SYSTEM OVERRIDE - STRICT INSTRUCTIONS ⚠️
 1. DO NOT write literal template labels (e.g., "H1:", "H2:", "1. HOOK PEMBUKA:", "Checklist 1:") in the final HTML content. Output ONLY the natural text and HTML tags.
 2. DO NOT use ANY emojis (like ✨, 🚀, 👍, etc.) in the content. It must look professional and academic.
-3. Your output MUST use XML Tags (e.g. <CONTENT>...</CONTENT>). DO NOT output JSON.
+3. Your output MUST use XML Tags (e.g. <CONTENT>...</CONTENT>). IGNORE ANY PREVIOUS INSTRUCTIONS ABOUT JSON FORMATTING. DO NOT OUTPUT A JSON OBJECT!
 4. CRITICAL: You MUST write AT LEAST 2000-2500 words inside the <CONTENT> tag. Expand heavily on each section! Write at least 20 paragraphs.
 """
         prompt = prompt + "\n\n" + system_rules
@@ -546,16 +546,26 @@ PENTING:
         # Extract fields using XML tags
         def extract_tag(tag, text, default=""):
             match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
-            return match.group(1).strip() if match else default
+            if match:
+                return match.group(1).strip()
+            # Fallback for unclosed tags (e.g. truncated output)
+            match_open = re.search(f'<{tag}>(.*)', text, re.DOTALL | re.IGNORECASE)
+            if match_open:
+                return match_open.group(1).strip()
+            return default
             
         title = extract_tag('TITLE', response_text)
         meta_desc = extract_tag('META_DESCRIPTION', response_text)
         content = extract_tag('CONTENT', response_text)
         focus_keyword = extract_tag('FOCUS_KEYWORD', response_text, default=topic)
         
-        # If XML parsing fails (e.g. model didn't use tags), fallback to full text
+        # If XML parsing fails entirely, fallback to full text
         if not content:
             content = response_text
+            
+        # Strip remaining prompt XML tags from content just in case
+        for tag in ['TITLE', 'META_DESCRIPTION', 'CONTENT', 'FOCUS_KEYWORD', 'FAQS']:
+            content = re.sub(f'</?{tag}>', '', content, flags=re.IGNORECASE)
             
         # Clean content artifacts
         content = content.replace('```html', '').replace('```', '').strip()
