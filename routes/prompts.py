@@ -108,16 +108,11 @@ SEO OPTIMIZATION:
 ✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
 ✓ Optimasi untuk featured snippet (gunakan list/table)
 
-FORMAT OUTPUT (JSON valid, tanpa markdown code blocks):
-{
-    "title": "Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)",
-    "meta_description": "Meta description 150-160 karakter dengan CTA dan keyword",
-    "content": "Konten HTML lengkap 2000-2500 kata",
-    "focus_keyword": "keyword utama artikel",
-    "excerpt": "Ringkasan engaging 2-3 kalimat",
-    "reading_time": "estimasi menit",
-    "key_takeaways": ["takeaway 1", "takeaway 2", "takeaway 3"]
-}""",
+FORMAT OUTPUT (Gunakan XML-Tags berikut):
+<TITLE>Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)</TITLE>
+<META_DESCRIPTION>Meta description 150-160 karakter dengan CTA dan keyword</META_DESCRIPTION>
+<CONTENT>Konten HTML lengkap 2000-2500 kata</CONTENT>
+<FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>""",
             'default_image_prompt': """Create a professional featured image for this article about {topic}.
 
 Article Title: "{title}"
@@ -168,17 +163,17 @@ def api_optimize_prompt(user_id):
     if not site_id or not current_prompt:
         return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
         
-    json_format_part = ""
-    if "FORMAT OUTPUT (JSON valid" in current_prompt:
-        parts = current_prompt.split("FORMAT OUTPUT (JSON valid")
+    xml_format_part = ""
+    if "FORMAT OUTPUT (Gunakan XML-Tags berikut):" in current_prompt:
+        parts = current_prompt.split("FORMAT OUTPUT (Gunakan XML-Tags berikut):")
         current_prompt = parts[0].strip()
         if prompt_type != 'image':
-            json_format_part = "\n\nFORMAT OUTPUT (JSON valid" + parts[1]
+            xml_format_part = "\n\nFORMAT OUTPUT (Gunakan XML-Tags berikut):" + parts[1]
     elif "FORMAT OUTPUT" in current_prompt:
         parts = current_prompt.split("FORMAT OUTPUT")
         current_prompt = parts[0].strip()
         if prompt_type != 'image':
-            json_format_part = "\n\nFORMAT OUTPUT" + parts[1]
+            xml_format_part = "\n\nFORMAT OUTPUT" + parts[1]
         
     config = load_config(user_id) or {}
     try:
@@ -213,9 +208,9 @@ def api_optimize_prompt(user_id):
                 lang_instruction = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
 
             if prompt_type == 'article':
-                json_instruction = "5. PERINGATAN: Bagian 'FORMAT OUTPUT' telah dipisahkan oleh sistem. Anda HANYA bertugas merevisi isi template bagian atasnya saja. JANGAN membuat blok JSON atau menyebutkan FORMAT OUTPUT sama sekali dalam respon Anda."
+                format_instruction = "5. PERINGATAN: Bagian 'FORMAT OUTPUT' telah dipisahkan oleh sistem. Anda HANYA bertugas merevisi isi template bagian atasnya saja. JANGAN membuat blok format (JSON/XML) atau menyebutkan FORMAT OUTPUT sama sekali dalam respon Anda."
             else:
-                json_instruction = "5. PERINGATAN FORMAT OUTPUT: JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt gambar. JANGAN MENAMBAHKAN instruksi JSON apapun di akhir prompt."
+                format_instruction = "5. PERINGATAN FORMAT OUTPUT: JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON atau XML. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt gambar. JANGAN MENAMBAHKAN instruksi format apapun di akhir prompt."
 
             sys_prompt = f"""Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna.
 
@@ -229,7 +224,7 @@ Instruksi Revisi (SANGAT PENTING):
 2. Pertahankan semua variabel placeholder seperti {{topic}}, {{existing_titles}}, {{title}}, dll persis seperti aslinya.
 3. Pertahankan semua peringatan tahun 2026.
 4. Sesuaikan contoh-contoh di Hook Pembuka atau Studi Kasus (jika ada) dengan niche website pengguna secara kreatif.
-{json_instruction}
+{format_instruction}
 {lang_instruction}"""
 
             import time
