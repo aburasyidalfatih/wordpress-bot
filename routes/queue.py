@@ -263,12 +263,12 @@ def regenerate_article_api(user_id, log_id):
 @queue_bp.route('/api/queue/history/<int:log_id>', methods=['DELETE'])
 @require_jwt
 def delete_history_log(user_id, log_id):
-    from models import GenerationLog
+    from models import PostLog
     import requests
     from requests.auth import HTTPBasicAuth
     
     with db.get_session() as session:
-        log = session.query(GenerationLog).filter_by(id=log_id, user_id=user_id).first()
+        log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
         if not log:
             return jsonify({'success': False, 'error': 'Log not found', 'code': 404}), 404
             
