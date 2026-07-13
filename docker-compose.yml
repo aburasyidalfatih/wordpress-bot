@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     expose:
       - "5003"
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0
@@ -32,6 +34,8 @@ services:
     build: .
     restart: unless-stopped
     command: rq worker --with-scheduler -u redis://redis:6379/0 high default low --max-jobs 100
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0
@@ -55,6 +59,8 @@ services:
     build: .
     restart: unless-stopped
     command: python dispatcher.py
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
       - REDIS_URL=redis://redis:6379/0
@@ -77,6 +83,8 @@ services:
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-autowp}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-securepassword}
