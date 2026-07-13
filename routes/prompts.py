@@ -263,8 +263,8 @@ Instruksi Revisi (SANGAT PENTING):
                     optimized_prompt = '\n'.join(lines[1:-1]).strip()
             
             # Re-attach the exact JSON format part
-            if json_format_part:
-                optimized_prompt = optimized_prompt + json_format_part
+            if xml_format_part:
+                optimized_prompt = optimized_prompt + xml_format_part
             
             return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
     except Exception as e:
