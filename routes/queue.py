@@ -260,6 +260,40 @@ def regenerate_article_api(user_id, log_id):
         return jsonify({'success': False, 'error': 'Failed to enqueue job'}), 500
     return jsonify({'success': True})
 
+@queue_bp.route('/api/queue/history/<int:log_id>', methods=['DELETE'])
+@require_jwt
+def delete_history_log(user_id, log_id):
+    from models import GenerationLog
+    import requests
+    from requests.auth import HTTPBasicAuth
+    
+    with db.get_session() as session:
+        log = session.query(GenerationLog).filter_by(id=log_id, user_id=user_id).first()
+        if not log:
+            return jsonify({'success': False, 'error': 'Log not found', 'code': 404}), 404
+            
+        post_id = log.post_id
+        site_id = log.site_id
+        
+        if post_id and site_id:
+            try:
+                creds = db.get_site_credentials(user_id, site_id)
+                if creds:
+                    wp_url = creds['wp_url']
+                    wp_user = creds['wp_user']
+                    wp_app_pass = creds['wp_app_pass']
+                    
+                    if wp_url and wp_user and wp_app_pass:
+                        delete_url = f"{wp_url.rstrip('/')}/wp-json/wp/v2/posts/{post_id}?force=true"
+                        requests.delete(delete_url, auth=HTTPBasicAuth(wp_user, wp_app_pass), timeout=10)
+            except Exception as e:
+                logger.error(f"Failed to delete post from WP for log {log_id}: {e}")
+                
+        session.delete(log)
+        session.commit()
+        
+    return jsonify({'success': True, 'message': 'Log and article deleted successfully'})
+
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
 def manual_post(user_id):

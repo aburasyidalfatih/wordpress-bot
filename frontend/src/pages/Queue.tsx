@@ -220,6 +220,25 @@ export default function Queue() {
     }
   };
 
+  const handleDeleteHistory = async (logId: number) => {
+    if (!confirm('Are you sure you want to delete this log? This will also attempt to delete the article from WordPress.')) return;
+    try {
+      const res = await apiFetch(`/api/queue/history/${logId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error('Failed: ' + (data.error || 'Server error'));
+      } else {
+        toast.success('Deleted successfully');
+        loadQueue();
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) console.error(e);
+      toast.error('Network error');
+    }
+  };
+
   const handleManualAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle || !newCategory) return;
@@ -519,6 +538,9 @@ export default function Queue() {
                       </Button>
                       <Button variant="outline" size="icon" onClick={() => window.open(item.post_url, '_blank')} className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 z-20" title="View Post">
                         <Eye className="h-4 w-4" />
+                      </Button>
+                      <Button variant="outline" size="icon" onClick={() => handleDeleteHistory(item.id)} className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 z-20" title="Delete Post & History">
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   )}
