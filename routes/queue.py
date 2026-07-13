@@ -277,11 +277,12 @@ def delete_history_log(user_id, log_id):
         
         if post_id and site_id:
             try:
-                creds = db.get_site_credentials(user_id, site_id)
-                if creds:
-                    wp_url = creds['wp_url']
-                    wp_user = creds['wp_user']
-                    wp_app_pass = creds['wp_app_pass']
+                from models import WordPressSite
+                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+                if site:
+                    wp_url = site.wp_url
+                    wp_user = site.wp_username
+                    wp_app_pass = site.wp_app_password
                     
                     if wp_url and wp_user and wp_app_pass:
                         delete_url = f"{wp_url.rstrip('/')}/wp-json/wp/v2/posts/{post_id}?force=true"
