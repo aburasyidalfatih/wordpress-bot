@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { apiFetch } from './lib/api';
 import Layout from './components/Layout';
@@ -62,7 +62,7 @@ function App() {
                 <div className="flex flex-col items-center justify-center min-h-screen">
                   <h1 className="text-4xl font-bold mb-4">404</h1>
                   <p className="text-muted-foreground mb-4">Halaman tidak ditemukan</p>
-                  <a href="/" className="text-primary hover:underline">Kembali ke Beranda</a>
+                  <Link to="/" className="text-primary hover:underline">Kembali ke Beranda</Link>
                 </div>
               } />
             </Routes>

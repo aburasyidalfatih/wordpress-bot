@@ -301,9 +301,9 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="pt-2 px-6 pb-6">
-            <div className="w-full overflow-x-auto">
-              <div className="min-w-[600px] h-[180px] relative">
-                <svg className="w-full h-full overflow-visible" viewBox={`0 0 ${chartWidth} ${chartHeight}`}>
+            <div className="w-full overflow-hidden">
+              <div className="w-full h-[180px] relative">
+                <svg className="w-full h-full overflow-visible" viewBox={`0 0 ${chartWidth} ${chartHeight}`} preserveAspectRatio="none">
                   
                   {/* Grid Lines */}
                   <line x1="40" y1="30" x2={chartWidth - 40} y2="30" stroke="var(--border)" strokeDasharray="3 3" opacity="0.5" />

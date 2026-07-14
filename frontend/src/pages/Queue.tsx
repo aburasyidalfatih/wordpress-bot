@@ -58,12 +58,9 @@ export default function Queue() {
   const [shuffling, setShuffling] = useState(false);
   const [clearing, setClearing] = useState(false);
   const pollingDelayRef = useRef(3000);
-  const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post' | 'clear', id?: number} | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post' | 'clear' | 'delete_history', id?: number} | null>(null);
 
-  const itemsRef = useRef(items);
-  useEffect(() => { itemsRef.current = items; }, [items]);
-  const regeneratingIdsRef = useRef(regeneratingIds);
-  useEffect(() => { regeneratingIdsRef.current = regeneratingIds; }, [regeneratingIds]);
+  // Refs removed in favor of using dependencies directly
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -87,8 +84,17 @@ export default function Queue() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids: newItems.map((i) => i.id) })
-        }).catch(err => {
+        })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || 'Server error');
+          }
+        })
+        .catch(err => {
           if (import.meta.env.DEV) console.error('Failed to save order:', err);
+          toast.error('Gagal menyimpan urutan antrean');
+          setItems(items); // Revert to old items
         });
         
         return newItems;
@@ -124,8 +130,8 @@ export default function Queue() {
   }, [selectedSiteId]);
 
   useEffect(() => {
-    const hasPosting = itemsRef.current.some(i => i.status === 'posting');
-    const hasRegenerating = Object.values(regeneratingIdsRef.current).some(Boolean);
+    const hasPosting = items.some(i => i.status === 'posting');
+    const hasRegenerating = Object.values(regeneratingIds).some(Boolean);
     
     let timeoutId: ReturnType<typeof setTimeout>;
     
@@ -141,8 +147,7 @@ export default function Queue() {
     }
     
     return () => clearTimeout(timeoutId);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadQueue]);
+  }, [items, regeneratingIds, loadQueue]);
 
   useEffect(() => {
     loadQueue();
@@ -220,8 +225,11 @@ export default function Queue() {
     }
   };
 
-  const handleDeleteHistory = async (logId: number) => {
-    if (!confirm('Are you sure you want to delete this log? This will also attempt to delete the article from WordPress.')) return;
+  const handleDeleteHistory = (logId: number) => {
+    setConfirmAction({ type: 'delete_history', id: logId });
+  };
+
+  const executeDeleteHistory = async (logId: number) => {
     try {
       const res = await apiFetch(`/api/queue/history/${logId}`, {
         method: 'DELETE'
@@ -236,6 +244,8 @@ export default function Queue() {
     } catch (e) {
       if (import.meta.env.DEV) console.error(e);
       toast.error('Network error');
+    } finally {
+      setConfirmAction(null);
     }
   };
 
@@ -403,7 +413,9 @@ export default function Queue() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleManualAdd} className="flex gap-4 items-center">
+            <label htmlFor="category-select" className="sr-only">Category</label>
             <select
+              id="category-select"
               value={newCategory}
               onChange={e => setNewCategory(e.target.value)}
               className="flex h-10 w-[300px] items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
@@ -585,13 +597,15 @@ export default function Queue() {
                 ? 'This action cannot be undone. This will permanently delete this title from the queue.' 
                 : confirmAction?.type === 'clear'
                 ? 'Peringatan: Semua artikel di antrean untuk situs ini akan dihapus secara permanen. Apakah Anda yakin?'
+                : confirmAction?.type === 'delete_history'
+                ? 'Are you sure you want to delete this log? This will also attempt to delete the article from WordPress.'
                 : 'This will immediately process and post this item right now.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction 
-              className={confirmAction?.type === 'clear' || confirmAction?.type === 'delete' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}
+              className={confirmAction?.type === 'clear' || confirmAction?.type === 'delete' || confirmAction?.type === 'delete_history' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}
               onClick={() => {
               if (confirmAction?.type === 'delete' && confirmAction.id) {
                 executeDelete(confirmAction.id);
@@ -599,6 +613,8 @@ export default function Queue() {
                 handleClearQueue();
               } else if (confirmAction?.type === 'post' && confirmAction.id) {
                 executePostNow(confirmAction.id);
+              } else if (confirmAction?.type === 'delete_history' && confirmAction.id) {
+                executeDeleteHistory(confirmAction.id);
               }
             }}>
               Continue

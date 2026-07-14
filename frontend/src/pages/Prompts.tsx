@@ -58,13 +58,16 @@ export default function Prompts() {
     formData.append('image_prompt', imagePrompt);
 
     try {
-      const res = await apiFetch('/save-prompts', {
+      const res = await apiFetch('/api/save-prompts', {
         method: 'POST',
         headers: {
           'X-Requested-With': 'XMLHttpRequest'
         },
         body: formData,
       });
+      if (!res.ok) {
+        throw new Error('Server returned ' + res.status);
+      }
       const result = await res.json();
       if (result.success) {
         toast.success('Prompts saved successfully!');
@@ -205,7 +208,7 @@ export default function Prompts() {
           </CardContent>
           <CardFooter className="flex flex-col items-start gap-4 border-t bg-muted/50 p-6">
             {message && (
-              <p className={`text-sm ${message.includes('success') ? 'text-green-600' : 'text-red-600'}`}>
+              <p className={`text-sm ${message.includes('berhasil') ? 'text-green-600' : 'text-red-600'}`}>
                 {message}
               </p>
             )}

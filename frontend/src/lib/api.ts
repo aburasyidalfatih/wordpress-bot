@@ -6,5 +6,12 @@ export async function apiFetch(url: string, options: RequestInit = {}) {
     headers.set('Authorization', `Bearer ${token}`);
   }
   
-  return fetch(url, { ...options, headers, credentials: 'include' });
+  const response = await fetch(url, { ...options, headers, credentials: 'include' });
+  
+  if (response.status === 401) {
+    localStorage.removeItem('token');
+    window.location.href = '/login';
+  }
+  
+  return response;
 }

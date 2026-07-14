@@ -19,6 +19,15 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { toast } from 'sonner';
 
 export interface ResearchDataResponse {
   categories: CategoryType[];
@@ -236,9 +245,12 @@ export default function Research() {
         const result = await res.json();
         if (result.success) {
           totalGenerated += count;
+        } else {
+          toast.error(`Gagal generate judul untuk ${category}: ${result.error}`);
         }
       } catch (err) {
         if (import.meta.env.DEV) console.error('Failed for', category, err);
+        toast.error(`Network error generate judul untuk ${category}`);
       }
     }
     
@@ -512,84 +524,80 @@ export default function Research() {
       )}
 
       {/* Generation Modal */}
-      {isModalOpen && modalCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <Card className="w-full max-w-md animate-in fade-in zoom-in-95 shadow-2xl border-0">
-            <CardHeader className="border-b bg-muted/20">
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-indigo-600" /> Generate AI Titles
-              </CardTitle>
-              <CardDescription>Berapa judul artikel menarik yang ingin Anda buat secara otomatis untuk kategori <b>{modalCategory}</b>?</CardDescription>
-            </CardHeader>
-            <CardContent className="p-6">
-              <div className="space-y-3">
-                <Label htmlFor="titleCount" className="text-sm font-medium">Jumlah Judul (1-20)</Label>
-                <Input 
-                  id="titleCount" 
-                  type="number" 
-                  min="1" 
-                  max="20" 
-                  value={titleCount} 
-                  onChange={(e) => setTitleCount(parseInt(e.target.value) || 1)}
-                  className="text-lg"
-                />
-              </div>
-            </CardContent>
-            <div className="flex items-center p-6 pt-0 justify-end gap-3 bg-muted/20 border-t mt-4 rounded-b-xl">
-              <Button variant="outline" onClick={() => setIsModalOpen(false)}>Batal</Button>
-              <Button onClick={handleGenerateTitles} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
-                <Sparkles className="h-4 w-4" /> Generate Sekarang
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
+      <Dialog open={isModalOpen && !!modalCategory} onOpenChange={setIsModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-indigo-600" /> Generate AI Titles
+            </DialogTitle>
+            <DialogDescription>
+              Berapa judul artikel menarik yang ingin Anda buat secara otomatis untuk kategori <b>{modalCategory}</b>?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-4">
+            <Label htmlFor="titleCount" className="text-sm font-medium">Jumlah Judul (1-20)</Label>
+            <Input 
+              id="titleCount" 
+              type="number" 
+              min="1" 
+              max="20" 
+              value={titleCount} 
+              onChange={(e) => setTitleCount(parseInt(e.target.value) || 1)}
+              className="text-lg"
+            />
+          </div>
+          <DialogFooter className="sm:justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsModalOpen(false)}>Batal</Button>
+            <Button onClick={handleGenerateTitles} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
+              <Sparkles className="h-4 w-4" /> Generate Sekarang
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Generation Modal */}
-      {bulkModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <Card className="w-full max-w-lg animate-in fade-in zoom-in-95 shadow-2xl border-0 max-h-[90vh] flex flex-col">
-            <CardHeader className="border-b bg-muted/20 shrink-0">
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-indigo-600" /> Buat Judul Massal
-              </CardTitle>
-              <CardDescription>Tentukan jumlah judul yang ingin Anda generate untuk masing-masing kategori.</CardDescription>
-            </CardHeader>
-            <CardContent className="p-6 overflow-y-auto">
-              <div className="space-y-4">
-                {selectedCategories.map((catObj: CategoryType) => (
-                  <div key={catObj.name} className="flex items-center justify-between gap-4 p-3 rounded-lg border bg-card">
-                    <div className="flex-1">
-                      <Label className="text-base font-semibold capitalize">{catObj.name}</Label>
-                    </div>
-                    <div className="flex items-center gap-2 w-32">
-                      <Input 
-                        type="number" 
-                        min="0" 
-                        max="50" 
-                        value={bulkCounts[catObj.name] || 0} 
-                        onChange={(e) => setBulkCounts(prev => ({ ...prev, [catObj.name]: parseInt(e.target.value) || 0 }))}
-                        className="text-right"
-                      />
-                    </div>
-                  </div>
-                ))}
+      <Dialog open={bulkModalOpen} onOpenChange={setBulkModalOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-indigo-600" /> Buat Judul Massal
+            </DialogTitle>
+            <DialogDescription>
+              Tentukan jumlah judul yang ingin Anda generate untuk masing-masing kategori.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4 overflow-y-auto min-h-[300px]">
+            {selectedCategories.map((catObj: CategoryType) => (
+              <div key={catObj.name} className="flex items-center justify-between gap-4 p-3 rounded-lg border bg-card">
+                <div className="flex-1">
+                  <Label className="text-base font-semibold capitalize">{catObj.name}</Label>
+                </div>
+                <div className="flex items-center gap-2 w-32">
+                  <Input 
+                    type="number" 
+                    min="0" 
+                    max="50" 
+                    value={bulkCounts[catObj.name] || 0} 
+                    onChange={(e) => setBulkCounts(prev => ({ ...prev, [catObj.name]: parseInt(e.target.value) || 0 }))}
+                    className="text-right"
+                  />
+                </div>
               </div>
-            </CardContent>
-            <div className="flex items-center p-6 justify-between bg-muted/20 border-t shrink-0 rounded-b-xl">
-              <div className="text-sm font-medium text-muted-foreground">
-                Total: <span className="text-indigo-600 font-bold">{Object.values(bulkCounts).reduce((a, b) => a + b, 0)} Judul</span>
-              </div>
-              <div className="flex gap-3">
-                <Button variant="outline" onClick={() => setBulkModalOpen(false)}>Batal</Button>
-                <Button onClick={handleExecuteBulkGenerate} disabled={Object.values(bulkCounts).reduce((a, b) => a + b, 0) === 0} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
-                  <Sparkles className="h-4 w-4" /> Generate Massal
-                </Button>
-              </div>
+            ))}
+          </div>
+          <DialogFooter className="sm:justify-between shrink-0 pt-4 border-t">
+            <div className="text-sm font-medium text-muted-foreground self-center">
+              Total: <span className="text-indigo-600 font-bold">{Object.values(bulkCounts).reduce((a, b) => a + b, 0)} Judul</span>
             </div>
-          </Card>
-        </div>
-      )}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setBulkModalOpen(false)}>Batal</Button>
+              <Button onClick={handleExecuteBulkGenerate} disabled={Object.values(bulkCounts).reduce((a, b) => a + b, 0) === 0} className="bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
+                <Sparkles className="h-4 w-4" /> Generate Massal
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

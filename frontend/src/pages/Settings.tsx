@@ -192,8 +192,9 @@ function BulkUpdateYearComponent() {
         </CardHeader>
         <CardContent className="space-y-4 pb-8">
           <div className="space-y-2">
-            <Label>Select Site</Label>
+            <Label htmlFor="admin_site_id">Select Site</Label>
             <select
+              id="admin_site_id"
               value={siteId}
               onChange={(e) => setSiteId(e.target.value)}
               className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
@@ -206,12 +207,12 @@ function BulkUpdateYearComponent() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>From Year</Label>
-              <Input value={fromYear} onChange={e => setFromYear(e.target.value)} placeholder="e.g. 2026" />
+              <Label htmlFor="admin_from_year">From Year</Label>
+              <Input id="admin_from_year" value={fromYear} onChange={e => setFromYear(e.target.value)} placeholder="e.g. 2026" />
             </div>
             <div className="space-y-2">
-              <Label>To Year</Label>
-              <Input value={toYear} onChange={e => setToYear(e.target.value)} placeholder="e.g. 2027" />
+              <Label htmlFor="admin_to_year">To Year</Label>
+              <Input id="admin_to_year" value={toYear} onChange={e => setToYear(e.target.value)} placeholder="e.g. 2027" />
             </div>
           </div>
         </CardContent>

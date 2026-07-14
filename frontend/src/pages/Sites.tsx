@@ -7,6 +7,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSiteContext } from '@/contexts/SiteContext';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type { WordPressSite } from '@/contexts/SiteContext';
 
 export default function Sites() {
@@ -15,6 +25,7 @@ export default function Sites() {
   const [currentSite, setCurrentSite] = useState<Partial<WordPressSite>>({});
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('wordpress');
+  const [siteToDelete, setSiteToDelete] = useState<number | null>(null);
 
   const handleEdit = (site: WordPressSite) => {
     setCurrentSite(site);
@@ -88,8 +99,11 @@ export default function Sites() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this website? This cannot be undone.')) return;
+  const handleDelete = (id: number) => {
+    setSiteToDelete(id);
+  };
+
+  const executeDelete = async (id: number) => {
     try {
       const res = await apiFetch(`/api/sites/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -98,12 +112,15 @@ export default function Sites() {
         if (selectedSiteId === id) {
             setSelectedSiteId(null);
         }
+        setIsEditing(false);
       } else {
         const data = await res.json();
         toast.error(data.error || 'Failed to delete website.');
       }
     } catch (err) {
       toast.error('Network error.');
+    } finally {
+      setSiteToDelete(null);
     }
   };
 
@@ -154,10 +171,14 @@ export default function Sites() {
 
         <div className="flex flex-col md:flex-row gap-6">
           {/* Vertical Tabs */}
-          <div className="w-full md:w-64 space-y-1">
+          <div className="w-full md:w-64 space-y-1" role="tablist" aria-orientation="vertical">
             {['wordpress', 'automation', 'telegram', 'facebook', 'pinterest', 'twitter', 'threads'].map((tab) => (
               <button
                 key={tab}
+                role="tab"
+                aria-selected={activeTab === tab}
+                aria-controls={`panel-${tab}`}
+                id={`tab-${tab}`}
                 onClick={() => setActiveTab(tab)}
                 className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                   activeTab === tab 
@@ -181,7 +202,7 @@ export default function Sites() {
                 <CardContent className="space-y-6 min-h-[400px] pb-8">
                   
                   {activeTab === 'wordpress' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-wordpress" role="tabpanel" aria-labelledby="tab-wordpress" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="space-y-2">
                         <Label htmlFor="site_name">Website Name <span className="text-red-500">*</span></Label>
                         <Input id="site_name" name="site_name" required value={currentSite.site_name || ''} onChange={handleChange} placeholder="My Awesome Blog" />
@@ -304,7 +325,7 @@ export default function Sites() {
                   )}
 
                   {activeTab === 'automation' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-automation" role="tabpanel" aria-labelledby="tab-automation" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
                         <div className="space-y-0.5">
@@ -313,6 +334,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.is_active !== false}
+                          aria-label="Website Status"
                           onClick={() => setCurrentSite({ ...currentSite, is_active: currentSite.is_active !== false ? false : true })}
                           className={`${currentSite.is_active !== false ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -329,6 +353,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.auto_post || false}
+                          aria-label="Auto Posting"
                           onClick={() => setCurrentSite({ ...currentSite, auto_post: !currentSite.auto_post })}
                           className={`${currentSite.auto_post ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -389,7 +416,7 @@ export default function Sites() {
                   )}
 
                   {activeTab === 'telegram' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-telegram" role="tabpanel" aria-labelledby="tab-telegram" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
                         <div className="space-y-0.5">
                           <Label className="text-base font-semibold text-foreground">Telegram Integration</Label>
@@ -397,6 +424,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.telegram_enabled || false}
+                          aria-label="Enable Telegram Integration"
                           onClick={() => setCurrentSite({ ...currentSite, telegram_enabled: !currentSite.telegram_enabled })}
                           className={`${currentSite.telegram_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -422,6 +452,9 @@ export default function Sites() {
                             </div>
                             <button
                               type="button"
+                              role="switch"
+                              aria-checked={currentSite.telegram_post_to_channel || false}
+                              aria-label="Post to Telegram Channel"
                               onClick={() => setCurrentSite({ ...currentSite, telegram_post_to_channel: !currentSite.telegram_post_to_channel })}
                               className={`${currentSite.telegram_post_to_channel ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                             >
@@ -442,7 +475,7 @@ export default function Sites() {
                   )}
 
                   {activeTab === 'facebook' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-facebook" role="tabpanel" aria-labelledby="tab-facebook" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
                         <div className="space-y-0.5">
                           <Label className="text-base font-semibold text-foreground">Facebook Page Posting</Label>
@@ -450,6 +483,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.facebook_enabled || false}
+                          aria-label="Enable Facebook Integration"
                           onClick={() => setCurrentSite({ ...currentSite, facebook_enabled: !currentSite.facebook_enabled })}
                           className={`${currentSite.facebook_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -474,7 +510,7 @@ export default function Sites() {
                   )}
 
                   {activeTab === 'pinterest' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-pinterest" role="tabpanel" aria-labelledby="tab-pinterest" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
                         <div className="space-y-0.5">
                           <Label className="text-base font-semibold text-foreground">Pinterest Auto-Pin</Label>
@@ -482,6 +518,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.pinterest_enabled || false}
+                          aria-label="Enable Pinterest Integration"
                           onClick={() => setCurrentSite({ ...currentSite, pinterest_enabled: !currentSite.pinterest_enabled })}
                           className={`${currentSite.pinterest_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -506,7 +545,7 @@ export default function Sites() {
                   )}
 
                   {activeTab === 'twitter' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-twitter" role="tabpanel" aria-labelledby="tab-twitter" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
                         <div className="space-y-0.5">
                           <Label className="text-base font-semibold text-foreground">Twitter (X) Posting</Label>
@@ -514,6 +553,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.twitter_enabled || false}
+                          aria-label="Enable Twitter Integration"
                           onClick={() => setCurrentSite({ ...currentSite, twitter_enabled: !currentSite.twitter_enabled })}
                           className={`${currentSite.twitter_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -548,7 +590,7 @@ export default function Sites() {
                   )}
 
                   {activeTab === 'threads' && (
-                    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div id="panel-threads" role="tabpanel" aria-labelledby="tab-threads" className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                       <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/20">
                         <div className="space-y-0.5">
                           <Label className="text-base font-semibold text-foreground">Threads Posting</Label>
@@ -556,6 +598,9 @@ export default function Sites() {
                         </div>
                         <button
                           type="button"
+                          role="switch"
+                          aria-checked={currentSite.threads_enabled || false}
+                          aria-label="Enable Threads Integration"
                           onClick={() => setCurrentSite({ ...currentSite, threads_enabled: !currentSite.threads_enabled })}
                           className={`${currentSite.threads_enabled ? 'bg-primary' : 'bg-muted'} relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none`}
                         >
@@ -596,6 +641,26 @@ export default function Sites() {
                   </div>
                 </CardFooter>
               </form>
+
+              <AlertDialog open={!!siteToDelete} onOpenChange={(open) => !open && setSiteToDelete(null)}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This action cannot be undone. This will permanently delete this website and all associated logs from the bot's database.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction 
+                      className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+                      onClick={() => siteToDelete && executeDelete(siteToDelete)}
+                    >
+                      Delete Website
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </Card>
           </div>
         </div>
