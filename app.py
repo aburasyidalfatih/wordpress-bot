@@ -55,7 +55,7 @@ def _rate_limit_key():
 limiter = Limiter(
     key_func=_rate_limit_key,
     storage_uri=_rate_limit_uri,
-    default_limits=["200 per day", "50 per hour"],
+    default_limits=["5000 per day", "1000 per hour"],
     strategy="fixed-window"
 )
 # ---- End Rate Limiting ----
@@ -138,6 +138,7 @@ signal.signal(signal.SIGINT, lambda s, f: (shutdown(), os._exit(0)))
 # Static frontend serving
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
+@limiter.exempt
 def serve_frontend(path):
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frontend', 'dist')
     if path != "" and os.path.exists(os.path.join(frontend_dir, path)):
@@ -158,7 +159,7 @@ def add_security_headers(response):
     if 'Content-Type' in response.headers and 'text/html' in response.headers['Content-Type']:
         response.headers.setdefault(
             'Content-Security-Policy',
-            "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-src 'self' https://www.youtube.com;"
+            "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-src 'self' https://www.youtube.com;"
         )
     return response
 
