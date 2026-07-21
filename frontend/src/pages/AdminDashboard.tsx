@@ -744,6 +744,7 @@ export default function AdminDashboard() {
                       onChange={(e) => setConfig({ ...config, gemini_model: e.target.value })}
                       className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     >
+                      <option value="gemini-3.6-flash">Gemini 3.6 Flash (Terbaru!)</option>
                       <option value="gemini-3.6-pro">Gemini 3.6 Pro (New!)</option>
                       <option value="gemini-3.5-flash">Gemini 3.5 Flash (Stable / Recommended)</option>
                       <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Stable)</option>
