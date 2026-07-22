@@ -129,7 +129,7 @@ Design Requirements:
 Style: Modern, professional, suitable for educational blog featured image."""
         })
 
-@prompts_bp.route('/save-prompts', methods=['POST'])
+@prompts_bp.route('/api/save-prompts', methods=['POST'])
 @require_jwt
 def save_prompts(user_id):
     site_id = request.form.get('site_id', type=int)
