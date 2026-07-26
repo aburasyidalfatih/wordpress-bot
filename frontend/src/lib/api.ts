@@ -10,7 +10,9 @@ export async function apiFetch(url: string, options: RequestInit = {}) {
   
   if (response.status === 401) {
     localStorage.removeItem('token');
-    window.location.href = '/login';
+    if (window.location.pathname !== '/login' && window.location.pathname !== '/register' && window.location.pathname !== '/') {
+        window.location.href = '/login';
+    }
   }
   
   return response;
