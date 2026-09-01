@@ -33,18 +33,6 @@ def api_research(user_id):
                 ResearchData.site_id == site_id,
                 ResearchData.category == category['name']
             ).order_by(ResearchData.created_at.desc()).first()
-
-            if not latest:
-                return jsonify({'success': False, 'error': 'Jalankan riset berkualitas terlebih dahulu.'}), 400
-            confidence = latest.confidence_level or 'unknown'
-            research_time = latest.researched_at or latest.created_at
-            age_days = (datetime.now() - research_time).days if research_time else 999
-            if confidence not in {'high', 'medium', 'low'} or age_days > 7:
-                reason = 'bukti riset belum terverifikasi' if confidence not in {'high', 'medium', 'low'} else 'data riset sudah lebih dari 7 hari'
-                return jsonify({
-                    'success': False,
-                    'error': f'Tidak aman membuat judul dari data ini: {reason}. Silakan riset ulang.'
-                }), 400
             
             if latest:
                 researched_at = latest.researched_at or latest.created_at
@@ -237,9 +225,21 @@ def generate_titles(user_id, category):
                 ResearchData.site_id == site_id,
                 ResearchData.category == category
             ).order_by(ResearchData.created_at.desc()).first()
+
+            if not latest:
+                return jsonify({'success': False, 'error': 'Jalankan riset berkualitas terlebih dahulu.'}), 400
+            confidence = latest.confidence_level or 'unknown'
+            research_time = latest.researched_at or latest.created_at
+            age_days = (datetime.now() - research_time).days if research_time else 999
+            if confidence not in {'high', 'medium', 'low'} or age_days > 7:
+                reason = 'bukti riset belum terverifikasi' if confidence not in {'high', 'medium', 'low'} else 'data riset sudah lebih dari 7 hari'
+                return jsonify({
+                    'success': False,
+                    'error': f'Tidak aman membuat judul dari data ini: {reason}. Silakan riset ulang.'
+                }), 400
             
-            keywords = latest.keywords if latest and latest.keywords else []
-            questions = latest.questions if latest and latest.questions else []
+            keywords = latest.keywords or []
+            questions = latest.questions or []
             site_name = site.site_name
             language = site.language or 'id'
             

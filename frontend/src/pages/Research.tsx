@@ -8,6 +8,7 @@ import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search
 import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
+import { ErrorState } from '@/components/ErrorState';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,6 +85,7 @@ export default function Research() {
   const { selectedSiteId } = useSiteContext();
   const [data, setData] = useState<ResearchDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
     const [researching, setResearching] = useState(false);
   const [researchingCategory, setResearchingCategory] = useState<string | null>(null);
   const [message, setMessage] = useState('');
@@ -103,14 +105,27 @@ export default function Research() {
       return;
     }
     setLoading(true);
+    setLoadError(null);
     apiFetch(`/api/research_data?site_id=${selectedSiteId}&_t=${Date.now()}`, { signal })
-      .then(res => res.json())
+      .then(async res => {
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.success) {
+          throw new Error(payload.error || `Gagal memuat data riset (${res.status})`);
+        }
+        return payload;
+      })
       .then(d => {
         setData(d);
-        setLoading(false);
       })
       .catch(err => {
-        if (err.name !== 'AbortError') if (import.meta.env.DEV) console.error('Failed to load research data:', err);
+        if (err.name !== 'AbortError') {
+          setData(null);
+          setLoadError(err instanceof Error ? err.message : 'Gagal memuat data riset.');
+          if (import.meta.env.DEV) console.error('Failed to load research data:', err);
+        }
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
       });
   }, [selectedSiteId]);
 
@@ -292,6 +307,8 @@ export default function Research() {
   </div>;
 
   if (!selectedSiteId) return <EmptyState title="Intelligence Hub" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk memuat analisis kompetitor, tren sosial, dan topik terhangat." />;
+
+  if (loadError) return <div className="p-8"><ErrorState message={loadError} onRetry={() => loadData()} /></div>;
 
   const researchData = data?.research_data || {};
   const selectedCategories = data?.categories || [];
