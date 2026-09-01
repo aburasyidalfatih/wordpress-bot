@@ -24,6 +24,11 @@ def api_research(user_id):
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
             
         selected_categories = site.selected_categories or []
+        # Snapshot these values while the ORM instance is still attached. The
+        # response is assembled after other sessions have committed and closed.
+        gsc_connected = bool(site.gsc_refresh_token)
+        gsc_property_url = site.gsc_property_url
+        gsc_last_synced_at = site.gsc_last_synced_at
     
     # Get latest research data for each category
     research_data = {}
@@ -79,9 +84,9 @@ def api_research(user_id):
         'categories': selected_categories,
         'research_data': research_data,
         'search_console': {
-            'connected': bool(site.gsc_refresh_token),
-            'property_url': site.gsc_property_url,
-            'last_synced_at': site.gsc_last_synced_at.isoformat() if site.gsc_last_synced_at else None,
+            'connected': gsc_connected,
+            'property_url': gsc_property_url,
+            'last_synced_at': gsc_last_synced_at.isoformat() if gsc_last_synced_at else None,
             'opportunities': gsc_opportunities,
         },
     })

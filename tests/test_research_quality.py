@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import seo_research
@@ -136,6 +137,14 @@ class SearchConsoleFoundationTests(unittest.TestCase):
         self.assertEqual(result[0]['type'], 'quick_win')
         self.assertEqual(result[0]['position_change'], 3.0)
         self.assertGreater(result[0]['opportunity_score'], 0)
+
+    def test_research_response_does_not_access_detached_site(self):
+        source = Path('routes/research.py').read_text(encoding='utf-8')
+        response_source = source.split("'search_console': {", 1)[1].split("    })", 1)[0]
+
+        self.assertNotIn('site.gsc_refresh_token', response_source)
+        self.assertNotIn('site.gsc_property_url', response_source)
+        self.assertNotIn('site.gsc_last_synced_at', response_source)
 
 
 if __name__ == '__main__':
