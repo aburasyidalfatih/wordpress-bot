@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from core_extensions import db, load_config, save_config, require_jwt, require_admin
+from config import DEFAULT_GEMINI_MODEL
 
 settings_bp = Blueprint('settings', __name__)
 
@@ -30,10 +31,10 @@ def save_config_route(user_id):
     if request.is_json:
         data = request.json or {}
         config['gemini_api_key'] = data.get('gemini_api_key', '')
-        config['gemini_model'] = data.get('gemini_model', 'gemini-2.5-pro')
+        config['gemini_model'] = data.get('gemini_model', DEFAULT_GEMINI_MODEL)
     else:
         config['gemini_api_key'] = request.form.get('gemini_api_key', '')
-        config['gemini_model'] = request.form.get('gemini_model', 'gemini-2.5-pro')
+        config['gemini_model'] = request.form.get('gemini_model', DEFAULT_GEMINI_MODEL)
     
     # Save the config under the current user (which is the admin)
     save_config(user_id, config)

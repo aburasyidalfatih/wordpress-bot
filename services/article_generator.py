@@ -1,15 +1,11 @@
 from google import genai
 from google.genai import types
-import requests
-import base64
-import json
 import re
-import urllib.parse
 from io import BytesIO
 from PIL import Image
-import time
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +17,7 @@ def sanitize_filename(name):
     return name.strip('-')
 
 class ArticleGenerator:
-    def __init__(self, api_key, model='gemini-3.5-flash', image_model='gemini-3.1-flash-image'):
+    def __init__(self, api_key, model=DEFAULT_GEMINI_MODEL, image_model=DEFAULT_GEMINI_IMAGE_MODEL):
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.image_model = image_model
@@ -219,7 +215,9 @@ class ArticleGenerator:
                 else:
                     seo_section += f"\n\nðŸ—£ï¸ KELUHAN AUDIENS ASLI (Diskusi Quora/Reddit):\n"
                 for insight in social_insights[:5]:
-                    seo_section += f"- {insight}\n"
+                    insight_text = insight.get('text', '') if isinstance(insight, dict) else str(insight)
+                    if insight_text:
+                        seo_section += f"- {insight_text}\n"
                 if language == 'en':
                     seo_section += "ðŸ’¡ Address these real pain points and questions directly in your content.\n"
                 else:
@@ -231,7 +229,8 @@ class ArticleGenerator:
                     seo_section += f"\n\nðŸŽ¥ YOUTUBE EXPERT INSIGHTS (Transcripts from top videos):\n"
                 else:
                     seo_section += f"\n\nðŸŽ¥ WAWASAN PAKAR YOUTUBE (Transkrip dari video teratas):\n"
-                for yt in youtube_insights[:2]:
+                transcript_items = [yt for yt in youtube_insights if yt.get('transcript_available') and yt.get('snippets')]
+                for yt in transcript_items[:2]:
                     seo_section += f"- Video '{yt.get('title')}': \"{yt.get('snippets')}\"\n"
                 if language == 'en':
                     seo_section += "ðŸ’¡ Weave these expert insights naturally into the article to boost E-E-A-T signals.\n"

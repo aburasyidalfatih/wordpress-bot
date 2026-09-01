@@ -1,4 +1,21 @@
 services:
+  migrate:
+    build: .
+    command: python migrate.py
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
+      - SECRET_KEY=${SECRET_KEY:-}
+      - FERNET_KEY=${FERNET_KEY:-}
+      - AUTOWP_RUNTIME_DIR=/app/runtime
+    volumes:
+      - autowp_runtime:/app/runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   web:
     build: .
     # command: gunicorn is already specified in Dockerfile
@@ -25,6 +42,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -50,6 +69,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -75,6 +96,8 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

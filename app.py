@@ -1,34 +1,12 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
-from services.article_generator import ArticleGenerator
-from services.wp_publisher import WordPressPublisher
-from database import Database
-from models import ResearchData, PostLog
-from ml_optimizer import ContentOptimizer
-from trending_research import TrendingResearch
+from flask import Flask, request, send_from_directory
 from dotenv import load_dotenv
 import os
-import requests
-from datetime import datetime
-import logging
 import signal
 import atexit
-import sys
-from functools import wraps
-from time import time
 import jwt
-from redis import Redis
-from rq import Queue
-from rq.job import Job
-from rq.exceptions import NoSuchJobError
 
 from config import Config
-from core_extensions import (
-    db, q, redis_conn, optimizer, trending, logger,
-    load_config, save_config, get_cached_stats,
-    require_jwt, require_pin,
-    send_telegram_notification, post_to_telegram_channel,
-    post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
-)
+from core_extensions import db, logger
 
 # ---- Rate Limiting ----
 from flask_limiter import Limiter
@@ -78,6 +56,8 @@ load_dotenv()
 try:
     system_settings = db.get_system_settings()
     for k, v in system_settings.items():
+        if k.startswith('__'):
+            continue  # internal bookkeeping (e.g. __schema_version__), not app config
         if v is not None:
             if k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
                 setattr(Config, k, v.lower() == 'true')
@@ -97,6 +77,36 @@ try:
     logger.info(f"Loaded {len(system_settings)} system settings from database.")
 except Exception as e:
     logger.error(f"Failed to load system settings from database: {e}")
+
+
+def _warn_on_sandbox_payment_urls():
+    """Loudly flag live payment credentials still pointed at a sandbox endpoint.
+
+    Both gateway URLs default to sandbox, so a deployment that sets real API keys
+    but forgets the URL would silently transact against sandbox.
+    """
+    from routes.payments import get_payment_settings, tripay_is_mock, paypal_is_mock
+
+    settings = get_payment_settings()
+
+    if not tripay_is_mock(settings) and 'sandbox' in (settings['TRIPAY_API_URL'] or '').lower():
+        logger.warning(
+            "PAYMENT MISCONFIGURATION: live Tripay credentials are configured but "
+            f"TRIPAY_API_URL still points at sandbox ({settings['TRIPAY_API_URL']}). "
+            "Real payments will NOT be processed."
+        )
+    if not paypal_is_mock(settings) and 'sandbox' in (settings['PAYPAL_API_URL'] or '').lower():
+        logger.warning(
+            "PAYMENT MISCONFIGURATION: live PayPal credentials are configured but "
+            f"PAYPAL_API_URL still points at sandbox ({settings['PAYPAL_API_URL']}). "
+            "Real payments will NOT be processed."
+        )
+
+
+try:
+    _warn_on_sandbox_payment_urls()
+except Exception as e:
+    logger.error(f"Could not check payment gateway URLs: {e}")
 
 app = Flask(__name__)
 app.config.from_object(Config)

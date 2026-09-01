@@ -1,249 +1,256 @@
-# WordPress Auto Post Bot — Dokumentasi
+# AutoWP — WordPress Auto Post Bot
 
-**URL**: https://bot.kelasmaster.id  
-**Stack**: Python 3 + Flask + PostgreSQL 15 + Redis/RQ  
-**Server**: VPS 43.157.223.102, port 5003  
-**Process Manager**: Supervisor  
-**Last Updated**: 2026-03-22
+**Stack**: Python 3.12 + Flask (API) + React 19 (SPA) + PostgreSQL 15 + Redis/RQ
+**Deployment**: Docker Compose (Dokploy + Traefik)
+
+AutoWP adalah platform multi-tenant: user mendaftarkan beberapa website WordPress,
+bot meng-generate artikel + featured image via Gemini AI, mem-publish ke WordPress,
+lalu menyebarkannya ke berbagai platform sosial. Monetisasi lewat sistem kredit.
 
 ---
 
 ## Arsitektur
 
 ```
-https://bot.kelasmaster.id
+                  Traefik (SSL)
+                        │
+              Flask API (gunicorn, :5003)
+                        │  serves frontend/dist sebagai SPA
+        ┌───────────────┼───────────────┐
+        │               │               │
+   PostgreSQL 15     Redis/RQ      Gemini API
+        │               │
+        │      ┌────────┴────────┐
+        │   worker           scheduler
+        │  (RQ jobs)      (dispatcher.py)
         │
-    Nginx (SSL)
-        │
-    Flask app (port 5003)
-        ├── Redis/RQ      ──→ Background jobs
-        ├── Dispatcher    ──→ Auto post terjadwal
-        ├── Gemini AI    ──→ Generate artikel & gambar
-        ├── WordPress API──→ Publish artikel
-        ├── Telegram API ──→ Notifikasi & channel post
-        ├── Facebook API ──→ Auto post ke fanpage
-        ├── Twitter API  ──→ Auto post ke X
-        └── Threads API  ──→ Auto post ke Threads
+        └── WordPress REST API, Telegram, Facebook,
+            Twitter/X, Threads, Pinterest
 ```
 
-## File Struktur
+Tiga proses aplikasi berjalan dari image yang sama:
+
+| Service | Command | Fungsi |
+|---|---|---|
+| `web` | `gunicorn ... app:app` | REST API + serve SPA |
+| `worker` | `rq worker --with-scheduler` | Eksekusi job generate & post |
+| `scheduler` | `python dispatcher.py` | Loop 60 detik, enqueue job terjadwal |
+
+## Struktur Project
 
 ```
-wordpress-bot/
-├── app.py              # Entry point Flask, semua routes
-├── bot.py              # ArticleGenerator, WordPressPublisher
-├── database.py         # Database wrapper (SQLAlchemy + PostgreSQL)
-├── config.py           # Konstanta konfigurasi
-├── ml_optimizer.py     # AI category optimizer
-├── seo_research.py     # SEO research helper
-├── trending_research.py# Google Trends wrapper
-├── post_to_threads.py  # Threads posting helper
-├── templates/
-│   ├── base.html       # Layout utama (sidebar + topbar)
-│   ├── index.html      # Dashboard
-│   ├── settings.html   # Konfigurasi
-│   ├── prompts.html    # Custom AI prompts
-│   ├── research.html   # Trending topics
-│   ├── monitor.html    # System health
-│   └── login.html      # PIN login
-├── static/
-│   ├── app.css         # Design system (dark theme)
-│   ├── app.js          # JS utilities (toast, modal, dll)
-│   ├── favicon.svg     # Favicon
-│   └── lucide.min.js   # Icon library
-├── scripts/
-│   ├── add_category.py           # Tambah kategori via CLI
-│   ├── add_category_descriptions.py
-│   ├── reupload_images.py        # Re-upload gambar ke WP
-│   ├── run_research.py           # Jalankan research manual
-│   ├── check_scheduler.sh        # Cek status scheduler
-│   ├── cleanup.sh                # Bersihkan log lama
-│   └── monitor.sh                # Monitor bot
-├── docs/               # Dokumentasi setup per platform
-├── logs/               # Log files (rotasi otomatis)
-├── docker-compose.yml  # Web, worker, scheduler, PostgreSQL 15, Redis
-├── .env                # Environment variables (tidak di-commit)
-└── venv/               # Python virtual environment
+autowp/
+├── app.py                  # Entry point Flask: blueprint, security headers, SPA serving
+├── config.py               # Config + konstanta default model Gemini
+├── core_extensions.py      # Singleton (db, queue, logger), decorator auth, helper sosmed
+├── database.py             # Wrapper SQLAlchemy + migrasi (advisory-locked)
+├── models.py               # Model SQLAlchemy
+├── security.py             # Enkripsi Fernet + CSRF
+├── dispatcher.py           # Scheduler auto-post + reaper item nyangkut
+├── ml_optimizer.py         # Reorder kategori berdasarkan engagement
+├── seo_research.py         # SEO research (DuckDuckGo, YouTube, scraping)
+├── trending_research.py    # Google Trends (pytrends)
+├── routes/                 # Blueprint API
+│   ├── auth.py             # Google OAuth + login, JWT
+│   ├── dashboard.py        # Statistik & riwayat
+│   ├── sites.py            # CRUD website WordPress
+│   ├── queue.py            # Antrean konten
+│   ├── research.py         # Trending topics
+│   ├── prompts.py          # Custom AI prompt
+│   ├── settings.py         # Setting user
+│   ├── monitor.py          # System health
+│   ├── payments.py         # Tripay, PayPal, transfer manual
+│   └── admin.py            # Panel admin
+├── services/
+│   ├── article_generator.py# Generate artikel & gambar via Gemini
+│   └── wp_publisher.py     # Publish ke WordPress REST API
+├── tasks/
+│   ├── article_jobs.py     # Job RQ: generate_and_post, regenerate
+│   └── research_jobs.py    # Job RQ: research
+├── frontend/               # React 19 + Vite + Tailwind 4 + shadcn
+│   └── src/
+│       ├── pages/          # Dashboard, Sites, Queue, Research, Billing, Admin, ...
+│       ├── components/     # Layout, ErrorBoundary, ui/
+│       ├── contexts/       # SiteContext
+│       └── lib/            # api.ts, types.ts, utils.ts
+├── scripts/                # Utilitas CLI & shell operasional
+├── docs/                   # Panduan setup per platform
+├── Dockerfile              # Multi-stage: build frontend → runtime Python
+└── docker-compose.yml      # web, worker, scheduler, postgres, redis
 ```
 
 ## Fitur
 
 | Fitur | Deskripsi |
 |---|---|
-| Auto Post | Generate & publish artikel ke WordPress terjadwal |
-| Multi-platform | Post ke Telegram, Facebook, Twitter/X, Threads |
-| Gemini AI | Generate konten artikel (model terpisah dari gambar) |
-| Featured Image | Generate gambar landscape 16:9 via Gemini image model |
-| SEO Optimized | Artikel dengan meta description, focus keyword, excerpt |
-| Research | Trending topics via Google Trends per kategori |
-| Category Rotation | Rotasi kategori otomatis setiap posting |
-| AI Optimizer | Reorder kategori berdasarkan engagement performance |
-| Sync Engagement | Sinkronisasi views/comments dari WordPress |
-| Custom Prompts | Override prompt artikel & gambar via dashboard |
-| PIN Auth | Proteksi dashboard dengan 6-digit PIN |
+| Multi-site | Satu user, banyak website WordPress |
+| Auto Post | Generate & publish terjadwal per site (timezone-aware) |
+| Multi-platform | Telegram (chat & channel), Facebook, Twitter/X, Threads, Pinterest |
+| Gemini AI | Model artikel & gambar dikonfigurasi terpisah |
+| SEO | Meta description, focus keyword, excerpt, internal linking |
+| Research Intelligence | Google Trends, autocomplete, kompetitor, sosial, YouTube, berita; dilengkapi provenance, freshness, dan quality gate |
+| Category Rotation | Rotasi kategori otomatis tiap posting |
+| AI Optimizer | Reorder kategori berdasarkan engagement |
+| Custom Prompts | Override prompt artikel & gambar per site |
+| Sistem Kredit | Top-up via Tripay / PayPal / transfer manual |
+| Auth | Google OAuth + JWT (pendaftaran manual dinonaktifkan) |
 
-## Konfigurasi Model Gemini
+## Model Gemini
 
-Dua model terpisah bisa dikonfigurasi di `/settings`:
+Default didefinisikan **satu tempat** di `config.py`:
 
-| Setting | Default | Fungsi |
-|---|---|---|
-| Model Artikel | `gemini-2.5-pro` | Generate konten artikel |
-| Model Gambar | `gemini-3.1-flash-image-preview` | Generate featured image |
+```python
+DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash'
+DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image'
+```
 
-**Pilihan Model Artikel:**
-- `gemini-2.5-pro` — Best quality
-- `gemini-2.5-flash` — Fast & cheap
-- `gemini-2.5-flash-lite` — Fastest
-- `gemini-3.1-pro-preview` — Most advanced
-- `gemini-3-flash-preview` — Frontier
-
-**Pilihan Model Gambar:**
-- `gemini-3.1-flash-image-preview` — Nano Banana 2, fast
-- `gemini-3-pro-image-preview` — Nano Banana Pro, best quality
-- `gemini-2.5-flash-image` — Nano Banana, stable
+Semua modul mengimpor konstanta ini — jangan menulis ulang string model secara
+hardcode. Pilihan yang tersedia di UI ada di `frontend/src/pages/AdminDashboard.tsx`;
+kalau menambah opsi di sana, pastikan tetap konsisten dengan konstanta di atas.
 
 ## Jadwal Posting
 
-Default: `0,6,12,18` (4x per hari — jam 00:00, 06:00, 12:00, 18:00)  
-Bisa diubah di Settings → Schedule Hours.
-
-Auto Research: setiap hari jam 00:00 (jika diaktifkan).
+Per site, field `schedule_hours` (default `0,6,12,18` = 4x sehari) dengan timezone
+per site (default `Asia/Jakarta`). Dispatcher mengecek tiap 60 detik dan
+meng-enqueue job dengan jitter acak 0–50 menit agar tidak semua site posting
+bersamaan.
 
 ## Database
 
-AutoWP memakai **PostgreSQL 15** (`postgres:15-alpine`). Aplikasi membaca `DATABASE_URL` jika tersedia, atau menyusun URL PostgreSQL dari `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, dan `POSTGRES_DB`. SQLite tidak lagi didukung.
+PostgreSQL 15. Aplikasi membaca `DATABASE_URL`, atau menyusunnya dari
+`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_HOST` / `POSTGRES_PORT` /
+`POSTGRES_DB`. SQLite tidak didukung.
 
 Tabel utama:
-- `users` — akun, role, tier, kredit
-- `wordpress_sites` — konfigurasi multi-website per user
-- `config` — konfigurasi Gemini global/admin
-- `post_logs` — riwayat semua posting (title, url, success, engagement)
-- `research_data` — hasil research trending topics per kategori
-- `content_queue` — antrean judul/content idea
-- `transactions` — riwayat top-up kredit
 
-Contoh backup PostgreSQL via cron setiap hari jam 02:00:
+| Tabel | Isi |
+|---|---|
+| `users` | Akun, role, tier, kredit |
+| `wordpress_sites` | Konfigurasi per website (kredensial terenkripsi) |
+| `config` | API key & model Gemini per user |
+| `post_logs` | Riwayat posting + metrik engagement |
+| `research_data` | Hasil research per kategori |
+| `content_queue` | Antrean judul/ide konten |
+| `transactions` | Riwayat top-up kredit |
+| `system_settings` | Setting global + penanda versi skema |
+
+### Migrasi
+
+Service one-shot `migrate` menjalankan `migrate.py` sebelum web, worker, dan
+scheduler dimulai. Migrasi tetap dilindungi **PostgreSQL advisory lock** serta
+penanda `__schema_version__` di `system_settings`. Kalau menambah langkah migrasi
+baru di `_run_migrations_locked`, naikkan `SCHEMA_VERSION` di `database.py`.
+
+Hasil research baru menyimpan status setiap provider, URL sumber yang tersedia,
+umur data, quality score, confidence level, dan penanda fallback. Kategori yang
+tidak mencapai bukti minimum tidak disimpan sebagai hasil sukses dan kreditnya
+dikembalikan. Data lebih dari tujuh hari tidak dipakai untuk membuat judul atau
+artikel otomatis.
+
+### Backup
+
 ```bash
-0 2 * * * docker compose exec -T postgres pg_dump -U autowp autowpdb > /home/ubuntu/backups/autowp_$(date +\%Y\%m\%d).sql
+docker compose exec -T postgres pg_dump -U autowp autowpdb > backup_$(date +%Y%m%d).sql
 ```
 
-## Deployment Docker/Dokploy
+## Keamanan
 
-`docker-compose.yml` menjalankan `web`, `worker`, `scheduler`, **PostgreSQL 15**, dan Redis. Untuk production, sebaiknya isi env berikut di Dokploy:
+- Semua kredensial pihak ketiga (password WordPress, token sosmed, API key Gemini)
+  dienkripsi Fernet di level property SQLAlchemy. `encrypt_value` menolak menyimpan
+  plaintext kalau enkripsi gagal.
+- Auth JWT (cookie `httponly` + header Bearer), Google token diverifikasi `aud`
+  dan `email_verified`.
+- Rate limiting per user (fallback IP) via Flask-Limiter + Redis.
+- Security headers + CSP, container berjalan sebagai non-root user.
+- Webhook Tripay diverifikasi HMAC-SHA256 dengan `compare_digest`.
+
+**Penting**: `FERNET_KEY` tidak boleh berubah. Kalau hilang, semua kredensial
+tersimpan tidak bisa didekripsi dan harus dimasukkan ulang.
+
+## Environment Variables
+
+Lihat `.env.example`. Yang wajib untuk production:
 
 ```env
-SECRET_KEY=<random secret panjang>
-FERNET_KEY=<hasil python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
+SECRET_KEY=<random panjang>
+FERNET_KEY=<python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
+POSTGRES_PASSWORD=<password kuat>
+GOOGLE_CLIENT_ID=<oauth client id>
+ADMIN_EMAILS=admin@example.com
 ```
 
-Jika kedua env itu belum diisi, aplikasi tetap bisa start: `SECRET_KEY` dan `FERNET_KEY` akan dibuat otomatis di volume bersama `autowp_runtime` pada boot pertama. Ini mencegah deploy gagal saat Dokploy menjalankan `docker compose` tanpa `.env`, sekaligus menjaga secret tetap sama untuk `web`, `worker`, dan `scheduler`.
+Kalau `SECRET_KEY` / `FERNET_KEY` kosong, keduanya dibuat otomatis dan disimpan di
+volume `autowp_runtime` supaya konsisten antar service. Ini agar deploy tidak gagal,
+tapi untuk production sebaiknya diisi eksplisit.
 
-## Perintah Penting
+⚠️ `TRIPAY_API_URL` dan `PAYPAL_API_URL` **default ke sandbox**. Untuk transaksi
+sungguhan, isi URL production. Aplikasi akan menulis warning di log saat startup
+kalau mendeteksi kredensial asli dengan URL sandbox.
+
+## Development
 
 ```bash
-# Status
-sudo supervisorctl status wordpress-bot
+# Backend
+pip install -r requirements.txt
+python migrate.py
+python app.py                    # http://localhost:5005
 
-# Restart
-sudo supervisorctl restart wordpress-bot
-
-# Log realtime
-tail -f /home/ubuntu/wordpress-bot/logs/bot.log
-
-# Log supervisor
-tail -f /home/ubuntu/wordpress-bot/supervisor.out.log
-
-# Jika port conflict (zombie process)
-sudo supervisorctl stop wordpress-bot
-sudo fuser -k 5003/tcp
-sudo supervisorctl start wordpress-bot
-
-# Cek database production
-docker compose exec postgres psql -U autowp -d autowpdb \
-  -c "SELECT created_at, left(title, 60), success FROM post_logs ORDER BY created_at DESC LIMIT 10;"
-
-# Manual post via CLI
-cd /home/ubuntu/wordpress-bot
-source venv/bin/activate
-python -c "from app import generate_and_post; generate_and_post(USER_ID, site_id=SITE_ID)"
+# Frontend
+cd frontend && npm install && npm run dev
 ```
 
-## Supervisor Config
+## Deployment
 
-```ini
-[program:wordpress-bot]
-command=/home/ubuntu/wordpress-bot/venv/bin/python app.py
-directory=/home/ubuntu/wordpress-bot
-user=ubuntu
-autostart=true
-autorestart=true
-stderr_logfile=/home/ubuntu/wordpress-bot/supervisor.err.log
-stdout_logfile=/home/ubuntu/wordpress-bot/supervisor.out.log
+```bash
+docker compose up -d --build
+docker compose logs -f web
 ```
 
-## Nginx Config
+## Perintah Operasional
 
-```nginx
-server {
-    server_name bot.kelasmaster.id;
-    location / {
-        proxy_pass http://127.0.0.1:5003;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    listen 443 ssl; # managed by Certbot
-}
+```bash
+docker compose ps
+docker compose restart scheduler
+docker compose logs scheduler --tail=100
+```
+
+Cek posting terakhir:
+
+```bash
+docker compose exec postgres psql -U autowp -d autowpdb -c "SELECT created_at, left(title, 60), success FROM post_logs ORDER BY created_at DESC LIMIT 10;"
 ```
 
 ## Troubleshooting
 
-### Port 5003 already in use
+**Bot tidak posting sesuai jadwal** — cek log scheduler. Pastikan site `auto_post`
+aktif, punya `selected_categories`, dan user masih punya kredit.
+
+**Item antrean nyangkut di status `posting`** — dispatcher otomatis mengembalikannya
+ke `pending` setelah 90 menit (`STUCK_POSTING_TIMEOUT_MINUTES` di `dispatcher.py`).
+
+**Artikel gagal generate** — cek error Gemini API:
+
 ```bash
-sudo supervisorctl stop wordpress-bot
-sudo fuser -k 5003/tcp
-sleep 2
-sudo supervisorctl start wordpress-bot
+docker compose logs worker --tail=100 | grep -i error
 ```
 
-### Bot tidak posting sesuai jadwal
-```bash
-# Cek scheduler/dispatcher log
-docker compose logs scheduler --tail=100
-# Restart scheduler
-docker compose restart scheduler
-```
+**Reset konfigurasi Gemini**:
 
-### Artikel gagal generate
-Cek log untuk error Gemini API:
-```bash
-grep "ERROR\|error" /home/ubuntu/wordpress-bot/logs/bot.log | tail -20
-```
-
-### Reset konfigurasi
 ```bash
 docker compose exec postgres psql -U autowp -d autowpdb -c "DELETE FROM config;"
-# Lalu isi ulang via Admin Settings
 ```
 
 ## Integrasi Platform
 
-| Platform | Setup Docs | Field di Settings |
+| Platform | Dokumentasi | Field |
 |---|---|---|
-| WordPress | — | URL, Username, App Password |
+| WordPress | — | URL, Username, Application Password |
 | Telegram | `docs/TELEGRAM_SETUP.md` | Bot Token, Chat ID |
 | Telegram Channel | `docs/TELEGRAM_CHANNEL_SETUP.md` | Channel ID |
 | Facebook | `docs/FACEBOOK_SETUP.md` | Page ID, Access Token |
-| Twitter/X | `docs/TWITTER_SETUP.md` | API Key, Secret, Token |
+| Twitter/X | `docs/TWITTER_SETUP.md` | API Key, Secret, Access Token, Secret |
 | Threads | `docs/THREADS_SETUP.md` | User ID, Access Token |
+| Pinterest | — | Board ID, Access Token |
 
-## Changelog Terakhir (2026-03-22)
-
-- **Model Gemini terpisah** — Model artikel dan gambar bisa dikonfigurasi secara independen
-- **Model terbaru** — Ditambahkan Gemini 3.1 Pro, 3 Flash, Nano Banana 2, Nano Banana Pro
-- **Quick Actions di topbar** — Tombol Post Now, Research, Sync, Optimize dipindah ke topbar
-- **Favicon** — Icon "W" ungu di browser tab
-- **Responsive fix** — Grid monitor & research responsive di mobile
-- **CSS cleanup** — Inline style dipindah ke app.css
+Dokumentasi tambahan: `docs/HOW_RESEARCH_WORKS.md`, `docs/CONTENT_QUALITY.md`,
+`docs/MONITORING_GUIDE.md`.

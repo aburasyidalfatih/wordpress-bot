@@ -25,6 +25,34 @@ q = Queue('default', connection=redis_conn)
 # Init DB
 db = Database(Config.DATABASE_URL)
 
+# A queue item is marked 'posting' before its job is enqueued with up to 50 minutes
+# of jitter. If the worker dies or the job is lost, nothing ever resets it. Anything
+# still 'posting' after this long is considered abandoned and returned to 'pending'.
+STUCK_POSTING_TIMEOUT_MINUTES = 90
+
+
+def reset_stuck_queue_items():
+    """Return abandoned 'posting' queue items to 'pending' so they get retried."""
+    from models import ContentQueue
+
+    cutoff = datetime.now() - timedelta(minutes=STUCK_POSTING_TIMEOUT_MINUTES)
+    with db.get_session() as session:
+        stuck = session.query(ContentQueue).filter(
+            ContentQueue.status == 'posting',
+            ContentQueue.posting_started_at.isnot(None),
+            ContentQueue.posting_started_at < cutoff
+        ).all()
+        for item in stuck:
+            logger.warning(
+                f"Resetting stuck queue item id={item.id} (user_id={item.user_id}, "
+                f"site_id={item.site_id}) from 'posting' back to 'pending'."
+            )
+            item.status = 'pending'
+            item.posting_started_at = None
+        if stuck:
+            logger.info(f"Reset {len(stuck)} stuck queue item(s).")
+
+
 def dispatch_jobs():
     with db.get_session() as session:
         # Get all active WordPress sites
@@ -88,6 +116,7 @@ def dispatch_jobs():
                             if queue_item:
                                 item_id = queue_item.id
                                 queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
+                                queue_item.posting_started_at = datetime.now()
                                 session.commit()
                             
                             logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
@@ -117,12 +146,24 @@ def dispatch_jobs():
 
 if __name__ == '__main__':
     logger.info("Dispatcher started.")
-    
+
+    # Only sweep for abandoned queue items every Nth pass; it is a cheap query but
+    # there is no point running it once a minute.
+    STUCK_SWEEP_EVERY_N_PASSES = 10
+    pass_count = 0
+
     while True:
         try:
             dispatch_jobs()
         except Exception as e:
             logger.error(f"Error in scheduler main loop: {e}")
-            
+
+        if pass_count % STUCK_SWEEP_EVERY_N_PASSES == 0:
+            try:
+                reset_stuck_queue_items()
+            except Exception as e:
+                logger.error(f"Error resetting stuck queue items: {e}")
+        pass_count += 1
+
         # Check every 60 seconds to reduce CPU and DB overhead
         time.sleep(60)

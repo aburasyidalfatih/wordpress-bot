@@ -1,9 +1,12 @@
+from datetime import datetime
+
 from flask import Blueprint, request, jsonify
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 
 from core_extensions import db, q, redis_conn, logger, load_config, require_jwt
 from services.article_generator import ArticleGenerator
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 queue_bp = Blueprint('queue', __name__)
 
@@ -199,6 +202,7 @@ def post_queue_api(user_id, item_id):
             return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
         item.status = 'posting'
+        item.posting_started_at = datetime.now()
         session.commit()
 
     try:
@@ -374,8 +378,8 @@ def test_generate(user_id):
             # The app.py generate_and_post will need refactoring to take site_id
             generator = ArticleGenerator(
                 config['gemini_api_key'], 
-                config.get('gemini_model', 'gemini-2.5-pro'),
-                config.get('gemini_image_model', 'gemini-3.1-flash-image')
+                config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+                config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
             )
             article = generator.generate_article(category_name, custom_prompt=site.article_prompt, site_name=site.site_name, language=site.language or 'id')
             return jsonify({'success': True, 'article': article})

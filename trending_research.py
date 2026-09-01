@@ -9,10 +9,14 @@ def patched_init(self, *args, **kwargs):
     original_init(self, *args, **kwargs)
 urllib3.util.retry.Retry.__init__ = patched_init
 
-from pytrends.request import TrendReq
+try:
+    from pytrends.request import TrendReq
+except ImportError:
+    TrendReq = None
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,8 @@ class TrendingResearch:
         self.pytrends = None
 
     def _get_pytrends(self, language='id'):
+        if TrendReq is None:
+            raise RuntimeError('pytrends provider is not installed')
         hl = 'en-US' if language == 'en' else 'id-ID'
         tz = 360 if language == 'en' else 420
         if not hasattr(self, '_pytrends_cache'):
@@ -64,7 +70,13 @@ class TrendingResearch:
             try:
                 trending_searches = self._get_pytrends(language).trending_searches(pn=pn)
                 if not trending_searches.empty:
-                    results['trending_now'] = trending_searches.head(limit).values.flatten().tolist()
+                    candidates = trending_searches.values.flatten().tolist()
+                    # Country-wide trends are not category evidence by themselves.
+                    # Keep only candidates sharing meaningful terms with the category.
+                    results['trending_now'] = [
+                        topic for topic in candidates
+                        if self.is_relevant(topic, category_name)
+                    ][:limit]
             except Exception as e:
                 logger.warning(f"Could not get trending searches: {e}")
                 if hasattr(self, '_pytrends_cache') and language in self._pytrends_cache:
@@ -74,6 +86,44 @@ class TrendingResearch:
         except Exception as e:
             logger.error(f"Trending research error: {e}")
             return None
+
+    @staticmethod
+    def _tokens(value):
+        stopwords = {'dan', 'atau', 'yang', 'untuk', 'dengan', 'the', 'and', 'for', 'with'}
+        return {
+            token for token in re.findall(r'[a-z0-9]+', str(value).lower())
+            if len(token) > 2 and token not in stopwords
+        }
+
+    @classmethod
+    def is_relevant(cls, topic, category):
+        category_tokens = cls._tokens(category)
+        return bool(category_tokens and category_tokens.intersection(cls._tokens(topic)))
+
+    @staticmethod
+    def build_topic_suggestions(category_name, trending_data, count=5):
+        """Build deterministic, deduplicated suggestions from one trend snapshot."""
+        suggestions = []
+        seen = set()
+        groups = (
+            ('rising', (trending_data or {}).get('related_rising', [])),
+            ('popular', (trending_data or {}).get('related_top', [])),
+            ('trending', (trending_data or {}).get('trending_now', [])),
+        )
+        for topic_type, topics in groups:
+            for topic in topics:
+                normalized = ' '.join(str(topic).lower().split())
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                suggestions.append({
+                    'topic': str(topic).strip(),
+                    'type': topic_type,
+                    'category': category_name,
+                })
+                if len(suggestions) >= count:
+                    return suggestions
+        return suggestions
     
     def get_interest_over_time(self, keywords, language='id'):
         """Get interest over time for keywords"""
@@ -115,37 +165,7 @@ class TrendingResearch:
                 # Fallback: generate generic topics based on category
                 return []
             
-            suggestions = []
-            
-            # Prioritize rising queries
-            for topic in trending_data['related_rising'][:count]:
-                suggestions.append({
-                    'topic': topic,
-                    'type': 'rising',
-                    'category': category_name
-                })
-            
-            # Add top queries if needed
-            remaining = count - len(suggestions)
-            if remaining > 0:
-                for topic in trending_data['related_top'][:remaining]:
-                    suggestions.append({
-                        'topic': topic,
-                        'type': 'popular',
-                        'category': category_name
-                    })
-            
-            # If still not enough, use trending now
-            remaining = count - len(suggestions)
-            if remaining > 0:
-                for topic in trending_data['trending_now'][:remaining]:
-                    suggestions.append({
-                        'topic': topic,
-                        'type': 'trending',
-                        'category': category_name
-                    })
-            
-            return suggestions if suggestions else []
+            return self.build_topic_suggestions(category_name, trending_data, count)
         except Exception as e:
             logger.error(f"Suggest topics error: {e}")
             return []

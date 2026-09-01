@@ -1,17 +1,9 @@
-import os, json, time, random
-from datetime import datetime
-from services.article_generator import ArticleGenerator
-from services.wp_publisher import WordPressPublisher
-from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
-from ml_optimizer import ContentOptimizer
-from trending_research import TrendingResearch
-from core_extensions import db, q, redis_conn, optimizer, trending, logger, load_config, save_config, send_telegram_notification, post_to_telegram_channel, post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
-from config import Config
+from core_extensions import db, trending, logger, send_telegram_notification
+
+MIN_RESEARCH_QUALITY_SCORE = 35
 
 def deep_research_job(user_id, force=True, site_id=None, category=None):
     """Deep research job to find trending topics"""
-    config = load_config(user_id)
-    
     if not site_id:
         logger.error("No site_id provided for deep_research_job")
         return
@@ -62,8 +54,11 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                 # Get trending data
                 trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
                 
-                # Get suggestions
-                suggestions = trending.suggest_article_topics(category_name, count=10, language=language)
+                # Derive suggestions from the same snapshot. This avoids a second
+                # Google Trends request and inconsistent results/rate limiting.
+                suggestions = trending.build_topic_suggestions(
+                    category_name, trending_data, count=10
+                )
                 
                 # Get SEO research data
                 try:
@@ -73,7 +68,40 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                     competitor_outlines = seo_data.get('competitor_outlines', [])
                     youtube_insights = seo_data.get('youtube_insights', [])
                     social_insights = seo_data.get('social_insights', [])
-                    trend_score = seo_data.get('trend_score', 50)
+                    trend_score = seo_data.get('trend_score', 0)
+                    long_tail = seo_data.get('long_tail_keywords', [])
+                    semantic_context = seo_data.get('semantic_context', '')
+                    news_insights = seo_data.get('news_insights', [])
+                    source_metadata = seo_data.get('source_metadata', {})
+                    source_metadata['trend_analysis'] = seo_data.get('trend_analysis', {})
+                    quality = seo_data.get('quality', {})
+
+                    related_count = sum(len((trending_data or {}).get(key, [])) for key in (
+                        'trending_now', 'related_rising', 'related_top'
+                    ))
+                    source_metadata['google_related_queries'] = {
+                        'status': 'real' if related_count else 'unavailable',
+                        'count': related_count,
+                        'checked_at': (trending_data or {}).get('timestamp'),
+                    }
+                    # Related queries are direct category evidence and add a small,
+                    # bounded bonus to the research evidence score.
+                    quality_score = min(100, int(quality.get('score', 0)) + min(10, related_count))
+                    real_provider_count = int(quality.get('real_provider_count', 0)) + (1 if related_count else 0)
+                    if quality_score >= 75 and real_provider_count >= 5:
+                        confidence_level = 'high'
+                    elif quality_score >= 50 and real_provider_count >= 3:
+                        confidence_level = 'medium'
+                    elif quality_score >= MIN_RESEARCH_QUALITY_SCORE and real_provider_count >= 2:
+                        confidence_level = 'low'
+                    else:
+                        confidence_level = 'insufficient'
+
+                    if confidence_level == 'insufficient':
+                        raise RuntimeError(
+                            f'Insufficient research evidence (quality={quality_score}, '
+                            f'real_providers={real_provider_count})'
+                        )
                     
                     logger.info(f"SEO research: {len(keywords)} keywords, {len(questions)} questions, trend score: {trend_score}")
                 except Exception as e:
@@ -83,7 +111,14 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                     competitor_outlines = []
                     youtube_insights = []
                     social_insights = []
-                    trend_score = 50
+                    trend_score = 0
+                    long_tail = []
+                    semantic_context = ''
+                    news_insights = []
+                    source_metadata = {}
+                    quality_score = 0
+                    confidence_level = 'insufficient'
+                    raise
                 
                 # Save to database with SEO data
                 db.save_research_data(
@@ -96,11 +131,21 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                     suggestions=suggestions,
                     keywords=keywords,
                     questions=questions,
-                    long_tail=[],
+                    long_tail=long_tail,
                     competitor_outlines=competitor_outlines,
                     youtube_insights=youtube_insights,
                     social_insights=social_insights,
-                    trend_score=trend_score
+                    trend_score=trend_score,
+                    semantic_context=semantic_context,
+                    news_insights=news_insights,
+                    source_metadata=source_metadata,
+                    quality_score=quality_score,
+                    confidence_level=confidence_level,
+                    is_fallback=any(
+                        meta.get('status') == 'fallback'
+                        for meta in source_metadata.values()
+                        if isinstance(meta, dict)
+                    ),
                 )
                 
                 logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
@@ -115,6 +160,13 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
             db.refund_user_credits(user_id, failed_categories)
             logger.info(f"Refunded {failed_categories} credits to user {user_id} due to research failures.")
         
+        # Expose a machine-readable outcome to the job status endpoint.
+        result = {
+            'successful_categories': successful_categories,
+            'failed_categories': failed_categories,
+            'refunded_credits': failed_categories if force else 0,
+        }
+
         # Send notification
         if successful_categories > 0:
             category_str = f"category '{category}'" if category else f"{successful_categories} categories"
@@ -131,6 +183,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                 f"❌ <b>Research Failed</b>\n\n"
                 f"🌐 <b>Website:</b> {site_name}\n"
                 f"⚠️ Failed to research any categories. Credits refunded if manual.")
+        return result
                 
     except Exception as e:
         logger.error(f"Auto research error: {e}", exc_info=True)

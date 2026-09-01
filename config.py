@@ -61,9 +61,19 @@ def _load_or_create_runtime_secret(env_name, filename, generator):
         os.environ[env_name] = value
         return value
 
+# Single source of truth for Gemini model defaults.
+# Keep in sync with the dropdowns in frontend/src/pages/AdminDashboard.tsx.
+DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash'
+DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image'
+
+
 class Config:
     # Flask
     DEBUG = False
+
+    # Gemini (mirrors the module-level constants above)
+    GEMINI_MODEL = DEFAULT_GEMINI_MODEL
+    GEMINI_IMAGE_MODEL = DEFAULT_GEMINI_IMAGE_MODEL
     SECRET_KEY = _load_or_create_runtime_secret(
         'SECRET_KEY',
         'secret_key',

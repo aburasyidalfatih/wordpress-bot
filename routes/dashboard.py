@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from core_extensions import db, optimizer, require_jwt, load_config
+from core_extensions import db, optimizer, require_jwt
 from services.wp_publisher import WordPressPublisher
 
 dashboard_bp = Blueprint('dashboard', __name__)

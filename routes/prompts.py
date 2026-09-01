@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from core_extensions import db, load_config, require_jwt
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 prompts_bp = Blueprint('prompts', __name__)
 
@@ -197,8 +198,8 @@ def api_optimize_prompt(user_id):
                 
             generator = ArticleGenerator(
                 api_key, 
-                config.get('gemini_model', 'gemini-2.5-pro'),
-                config.get('gemini_image_model', 'gemini-3.1-flash-image')
+                config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+                config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
             )
             
             language = site.language or 'id'

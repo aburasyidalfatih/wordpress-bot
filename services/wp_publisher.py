@@ -1,14 +1,10 @@
 from services.article_generator import sanitize_filename
-from google import genai
-from google.genai import types
 import requests
 import base64
 import json
 import re
 import urllib.parse
 from io import BytesIO
-from PIL import Image
-import time
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 

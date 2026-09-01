@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
@@ -6,9 +7,19 @@ from contextlib import contextmanager
 import logging
 from sqlalchemy import exc, event
 
-from models import Base, User, Transaction, Config, WordPressSite, PostLog, ResearchData, ContentQueue, SystemSetting
+from models import Base, Config, WordPressSite, PostLog, ResearchData, SystemSetting
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 logger = logging.getLogger(__name__)
+
+# Arbitrary but fixed key for the pg advisory lock that serialises migrations.
+MIGRATION_LOCK_ID = 4207311001
+
+# Bump this whenever a new migration step is added to _run_migrations_locked so
+# that already-migrated databases re-run the set exactly once.
+SCHEMA_VERSION = 2
+SCHEMA_VERSION_KEY = '__schema_version__'
+
 
 class Database:
     def __init__(self, db_url):
@@ -52,11 +63,85 @@ class Database:
             raise
             
     def run_migrations(self):
+        """Run schema/data migrations under a PostgreSQL advisory lock.
+
+        Several processes (4 gunicorn workers, the RQ worker, the scheduler) start at
+        the same time and gunicorn recycles workers periodically. Without this guard
+        they race on the same ALTER TABLE statements and re-run the full-table data
+        migrations on every worker respawn. pg_try_advisory_lock lets exactly one
+        process do the work; everyone else returns immediately.
+        """
+        from sqlalchemy import text
+
+        conn = self.engine.connect()
+        acquired = False
+        try:
+            acquired = bool(conn.execute(
+                text("SELECT pg_try_advisory_lock(:lock_id)"),
+                {'lock_id': MIGRATION_LOCK_ID}
+            ).scalar())
+            conn.commit()
+
+            if not acquired:
+                logger.info("Migrations already running in another process; skipping.")
+                return
+
+            if self._schema_version_matches(conn):
+                logger.info(f"Schema already at version {SCHEMA_VERSION}; skipping migrations.")
+                return
+
+            self._run_migrations_locked()
+            self._record_schema_version(conn)
+        finally:
+            if acquired:
+                try:
+                    conn.rollback()
+                    conn.execute(
+                        text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {'lock_id': MIGRATION_LOCK_ID}
+                    )
+                    conn.commit()
+                except Exception as e:
+                    logger.error(f"Failed to release migration advisory lock: {e}")
+            conn.close()
+
+    def _schema_version_matches(self, conn):
+        """True when the database is already at the current schema version."""
+        from sqlalchemy import text
+        try:
+            current = conn.execute(
+                text("SELECT value FROM system_settings WHERE key = :k"),
+                {'k': SCHEMA_VERSION_KEY}
+            ).scalar()
+            conn.commit()
+            return current == str(SCHEMA_VERSION)
+        except Exception as e:
+            # system_settings does not exist yet on a brand new database.
+            conn.rollback()
+            logger.info(f"Could not read schema version ({e}); running migrations.")
+            return False
+
+    def _record_schema_version(self, conn):
+        from sqlalchemy import text
+        try:
+            conn.execute(
+                text(
+                    "INSERT INTO system_settings (key, value) VALUES (:k, :v) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+                ),
+                {'k': SCHEMA_VERSION_KEY, 'v': str(SCHEMA_VERSION)}
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"Could not record schema version: {e}")
+
+    def _run_migrations_locked(self):
         try:
             self.migrate_plain_configs()
         except Exception as em:
             logger.warning(f"Database plain config migration warning: {em}")
-        
+
         try:
             self.migrate_add_timezone_column()
         except Exception as em:
@@ -67,6 +152,16 @@ class Database:
         except Exception as em:
             logger.warning(f"Database language migration warning: {em}")
         
+        try:
+            self.migrate_add_posting_started_at_column()
+        except Exception as em:
+            logger.warning(f"Database posting_started_at migration warning: {em}")
+
+        try:
+            self.migrate_research_quality_columns()
+        except Exception as em:
+            logger.warning(f"Database research quality migration warning: {em}")
+
         try:
             self.migrate_credit_system_tables()
         except Exception as em:
@@ -92,7 +187,7 @@ class Database:
             session.close()
 
     def migrate_plain_configs(self):
-        from security import decrypt_value, encrypt_value
+        from security import decrypt_value
         with self.get_session() as session:
             migrated = False
             
@@ -162,6 +257,52 @@ class Database:
             except Exception as e:
                 logger.warning(f"Language migration warning: {e}")
 
+    def migrate_add_posting_started_at_column(self):
+        """Track when a queue item entered 'posting' so stuck items can be recovered."""
+        from sqlalchemy import text
+        with self.get_session() as session:
+            try:
+                res = session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='content_queue' AND column_name='posting_started_at'"
+                )).fetchone()
+                if not res:
+                    session.execute(text(
+                        "ALTER TABLE content_queue ADD COLUMN posting_started_at TIMESTAMP NULL"
+                    ))
+                    # Backfill existing in-flight rows so the reaper has a baseline and
+                    # does not treat them as abandoned forever.
+                    session.execute(text(
+                        "UPDATE content_queue SET posting_started_at = created_at "
+                        "WHERE status = 'posting'"
+                    ))
+                    session.commit()
+                    logger.info("Added column 'posting_started_at' to 'content_queue' table")
+            except Exception as e:
+                logger.warning(f"posting_started_at migration warning: {e}")
+
+    def migrate_research_quality_columns(self):
+        """Add auditable research metadata without invalidating legacy rows."""
+        from sqlalchemy import text
+        columns = {
+            'semantic_context': 'TEXT',
+            'news_insights': 'JSON',
+            'source_metadata': 'JSON',
+            'quality_score': 'INTEGER DEFAULT 0',
+            'confidence_level': "VARCHAR(20) DEFAULT 'unknown'",
+            'is_fallback': 'BOOLEAN DEFAULT FALSE',
+            'researched_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+        }
+        with self.get_session() as session:
+            for name, sql_type in columns.items():
+                session.execute(text(
+                    f'ALTER TABLE research_data ADD COLUMN IF NOT EXISTS {name} {sql_type}'
+                ))
+            session.execute(text(
+                'CREATE INDEX IF NOT EXISTS idx_research_researched_at '
+                'ON research_data (researched_at)'
+            ))
+
     def migrate_credit_system_tables(self):
         from sqlalchemy import text
         with self.get_session() as session:
@@ -228,15 +369,15 @@ class Database:
                 config = Config(
                     user_id=user_id,
                     gemini_api_key='',
-                    gemini_model='gemini-2.5-pro',
-                    gemini_image_model='gemini-3.1-flash-image'
+                    gemini_model=DEFAULT_GEMINI_MODEL,
+                    gemini_image_model=DEFAULT_GEMINI_IMAGE_MODEL
                 )
                 session.add(config)
                 session.commit()
             return {
                 'gemini_api_key': config.gemini_api_key or '',
-                'gemini_model': config.gemini_model or 'gemini-2.5-pro',
-                'gemini_image_model': config.gemini_image_model or 'gemini-3.1-flash-image'
+                'gemini_model': config.gemini_model or DEFAULT_GEMINI_MODEL,
+                'gemini_image_model': config.gemini_image_model or DEFAULT_GEMINI_IMAGE_MODEL
             }
     
     def save_config(self, user_id, data):
@@ -249,9 +390,9 @@ class Database:
             if 'gemini_api_key' in data and data.get('gemini_api_key'):
                 config.gemini_api_key = data['gemini_api_key']
             if 'gemini_model' in data:
-                config.gemini_model = data.get('gemini_model') or 'gemini-2.5-pro'
+                config.gemini_model = data.get('gemini_model') or DEFAULT_GEMINI_MODEL
             if 'gemini_image_model' in data:
-                config.gemini_image_model = data.get('gemini_image_model') or 'gemini-3.1-flash-image'
+                config.gemini_image_model = data.get('gemini_image_model') or DEFAULT_GEMINI_IMAGE_MODEL
     
     def get_system_settings(self):
         with self.get_session() as session:
@@ -440,7 +581,13 @@ class Database:
             logs = query.order_by(PostLog.created_at.desc()).limit(limit).all()
             return [log.title for log in logs]
     
-    def save_research_data(self, user_id, site_id, category, trending, rising, top, suggestions, keywords=None, questions=None, long_tail=None, competitor_outlines=None, youtube_insights=None, social_insights=None, trend_score=0):
+    def save_research_data(self, user_id, site_id, category, trending, rising, top,
+                           suggestions, keywords=None, questions=None, long_tail=None,
+                           competitor_outlines=None, youtube_insights=None,
+                           social_insights=None, trend_score=0, semantic_context='',
+                           news_insights=None, source_metadata=None, quality_score=0,
+                           confidence_level='unknown', is_fallback=False,
+                           researched_at=None):
         with self.get_session() as session:
             research = ResearchData(
                 user_id=user_id,
@@ -466,6 +613,13 @@ class Database:
             if social_insights is not None:
                 research.social_insights = social_insights
             research.trend_score = trend_score
+            research.semantic_context = semantic_context or ''
+            research.news_insights = news_insights or []
+            research.source_metadata = source_metadata or {}
+            research.quality_score = int(quality_score or 0)
+            research.confidence_level = confidence_level or 'unknown'
+            research.is_fallback = bool(is_fallback)
+            research.researched_at = researched_at or datetime.now()
             
             session.add(research)
             session.commit()

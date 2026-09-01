@@ -3,7 +3,7 @@ import datetime
 import jwt
 from flask import Blueprint, request, jsonify, make_response
 from flask import session
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
 import requests
 
 from core_extensions import db, logger, require_jwt, send_email_notification, send_whatsapp_notification, redis_conn

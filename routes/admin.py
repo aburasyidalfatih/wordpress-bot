@@ -1,10 +1,10 @@
 import os
-import logging
 from flask import Blueprint, request, jsonify
 
-from core_extensions import db, logger, require_admin, send_email_notification, send_whatsapp_notification
+from core_extensions import db, logger, require_admin, send_email_notification
 from database import Config as DBConfig
 from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -303,8 +303,8 @@ def get_admin_config(user_id):
         # Gemini database-backed configs
         'gemini_api_key': '',
         'has_gemini_api_key': bool(db_config.get('gemini_api_key')),
-        'gemini_model': db_config.get('gemini_model', 'gemini-2.5-pro'),
-        'gemini_image_model': db_config.get('gemini_image_model', 'gemini-3.1-flash-image')
+        'gemini_model': db_config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+        'gemini_image_model': db_config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
     }
 
     raw_sensitive = {

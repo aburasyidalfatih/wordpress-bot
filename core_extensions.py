@@ -1,20 +1,20 @@
-import os
 import html as html_module
 import sys
 import logging
+from collections import OrderedDict
 from logging.handlers import RotatingFileHandler
 from functools import wraps
 from time import time
 import jwt
 import requests
-from flask import request, jsonify, redirect, url_for, session
+from flask import request, jsonify
 from redis import Redis
 from rq import Queue
 
 from database import Database
 from ml_optimizer import ContentOptimizer
 from trending_research import TrendingResearch
-from config import Config
+from config import Config, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 # Setup logging
 logging.basicConfig(
@@ -33,65 +33,87 @@ q = Queue('default', connection=redis_conn)
 
 # Initialize database using Config
 db = Database(Config.DATABASE_URL)
-# Run migrations only in the main process, skip if we are an RQ worker fork (check sys.argv)
-if 'rq' not in sys.argv[0] and 'worker' not in sys.argv:
-    db.run_migrations()
 
 optimizer = ContentOptimizer(db)
 trending = TrendingResearch()
 
-# Cache settings
-_config_cache = {}
-_stats_cache = {'data': None, 'timestamp': 0}
+# Cache settings. Both caches are LRU-bounded so they cannot grow without limit
+# as the number of users increases (each gunicorn worker holds its own copy).
+CACHE_TTL_SECONDS = 5
+CACHE_MAX_ENTRIES = 512
+
+_config_cache = OrderedDict()
+_stats_cache = OrderedDict()
+
+
+def _cache_get(cache, key):
+    """Return the cached value for key if it is still fresh, else None."""
+    entry = cache.get(key)
+    if entry and time() - entry['timestamp'] < CACHE_TTL_SECONDS:
+        cache.move_to_end(key)
+        return entry['data']
+    return None
+
+
+def _cache_put(cache, key, value):
+    cache[key] = {'data': value, 'timestamp': time()}
+    cache.move_to_end(key)
+    while len(cache) > CACHE_MAX_ENTRIES:
+        cache.popitem(last=False)
+
+
+def _get_admin_user_id():
+    """Return the id of the admin account, or None if there is no admin."""
+    try:
+        from models import User
+        with db.get_session() as session:
+            admin = session.query(User).filter_by(role='admin').order_by(User.id).first()
+            return admin.id if admin else None
+    except Exception as e:
+        logger.error(f"Error querying admin user: {e}")
+        return None
+
 
 def load_config(user_id=None):
     """Load configuration for the specific user.
-    Falls back to admin if user_id is not provided.
+    Falls back to the admin account if user_id is not provided.
     """
-    now = time()
-
     target_id = user_id
     if target_id is None:
-        try:
-            from models import User
-            with db.get_session() as session:
-                admin = session.query(User).filter_by(role='admin').first()
-                if admin:
-                    target_id = admin.id
-        except Exception as e:
-            logger.error(f"Error querying admin for config: {e}")
-            
-    if target_id is None:
-        target_id = 1
+        target_id = _get_admin_user_id()
 
-    cached = _config_cache.get(target_id)
-    if cached and now - cached['timestamp'] < 5:
-        return cached['data']
+    if target_id is None:
+        logger.error("load_config: no user_id given and no admin account exists.")
+        return {'gemini_api_key': '', 'gemini_model': DEFAULT_GEMINI_MODEL,
+                'gemini_image_model': DEFAULT_GEMINI_IMAGE_MODEL}
+
+    cached = _cache_get(_config_cache, target_id)
+    if cached is not None:
+        return cached
 
     config = db.get_config(target_id)
-    
-    # Fallback to admin's API key if user has none
-    if not config.get('gemini_api_key') and target_id != 1:
-        admin_config = db.get_config(1)
-        if admin_config and admin_config.get('gemini_api_key'):
-            config['gemini_api_key'] = admin_config['gemini_api_key']
 
-    _config_cache[target_id] = {'data': config, 'timestamp': now}
+    # Fall back to the admin's API key if this user has none of their own.
+    if not config.get('gemini_api_key'):
+        admin_id = _get_admin_user_id()
+        if admin_id is not None and admin_id != target_id:
+            admin_config = db.get_config(admin_id)
+            if admin_config and admin_config.get('gemini_api_key'):
+                config['gemini_api_key'] = admin_config['gemini_api_key']
+
+    _cache_put(_config_cache, target_id, config)
     return config
 
+
 def get_cached_stats(user_id, site_id=None):
-    now = time()
     cache_key = f"{user_id}_{site_id}" if site_id else str(user_id)
-    
-    if cache_key not in _stats_cache:
-        _stats_cache[cache_key] = {'data': None, 'timestamp': 0}
-        
-    if now - _stats_cache[cache_key]['timestamp'] < 5:  # 5 second cache
-        return _stats_cache[cache_key]['data']
-    
+
+    cached = _cache_get(_stats_cache, cache_key)
+    if cached is not None:
+        return cached
+
     stats = db.get_stats(user_id, site_id=site_id)
-    _stats_cache[cache_key]['data'] = stats
-    _stats_cache[cache_key]['timestamp'] = now
+    _cache_put(_stats_cache, cache_key, stats)
     return stats
 
 def save_config(user_id, config_data):
@@ -113,8 +135,7 @@ def require_jwt(f):
         logger.debug(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
         if not token:
             return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
-            return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
-            
+
         try:
             payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
             user_id = payload.get('user_id')
@@ -139,18 +160,6 @@ def require_admin(f):
             if not user or user.role != 'admin':
                 return jsonify({'success': False, 'error': 'Admin privilege required'}), 403
         return f(user_id, *args, **kwargs)
-    return decorated_function
-
-# PIN Protection decorator
-def require_pin(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('authenticated'):
-            # Check if it's an AJAX/API request
-            if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'success': False, 'error': 'Not authenticated', 'redirect': '/login'}), 401
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
     return decorated_function
 
 # Social media posting helpers

@@ -14,11 +14,10 @@ def patched_init(self, *args, **kwargs):
 urllib3.util.retry.Retry.__init__ = patched_init
 
 import requests
-from bs4 import BeautifulSoup
 import json
 import time
-from urllib.parse import quote_plus
 import logging
+from datetime import datetime, timezone
 
 try:
     from pytrends.request import TrendReq
@@ -61,12 +60,33 @@ class SEOResearch:
                     self.ddgs = None
         else:
             self.ddgs = None
+        self.source_status = {}
+
+    def _mark_source(self, provider, status, **details):
+        self.source_status[provider] = {
+            'status': status,
+            'checked_at': datetime.now(timezone.utc).isoformat(),
+            **details,
+        }
+
+    @staticmethod
+    def _deduplicate(values, key=None):
+        seen = set()
+        output = []
+        for value in values or []:
+            raw = key(value) if key else value
+            normalized = ' '.join(str(raw or '').lower().split())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            output.append(value)
+        return output
     
     def get_keyword_suggestions(self, keyword, limit=10, language='id'):
         """Get keyword suggestions from Google Autocomplete"""
         suggestions = []
         try:
-            url = f"http://suggestqueries.google.com/complete/search"
+            url = "https://suggestqueries.google.com/complete/search"
             hl = 'en' if language == 'en' else 'id'
             params = {'client': 'firefox', 'q': keyword, 'hl': hl}
             response = requests.get(url, params=params, headers=self.headers, timeout=10)
@@ -74,6 +94,7 @@ class SEOResearch:
                 data = response.json()
                 if len(data) > 1:
                     suggestions = data[1][:limit]
+                    self._mark_source('google_autocomplete', 'real', count=len(suggestions))
         except Exception as e:
             logger.error(f"Error getting keyword suggestions: {e}")
             
@@ -89,6 +110,7 @@ class SEOResearch:
                     f"tips {keyword}", f"panduan {keyword}", f"belajar {keyword}",
                     f"cara memulai {keyword}", f"{keyword} untuk pemula"
                 ]
+            self._mark_source('google_autocomplete', 'fallback', count=len(suggestions))
         return suggestions[:limit]
 
     def get_related_questions(self, keyword, limit=10, language='id'):
@@ -100,7 +122,7 @@ class SEOResearch:
             modifiers = ["bagaimana cara", "apa itu", "kenapa", "apakah"]
             
         try:
-            url = "http://suggestqueries.google.com/complete/search"
+            url = "https://suggestqueries.google.com/complete/search"
             hl = 'en' if language == 'en' else 'id'
             for mod in modifiers:
                 query = f"{mod} * {keyword}"
@@ -121,6 +143,7 @@ class SEOResearch:
                     unique_questions.append(q)
                     
             if unique_questions:
+                self._mark_source('related_questions', 'real', count=len(unique_questions[:limit]))
                 return unique_questions[:limit]
         except Exception as e:
             logger.error(f"Error getting dynamic related questions: {e}")
@@ -138,6 +161,7 @@ class SEOResearch:
                 f"Bagaimana cara {keyword}?",
                 f"Apa manfaat {keyword}?"
             ]
+        self._mark_source('related_questions', 'fallback', count=len(patterns[:limit]))
         return patterns[:limit]
 
     def get_wikipedia_context(self, keyword, language='id'):
@@ -160,9 +184,11 @@ class SEOResearch:
                 pages = data.get('query', {}).get('pages', {})
                 for page_id, page_data in pages.items():
                     if page_id != "-1" and 'extract' in page_data:
+                        self._mark_source('wikipedia', 'real', count=1)
                         return page_data['extract']
         except Exception as e:
             logger.error(f"Error getting Wikipedia context: {e}")
+        self._mark_source('wikipedia', 'unavailable', count=0)
         return ""
 
     def get_latest_news(self, keyword, limit=3):
@@ -172,16 +198,23 @@ class SEOResearch:
             try:
                 results = self.ddgs.news(keyword, max_results=limit)
                 for res in results:
-                    news_headlines.append(f"{res.get('title', '')} - {res.get('source', '')}")
+                    news_headlines.append({
+                        'title': res.get('title', ''),
+                        'source': res.get('source', ''),
+                        'url': res.get('url') or res.get('href', ''),
+                        'published_at': res.get('date'),
+                    })
             except Exception as e:
                 logger.error(f"Error getting DDG News: {e}")
+        self._mark_source('news', 'real' if news_headlines else 'unavailable', count=len(news_headlines))
         return news_headlines
 
-    def get_trend_score(self, keyword, language='id'):
-        """Get interest score from Google Trends using pytrends"""
-        score = 50  # Default fallback score
+    def get_trend_analysis(self, keyword, language='id'):
+        """Return an auditable score based on level, momentum, and stability."""
         if not TrendReq:
-            return score
+            self._mark_source('google_trends', 'unavailable', reason='pytrends_not_installed')
+            return {'score': None, 'current': None, 'average': None, 'growth': None,
+                    'volatility': None, 'status': 'unavailable'}
             
         try:
             hl = 'en-US' if language == 'en' else 'id-ID'
@@ -191,17 +224,44 @@ class SEOResearch:
             pytrends.build_payload([keyword], cat=0, timeframe='now 7-d', geo=geo)
             data = pytrends.interest_over_time()
             if not data.empty and keyword in data.columns:
-                score = int(data[keyword].iloc[-1])
+                values = [float(v) for v in data[keyword].tolist()]
+                recent = values[-min(24, len(values)):]
+                current = sum(recent[-min(4, len(recent)):]) / min(4, len(recent))
+                average = sum(recent) / len(recent)
+                midpoint = max(1, len(recent) // 2)
+                previous = sum(recent[:midpoint]) / midpoint
+                latest = sum(recent[midpoint:]) / max(1, len(recent) - midpoint)
+                growth = ((latest - previous) / max(previous, 1.0)) * 100
+                variance = sum((v - average) ** 2 for v in recent) / len(recent)
+                volatility = variance ** 0.5
+                momentum = max(0.0, min(100.0, 50.0 + growth))
+                stability = max(0.0, 100.0 - volatility)
+                score = round((current * .45) + (average * .25) +
+                              (momentum * .20) + (stability * .10))
+                self._mark_source('google_trends', 'real', samples=len(recent))
+                return {
+                    'score': max(0, min(100, score)),
+                    'current': round(current, 1),
+                    'average': round(average, 1),
+                    'growth': round(growth, 1),
+                    'volatility': round(volatility, 1),
+                    'status': 'real',
+                }
         except Exception as e:
             logger.error(f"Pytrends error for {keyword}: {e}")
-            score = 50  # Fallback to average score when real data is unavailable
-            
-        return score
+            self._mark_source('google_trends', 'unavailable', reason=type(e).__name__)
+        return {'score': None, 'current': None, 'average': None, 'growth': None,
+                'volatility': None, 'status': 'unavailable'}
+
+    def get_trend_score(self, keyword, language='id'):
+        """Backward-compatible score accessor; zero means unavailable, never fake average."""
+        return self.get_trend_analysis(keyword, language).get('score') or 0
 
     def analyze_competitors(self, keyword, language='id'):
         """Scrape top 3 competitors via DuckDuckGo and extract their headers"""
         competitors = []
         if not self.ddgs:
+            self._mark_source('competitors', 'unavailable', count=0)
             return []
 
         try:
@@ -233,21 +293,26 @@ class SEOResearch:
                         competitors.append({
                             'url': url,
                             'title': title,
-                            'headers': headers if headers else [title]
+                            'headers': headers if headers else [title],
+                            'retrieved_via': 'duckduckgo+jina',
                         })
                 except Exception as ex:
                     logger.warning(f"Failed to scrape competitor {url} via Jina: {ex}")
                     continue
         except Exception as e:
             logger.error(f"DDGS competitor search error: {e}")
+            self._mark_source('competitors', 'unavailable', count=0, reason=type(e).__name__)
             return []
 
+        competitors = self._deduplicate(competitors, key=lambda item: item.get('url'))
+        self._mark_source('competitors', 'real' if competitors else 'unavailable', count=len(competitors))
         return competitors
 
     def get_social_insights(self, keyword, language='id'):
         """Search Quora & Reddit for real human questions"""
         insights = []
         if not self.ddgs:
+            self._mark_source('social', 'unavailable', count=0)
             return []
 
         try:
@@ -258,34 +323,28 @@ class SEOResearch:
                 title = res.get('title', '')
                 if language == 'en':
                     if '?' in title or 'how' in title.lower() or 'what' in title.lower() or 'why' in title.lower():
-                        insights.append(title)
+                        insights.append({'text': title, 'url': res.get('href', ''), 'provider': 'quora_or_reddit'})
                 else:
                     if '?' in title or 'bagaimana' in title.lower() or 'apa' in title.lower():
-                        insights.append(title)
+                        insights.append({'text': title, 'url': res.get('href', ''), 'provider': 'quora_or_reddit'})
         except Exception as e:
             logger.error(f"DDGS social insights error: {e}")
-            return self._get_fallback_social(keyword, language)
+            self._mark_source('social', 'unavailable', count=0, reason=type(e).__name__)
+            return []
             
-        return list(set(insights))[:5] if insights else self._get_fallback_social(keyword, language)
+        insights = self._deduplicate(insights, key=lambda item: item.get('text'))[:5]
+        self._mark_source('social', 'real' if insights else 'unavailable', count=len(insights))
+        return insights
 
     def _get_fallback_social(self, keyword, language='id'):
-        """Fallback when social search fails"""
-        if language == 'en':
-            return [
-                f"What is the best way to use {keyword}?",
-                f"Why is {keyword} so popular recently?",
-                f"Can anyone explain {keyword} in simple terms?"
-            ]
-        return [
-            f"Apa pendapat kalian tentang {keyword}?",
-            f"Bagaimana cara terbaik memulai {keyword}?",
-            f"Apakah {keyword} masih relevan saat ini?"
-        ]
+        """Kept for compatibility; fabricated social evidence is intentionally disabled."""
+        return []
 
     def get_youtube_insights(self, keyword, language='id'):
         """Find top YouTube video and get transcript summary"""
         insights = []
         if not self.ddgs or not YouTubeTranscriptApi:
+            self._mark_source('youtube', 'unavailable', count=0)
             return []
 
         try:
@@ -307,25 +366,101 @@ class SEOResearch:
                         insights.append({
                             'video_id': video_id,
                             'title': res.get('title'),
-                            'snippets': " ".join(text_snippets[:5]) + "..."
+                            'url': url,
+                            'snippets': " ".join(text_snippets[:5]) + "...",
+                            'transcript_available': True,
                         })
                     except Exception as ex:
                         logger.warning(f"No transcript for video {video_id}: {ex}")
-                        snippets_text = f"Video tutorial about {keyword}. Please watch the video for a complete visual explanation..." if language == 'en' else f"Video tutorial seputar {keyword}. Silakan tonton video untuk penjelasan visual secara lengkap..."
                         insights.append({
                             'video_id': video_id,
                             'title': res.get('title'),
-                            'snippets': snippets_text
+                            'url': url,
+                            'snippets': '',
+                            'transcript_available': False,
                         })
         except Exception as e:
             logger.error(f"Youtube insights error: {e}")
+            self._mark_source('youtube', 'unavailable', count=0, reason=type(e).__name__)
             return []
 
+        insights = self._deduplicate(insights, key=lambda item: item.get('video_id'))
+        transcript_count = sum(1 for item in insights if item.get('transcript_available'))
+        self._mark_source('youtube', 'real' if transcript_count else 'partial',
+                          count=len(insights), transcripts=transcript_count)
         return insights
+
+    @staticmethod
+    def build_long_tail_keywords(category_name, suggestions, questions, limit=15):
+        candidates = list(suggestions or []) + list(questions or [])
+        long_tail = []
+        seen = set()
+        for candidate in candidates:
+            text = ' '.join(str(candidate).split()).strip()
+            normalized = text.lower()
+            if len(text.split()) < 4 or normalized in seen:
+                continue
+            seen.add(normalized)
+            long_tail.append(text)
+            if len(long_tail) >= limit:
+                break
+        return long_tail
+
+    @staticmethod
+    def evaluate_quality(source_status, competitor_count=0, transcript_count=0,
+                         suggestion_count=0, question_count=0):
+        """Score evidence quality, not popularity. Returns 0..100 and a label."""
+        weights = {
+            'google_trends': 25,
+            'google_autocomplete': 15,
+            'related_questions': 10,
+            'competitors': 20,
+            'social': 10,
+            'youtube': 10,
+            'news': 5,
+            'wikipedia': 5,
+        }
+        score = 0.0
+        real_providers = 0
+        fallback_providers = []
+        for provider, weight in weights.items():
+            status = (source_status.get(provider) or {}).get('status', 'unavailable')
+            if status == 'real':
+                score += weight
+                real_providers += 1
+            elif status == 'partial':
+                score += weight * .5
+            elif status == 'fallback':
+                score += weight * .15
+                fallback_providers.append(provider)
+
+        # Reward useful depth but cap each bonus so quantity cannot mask bad sources.
+        score += min(5, competitor_count * 2)
+        score += min(3, transcript_count * 1.5)
+        score += min(4, suggestion_count * .4)
+        score += min(3, question_count * .3)
+        score = max(0, min(100, round(score)))
+
+        if score >= 75 and real_providers >= 5:
+            confidence = 'high'
+        elif score >= 50 and real_providers >= 3:
+            confidence = 'medium'
+        elif score >= 35 and real_providers >= 2:
+            confidence = 'low'
+        else:
+            confidence = 'insufficient'
+        return {
+            'score': score,
+            'confidence': confidence,
+            'real_provider_count': real_providers,
+            'fallback_providers': fallback_providers,
+            'passes_minimum': confidence != 'insufficient',
+        }
 
     def research_category(self, category_name, language='id'):
         """Deep Research a category including competitors, social, and youtube"""
         logger.info(f"Advanced Researching category: {category_name} with language={language}")
+        self.source_status = {}
         
         try:
             from rq import get_current_job
@@ -345,7 +480,8 @@ class SEOResearch:
         
         update_progress(35, f'Analyzing Google Trends for {category_name}...')
         # 2. Trend Score
-        trend_score = self.get_trend_score(category_name, language=language)
+        trend_analysis = self.get_trend_analysis(category_name, language=language)
+        trend_score = trend_analysis.get('score') or 0
         
         update_progress(50, f'Scraping top competitors for {category_name}...')
         # 3. Competitor Analysis
@@ -367,18 +503,31 @@ class SEOResearch:
         # 7. Wikipedia & News
         semantic_context = self.get_wikipedia_context(category_name, language=language)
         news_insights = self.get_latest_news(category_name, limit=3)
+        long_tail_keywords = self.build_long_tail_keywords(category_name, suggestions, questions)
+        transcript_count = sum(1 for item in youtube_insights if item.get('transcript_available'))
+        quality = self.evaluate_quality(
+            self.source_status,
+            competitor_count=len(competitor_outlines),
+            transcript_count=transcript_count,
+            suggestion_count=len(suggestions),
+            question_count=len(questions),
+        )
         
         result = {
             'category': category_name,
             'suggestions': suggestions,
             'trend_score': trend_score,
+            'trend_analysis': trend_analysis,
             'competitor_outlines': competitor_outlines,
             'social_insights': social_insights,
             'youtube_insights': youtube_insights,
             'questions': questions,
+            'long_tail_keywords': long_tail_keywords,
             'semantic_context': semantic_context,
             'news_insights': news_insights,
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            'source_metadata': self.source_status,
+            'quality': quality,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
         }
         
         logger.info(f"Category research complete: Trend={trend_score}, Competitors={len(competitor_outlines)}")

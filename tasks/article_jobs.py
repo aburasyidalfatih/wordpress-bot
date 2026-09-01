@@ -1,12 +1,15 @@
-import os, json, time, random
-from datetime import datetime
+from datetime import datetime, timedelta
+
+import requests
+
 from services.article_generator import ArticleGenerator
 from services.wp_publisher import WordPressPublisher
 from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
-from ml_optimizer import ContentOptimizer
-from trending_research import TrendingResearch
-from core_extensions import db, q, redis_conn, optimizer, trending, logger, load_config, save_config, send_telegram_notification, post_to_telegram_channel, post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
-from config import Config
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from core_extensions import (
+    db, logger, load_config, send_telegram_notification, post_to_telegram_channel,
+    post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
+)
 
 def _set_queue_item_status(item_id, user_id, status, post_url=None):
     if not item_id:
@@ -17,6 +20,8 @@ def _set_queue_item_status(item_id, user_id, status, post_url=None):
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if item:
             item.status = status
+            if status != 'posting':
+                item.posting_started_at = None
             if post_url:
                 item.post_url = post_url
 
@@ -29,8 +34,8 @@ def regenerate_image_job(user_id, log_id):
         config = load_config(user_id)
         generator = ArticleGenerator(
             config['gemini_api_key'], 
-            config.get('gemini_model', 'gemini-2.5-pro'),
-            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
         
         with db.get_session() as session:
@@ -135,8 +140,8 @@ def regenerate_article_job(user_id, log_id):
         config = load_config(user_id)
         generator = ArticleGenerator(
             config['gemini_api_key'], 
-            config.get('gemini_model', 'gemini-2.5-pro'),
-            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
         
         with db.get_session() as session:
@@ -321,8 +326,8 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         logger.info(f"Starting generate and post job for site {site_id}")
         generator = ArticleGenerator(
             config['gemini_api_key'], 
-            config.get('gemini_model', 'gemini-2.5-pro'),
-            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
         publisher = WordPressPublisher(
             site_config['wordpress_url'],
@@ -352,7 +357,8 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 if queue_item:
                     # Update status to posting
                     queue_item.status = 'posting'
-                    
+                    queue_item.posting_started_at = datetime.now()
+
                     custom_topic = queue_item.title
                     category_name = queue_item.category
                     
@@ -408,8 +414,11 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
             try:
                 with db.get_session() as session:
                     research = session.query(ResearchData).filter(
+                        ResearchData.user_id == user_id,
                         ResearchData.site_id == site_id,
-                        ResearchData.category == category['name']
+                        ResearchData.category == category['name'],
+                        ResearchData.confidence_level.in_(['high', 'medium', 'low']),
+                        ResearchData.researched_at >= datetime.now() - timedelta(days=7),
                     ).order_by(ResearchData.created_at.desc()).first()
                     
                     if research:
@@ -420,8 +429,8 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                             'competitor_outlines': research.competitor_outlines if hasattr(research, 'competitor_outlines') else [],
                             'social_insights': research.social_insights if hasattr(research, 'social_insights') else [],
                             'youtube_insights': research.youtube_insights if hasattr(research, 'youtube_insights') else [],
-                            'semantic_context': '',
-                            'news_insights': []
+                            'semantic_context': research.semantic_context or '',
+                            'news_insights': research.news_insights or []
                         }
                         logger.info(f"Using SEO data: {len(seo_data.get('keywords', []))} keywords, {len(seo_data.get('questions', []))} questions, {len(seo_data.get('competitor_outlines', []))} competitors, {len(seo_data.get('social_insights', []))} social, {len(seo_data.get('youtube_insights', []))} youtube")
             except Exception as e:

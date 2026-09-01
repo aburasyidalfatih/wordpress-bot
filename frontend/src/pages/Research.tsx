@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search, Sparkles, Trash2 } from 'lucide-react';
+import { RefreshCw, TrendingUp, Video, MessageCircle, FileText, BarChart, Search, Sparkles, Trash2, ShieldCheck, AlertTriangle, ExternalLink, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useSiteContext } from '@/contexts/SiteContext';
 import EmptyState from '@/components/EmptyState';
@@ -44,7 +44,16 @@ export interface ResearchStats {
   created_at: string;
   trend_score: number;
   keywords: string[];
-  social_insights: string[];
+  quality_score: number;
+  confidence_level: 'high' | 'medium' | 'low' | 'insufficient' | 'unknown';
+  is_fallback: boolean;
+  is_stale: boolean;
+  age_hours: number | null;
+  long_tail_keywords: string[];
+  semantic_context: string;
+  news_insights: { title: string; source?: string; url?: string; published_at?: string }[];
+  source_metadata: Record<string, { status?: string; count?: number; checked_at?: string; reason?: string }>;
+  social_insights: ({ text: string; url?: string; provider?: string } | string)[];
   competitor_outlines: {
     title: string;
     url: string;
@@ -53,8 +62,23 @@ export interface ResearchStats {
   youtube_insights: {
     title: string;
     snippets: string;
+    url?: string;
+    transcript_available?: boolean;
   }[];
 }
+
+const confidenceLabel: Record<string, string> = {
+  high: 'Tinggi', medium: 'Sedang', low: 'Rendah',
+  insufficient: 'Tidak mencukupi', unknown: 'Data lama',
+};
+
+const confidenceClass: Record<string, string> = {
+  high: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  medium: 'bg-blue-100 text-blue-700 border-blue-200',
+  low: 'bg-amber-100 text-amber-700 border-amber-200',
+  insufficient: 'bg-red-100 text-red-700 border-red-200',
+  unknown: 'bg-muted text-muted-foreground border-border',
+};
 
 export default function Research() {
   const { selectedSiteId } = useSiteContext();
@@ -381,14 +405,18 @@ export default function Research() {
                   <div className="flex justify-between items-start">
                     <div>
                       <CardTitle className="text-2xl capitalize mb-2 group-hover:text-primary transition-colors">{cat}</CardTitle>
-                      <CardDescription className="flex items-center gap-2">
+                      <CardDescription className="flex flex-wrap items-center gap-2">
                         <TrendingUp className="h-4 w-4 text-green-500" />
-                        Trend Score: <span className="font-bold text-foreground">{trendScore}/100</span>
+                        Trend Score: <span className="font-bold text-foreground">{trendScore > 0 ? `${trendScore}/100` : 'Tidak tersedia'}</span>
+                        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${confidenceClass[stats.confidence_level] || confidenceClass.unknown}`}>
+                          <ShieldCheck className="h-3 w-3" />
+                          Confidence {confidenceLabel[stats.confidence_level] || 'Data lama'} · {stats.quality_score || 0}/100
+                        </span>
                       </CardDescription>
                     </div>
                     <div className="flex flex-col items-end gap-2">
                       <span className="text-xs text-muted-foreground bg-background/80 backdrop-blur-sm px-2.5 py-1 rounded-full border shadow-sm">
-                        {stats.created_at}
+                        <Clock className="mr-1 inline h-3 w-3" />{stats.created_at}
                       </span>
                       <div className="flex gap-2">
                         <Button 
@@ -416,8 +444,20 @@ export default function Research() {
                       </div>
                     </div>
                   </div>
+                  {(stats.is_stale || stats.is_fallback || stats.confidence_level === 'unknown') && (
+                    <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>
+                        {stats.is_stale
+                          ? 'Data ini berusia lebih dari 7 hari. Riset ulang sebelum membuat keputusan konten.'
+                          : stats.confidence_level === 'unknown'
+                            ? 'Data ini dibuat sebelum sistem quality scoring tersedia. Riset ulang untuk hasil terverifikasi.'
+                            : 'Sebagian data memakai fallback dan tidak dianggap sebagai bukti sumber nyata.'}
+                      </span>
+                    </div>
+                  )}
                   <div className="w-full bg-secondary rounded-full h-2 mt-4 overflow-hidden">
-                    <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${Math.min(100, Math.max(0, trendScore))}%` }} />
+                    <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${Math.min(100, Math.max(0, stats.quality_score || 0))}%` }} />
                   </div>
                 </CardHeader>
                 
@@ -451,11 +491,16 @@ export default function Research() {
                       </div>
                       <ul className="space-y-3">
                         {stats.social_insights && stats.social_insights.length > 0 ? (
-                          stats.social_insights.map((q: string, i: number) => (
+                          stats.social_insights.map((item, i: number) => {
+                            const text = typeof item === 'string' ? item : item.text;
+                            const url = typeof item === 'string' ? undefined : item.url;
+                            return (
                             <li key={i} className="text-sm text-muted-foreground leading-snug flex gap-2">
-                              <span className="text-orange-500 font-bold">•</span> {q}
+                              <span className="text-orange-500 font-bold">•</span>
+                              {url ? <a href={url} target="_blank" rel="noreferrer" className="hover:underline">{text}</a> : text}
                             </li>
-                          ))
+                            );
+                          })
                         ) : (
                           <li className="text-sm text-muted-foreground italic">No recent social discussions</li>
                         )}
@@ -473,7 +518,7 @@ export default function Research() {
                       </div>
                       <div className="space-y-4">
                         {stats.competitor_outlines && stats.competitor_outlines.length > 0 ? (
-                          stats.competitor_outlines.map((comp: any, i: number) => (
+                          stats.competitor_outlines.map((comp, i: number) => (
                             <div key={i} className="space-y-1">
                               <a href={comp.url} target="_blank" rel="noreferrer" className="text-sm font-medium hover:underline text-foreground line-clamp-1">
                                 {comp.title}
@@ -501,12 +546,16 @@ export default function Research() {
                       </div>
                       <div className="space-y-3">
                         {stats.youtube_insights && stats.youtube_insights.length > 0 ? (
-                          stats.youtube_insights.map((yt: any, i: number) => (
+                          stats.youtube_insights.map((yt, i: number) => (
                             <div key={i} className="text-sm">
-                              <p className="font-medium line-clamp-1 mb-1">{yt.title}</p>
-                              <p className="text-xs text-muted-foreground line-clamp-3 bg-white/50 p-2 rounded border border-red-100">
-                                "{yt.snippets}"
-                              </p>
+                              {yt.url ? (
+                                <a href={yt.url} target="_blank" rel="noreferrer" className="font-medium line-clamp-1 mb-1 hover:underline">{yt.title}</a>
+                              ) : <p className="font-medium line-clamp-1 mb-1">{yt.title}</p>}
+                              {yt.transcript_available && yt.snippets ? (
+                                <p className="text-xs text-muted-foreground line-clamp-3 bg-white/50 p-2 rounded border border-red-100">“{yt.snippets}”</p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground italic">Video ditemukan, tetapi transkrip tidak tersedia dan tidak dibuat-buat.</p>
+                              )}
                             </div>
                           ))
                         ) : (
@@ -514,6 +563,57 @@ export default function Research() {
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  <div className="border-t p-6 space-y-5 bg-muted/10">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                      Transparansi Sumber
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(stats.source_metadata || {})
+                        .filter(([, meta]) => meta && typeof meta === 'object' && 'status' in meta)
+                        .map(([provider, meta]) => (
+                          <span key={provider} className={`rounded-full border px-2.5 py-1 text-xs ${
+                            meta.status === 'real' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' :
+                            meta.status === 'partial' ? 'border-blue-200 bg-blue-50 text-blue-700' :
+                            meta.status === 'fallback' ? 'border-amber-200 bg-amber-50 text-amber-700' :
+                            'border-border bg-background text-muted-foreground'
+                          }`}>
+                            {provider.replaceAll('_', ' ')}: {meta.status || 'unknown'}
+                            {typeof meta.count === 'number' ? ` (${meta.count})` : ''}
+                          </span>
+                        ))}
+                    </div>
+
+                    {stats.long_tail_keywords?.length > 0 && (
+                      <div>
+                        <p className="mb-2 text-sm font-semibold">Long-tail opportunities</p>
+                        <div className="flex flex-wrap gap-2">
+                          {stats.long_tail_keywords.slice(0, 10).map((keyword, index) => (
+                            <span key={index} className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">{keyword}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {stats.news_insights?.length > 0 && (
+                      <div>
+                        <p className="mb-2 text-sm font-semibold">Berita pendukung terbaru</p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {stats.news_insights.map((news, index) => (
+                            <div key={index} className="rounded-md border bg-background p-3 text-sm">
+                              {news.url ? (
+                                <a href={news.url} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+                                  {news.title} <ExternalLink className="inline h-3 w-3" />
+                                </a>
+                              ) : <p className="font-medium">{news.title}</p>}
+                              {news.source && <p className="mt-1 text-xs text-muted-foreground">{news.source}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                 </CardContent>

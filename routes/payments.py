@@ -2,7 +2,6 @@ import os
 import uuid
 import hmac
 import hashlib
-import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename

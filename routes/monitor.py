@@ -3,7 +3,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, send_file
 import psutil
 
-from core_extensions import db, logger, get_cached_stats, require_jwt, require_admin, load_config
+from core_extensions import db, logger, get_cached_stats, require_admin
 from config import Config
 
 monitor_bp = Blueprint('monitor', __name__)

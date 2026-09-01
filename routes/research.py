@@ -1,7 +1,9 @@
 import json
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 
 from core_extensions import db, q, trending, logger, load_config, require_jwt
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 research_bp = Blueprint('research', __name__)
 
@@ -31,8 +33,23 @@ def api_research(user_id):
                 ResearchData.site_id == site_id,
                 ResearchData.category == category['name']
             ).order_by(ResearchData.created_at.desc()).first()
+
+            if not latest:
+                return jsonify({'success': False, 'error': 'Jalankan riset berkualitas terlebih dahulu.'}), 400
+            confidence = latest.confidence_level or 'unknown'
+            research_time = latest.researched_at or latest.created_at
+            age_days = (datetime.now() - research_time).days if research_time else 999
+            if confidence not in {'high', 'medium', 'low'} or age_days > 7:
+                reason = 'bukti riset belum terverifikasi' if confidence not in {'high', 'medium', 'low'} else 'data riset sudah lebih dari 7 hari'
+                return jsonify({
+                    'success': False,
+                    'error': f'Tidak aman membuat judul dari data ini: {reason}. Silakan riset ulang.'
+                }), 400
             
             if latest:
+                researched_at = latest.researched_at or latest.created_at
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                age_hours = max(0, int((now - researched_at).total_seconds() / 3600)) if researched_at else None
                 research_data[category['name']] = {
                     'trending_count': len(latest.trending_topics) if latest.trending_topics else 0,
                     'rising_count': len(latest.rising_topics) if latest.rising_topics else 0,
@@ -47,7 +64,16 @@ def api_research(user_id):
                     'social_insights': latest.social_insights if hasattr(latest, 'social_insights') and latest.social_insights else [],
                     'competitor_outlines': latest.competitor_outlines if hasattr(latest, 'competitor_outlines') and latest.competitor_outlines else [],
                     'youtube_insights': latest.youtube_insights if hasattr(latest, 'youtube_insights') and latest.youtube_insights else [],
-                    'created_at': latest.created_at.strftime('%d %b %Y, %H:%M')
+                    'long_tail_keywords': latest.long_tail_keywords or [],
+                    'news_insights': latest.news_insights or [],
+                    'semantic_context': latest.semantic_context or '',
+                    'source_metadata': latest.source_metadata or {},
+                    'quality_score': latest.quality_score or 0,
+                    'confidence_level': latest.confidence_level or 'unknown',
+                    'is_fallback': bool(latest.is_fallback),
+                    'age_hours': age_hours,
+                    'is_stale': age_hours is not None and age_hours > 168,
+                    'created_at': researched_at.strftime('%d %b %Y, %H:%M') if researched_at else None,
                 }
     
     return jsonify({'success': True, 'categories': selected_categories, 'research_data': research_data})
@@ -227,9 +253,10 @@ def generate_titles(user_id, category):
         from services.article_generator import ArticleGenerator
         generator = ArticleGenerator(
             config['gemini_api_key'], 
-            config.get('gemini_model', 'gemini-2.5-pro'),
-            config.get('gemini_image_model', 'gemini-3.1-flash-image')
+            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
+        current_year = datetime.now().year
         
         if language == 'en':
             prompt = f"""Create {count} highly engaging, natural (like written by a professional journalist or blogger), click-worthy (High CTR), and SEO-optimized blog article titles for the category "{category}" on the website {site_name}. All titles MUST BE IN ENGLISH.
@@ -242,7 +269,7 @@ TITLE WRITING GUIDELINES (CRITICAL):
 
 Additional Context:
 - Category Description: {category_desc if category_desc else 'Write about specific and hot topics in this field.'}
-- Current year: 2026 (use this year naturally if relevant).
+- Current year: {current_year} (use this year naturally if relevant).
 - Related keywords: {', '.join(keywords[:5]) if keywords else category}
 - Frequently asked questions: {', '.join(questions[:3]) if questions else ''}
 
@@ -259,7 +286,7 @@ PANDUAN GAYA PENULISAN JUDUL (SANGAT PENTING):
 
 Konteks Tambahan:
 - Deskripsi Kategori: {category_desc if category_desc else 'Tulis tentang topik-topik spesifik dan hangat di bidang ini.'}
-- Tahun saat ini: 2026 (gunakan tahun ini secara natural jika relevan). Jangan gunakan tahun 2024 atau 2025.
+- Tahun saat ini: {current_year} (gunakan tahun ini secara natural jika relevan). Jangan gunakan tahun lama kecuali dibutuhkan sebagai konteks historis.
 - Kata kunci terkait: {', '.join(keywords[:5]) if keywords else category}
 - Isu/pertanyaan yang sering dicari: {', '.join(questions[:3]) if questions else ''}
 
@@ -278,6 +305,12 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
                 text = text[4:].strip()
         
         titles = json.loads(text)
+        if not isinstance(titles, list):
+            raise ValueError('Respons AI bukan daftar judul')
+        titles = [str(title).strip() for title in titles if isinstance(title, str) and title.strip()]
+        titles = list(dict.fromkeys(titles))[:count]
+        if not titles:
+            raise ValueError('AI tidak menghasilkan judul valid')
         
         # Save to ContentQueue
         with db.get_session() as session:

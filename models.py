@@ -1,12 +1,8 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey, event, exc
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.pool import QueuePool
-from contextlib import contextmanager
 from datetime import datetime
-from cryptography.fernet import Fernet
-import os
 import logging
+from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
@@ -44,8 +40,8 @@ class Config(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     _gemini_api_key = Column('gemini_api_key', String(500))
-    gemini_model = Column(String(100), default='gemini-2.5-pro')
-    gemini_image_model = Column(String(100), default='imagen-4.0-generate-001')
+    gemini_model = Column(String(100), default=DEFAULT_GEMINI_MODEL)
+    gemini_image_model = Column(String(100), default=DEFAULT_GEMINI_IMAGE_MODEL)
     
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -257,6 +253,13 @@ class ResearchData(Base):
     youtube_insights = Column(JSON)
     social_insights = Column(JSON)
     trend_score = Column(Integer, default=0)
+    semantic_context = Column(Text)
+    news_insights = Column(JSON)
+    source_metadata = Column(JSON)
+    quality_score = Column(Integer, default=0)
+    confidence_level = Column(String(20), default='unknown')
+    is_fallback = Column(Boolean, default=False)
+    researched_at = Column(DateTime, default=datetime.now, index=True)
     used = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=datetime.now, index=True)
 
@@ -272,6 +275,9 @@ class ContentQueue(Base):
     status = Column(String(50), default='pending') # pending, posting, posted, failed
     post_url = Column(String(500))
     created_at = Column(DateTime, default=datetime.now)
+    # Set when the item transitions to 'posting' so the dispatcher can detect and
+    # recover items abandoned by a dead worker.
+    posting_started_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index('idx_content_queue_user_site_status', 'user_id', 'site_id', 'status'),
