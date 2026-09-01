@@ -4,6 +4,11 @@ from unittest.mock import patch
 import seo_research
 from seo_research import SEOResearch
 from trending_research import TrendingResearch
+from services.search_console import (
+    build_authorization_url,
+    build_search_opportunities,
+    find_matching_property,
+)
 
 
 class FakeSeries:
@@ -100,6 +105,37 @@ class TrendingResearchTests(unittest.TestCase):
             'AI Indonesia', 'Laptop terbaik', 'Teknologi hijau'
         ])
         self.assertEqual(result[0]['type'], 'rising')
+
+
+class SearchConsoleFoundationTests(unittest.TestCase):
+    def test_oauth_url_is_read_only_and_offline(self):
+        url = build_authorization_url('client-id', 'https://app.test/callback', 'signed-state')
+        self.assertIn('webmasters.readonly', url)
+        self.assertIn('access_type=offline', url)
+        self.assertIn('state=signed-state', url)
+
+    def test_domain_property_matching_is_preferred(self):
+        properties = [
+            {'site_url': 'https://example.com/', 'permission_level': 'siteOwner'},
+            {'site_url': 'sc-domain:example.com', 'permission_level': 'siteOwner'},
+        ]
+        match = find_matching_property(properties, 'https://www.example.com/blog')
+        self.assertEqual(match['site_url'], 'sc-domain:example.com')
+
+    def test_opportunities_use_actual_query_metrics(self):
+        current = [{
+            'query': 'cara bisnis online', 'page': 'https://example.com/bisnis',
+            'clicks': 10, 'impressions': 1000, 'ctr': .01, 'position': 8,
+        }]
+        previous = [{
+            'query': 'cara bisnis online', 'page': 'https://example.com/bisnis',
+            'clicks': 6, 'impressions': 700, 'ctr': .008, 'position': 11,
+        }]
+        result = build_search_opportunities(current, previous)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['type'], 'quick_win')
+        self.assertEqual(result[0]['position_change'], 3.0)
+        self.assertGreater(result[0]['opportunity_score'], 0)
 
 
 if __name__ == '__main__':

@@ -62,6 +62,16 @@ def get_sites(user_id):
                 'threads_access_token': '',
                 'has_threads_access_token': _secret_status(site.threads_access_token),
 
+                'gsc_connected': _secret_status(site.gsc_refresh_token),
+                'gsc_client_id': site.gsc_client_id or '',
+                'gsc_client_secret': '',
+                'has_gsc_client_secret': _secret_status(site.gsc_client_secret),
+                'gsc_property_url': site.gsc_property_url,
+                'gsc_permission_level': site.gsc_permission_level,
+                'gsc_connected_at': site.gsc_connected_at.isoformat() if site.gsc_connected_at else None,
+                'gsc_last_synced_at': site.gsc_last_synced_at.isoformat() if site.gsc_last_synced_at else None,
+                'gsc_last_error': site.gsc_last_error,
+
                 'article_prompt': site.article_prompt,
                 'image_prompt': site.image_prompt
             } for site in sites]
@@ -88,6 +98,10 @@ def create_site(user_id):
             language=data.get('language', 'id'),
             auto_post=data.get('auto_post', False)
         )
+        if data.get('gsc_client_id'):
+            site.gsc_client_id = data['gsc_client_id'].strip()
+        if _should_update_secret(data.get('gsc_client_secret')):
+            site.gsc_client_secret = data['gsc_client_secret']
         session.add(site)
         session.commit()
         return jsonify({'success': True, 'site_id': site.id, 'message': 'Site added successfully'})
@@ -119,6 +133,27 @@ def update_site(user_id, site_id):
         # Update categories
         if 'categories' in data: site.categories = data['categories']
         if 'selected_categories' in data: site.selected_categories = data['selected_categories']
+
+        # Per-website Search Console OAuth credentials. Blank secret means keep
+        # the encrypted value already stored.
+        gsc_credentials_changed = False
+        if 'gsc_client_id' in data:
+            new_client_id = (data['gsc_client_id'] or '').strip() or None
+            if new_client_id != site.gsc_client_id:
+                site.gsc_client_id = new_client_id
+                gsc_credentials_changed = True
+        if 'gsc_client_secret' in data and _should_update_secret(data['gsc_client_secret']):
+            if data['gsc_client_secret'] != site.gsc_client_secret:
+                site.gsc_client_secret = data['gsc_client_secret']
+                gsc_credentials_changed = True
+        if gsc_credentials_changed:
+            # Refresh tokens belong to one OAuth client and cannot safely be
+            # reused after its credentials change.
+            site.gsc_refresh_token = None
+            site.gsc_property_url = None
+            site.gsc_permission_level = None
+            site.gsc_connected_at = None
+            site.gsc_last_error = None
         
         # Prompts
         if 'article_prompt' in data: site.article_prompt = data['article_prompt'] or None

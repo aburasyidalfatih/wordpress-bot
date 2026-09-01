@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Bot, Plus, Trash2, Edit, RefreshCw, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bot, Plus, Trash2, Edit, RefreshCw, ChevronRight, SearchCheck, Link2, Unlink } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { toast } from 'sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
@@ -26,6 +26,21 @@ export default function Sites() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('wordpress');
   const [siteToDelete, setSiteToDelete] = useState<number | null>(null);
+  const [gscProperties, setGscProperties] = useState<{site_url: string; permission_level?: string}[]>([]);
+  const [gscBusy, setGscBusy] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('gsc');
+    if (!status) return;
+    if (status === 'connected') {
+      toast.success('Google Search Console berhasil terhubung.');
+      fetchSites();
+    } else {
+      toast.error(params.get('message') || 'Gagal menghubungkan Google Search Console.');
+    }
+    window.history.replaceState({}, '', window.location.pathname);
+  }, [fetchSites]);
 
   const handleEdit = (site: WordPressSite) => {
     setCurrentSite(site);
@@ -48,6 +63,8 @@ export default function Sites() {
       facebook_enabled: false,
       twitter_enabled: false,
       threads_enabled: false,
+      gsc_client_id: '',
+      gsc_client_secret: '',
     });
     setIsEditing(true);
     setActiveTab('wordpress');
@@ -156,6 +173,88 @@ export default function Sites() {
     }
   };
 
+  const handleConnectGsc = async () => {
+    if (!currentSite.id) return;
+    setGscBusy(true);
+    try {
+      const res = await apiFetch(`/api/search-console/sites/${currentSite.id}/authorize`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Gagal memulai OAuth Google.');
+      window.location.assign(data.authorization_url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal menghubungkan Search Console.');
+      setGscBusy(false);
+    }
+  };
+
+  const handleLoadGscProperties = async () => {
+    if (!currentSite.id) return;
+    setGscBusy(true);
+    try {
+      const res = await apiFetch(`/api/search-console/sites/${currentSite.id}/properties`);
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Gagal mengambil property.');
+      setGscProperties(data.properties || []);
+      toast.success(`${(data.properties || []).length} property ditemukan.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal mengambil property Search Console.');
+    } finally {
+      setGscBusy(false);
+    }
+  };
+
+  const handleSelectGscProperty = async (propertyUrl: string) => {
+    if (!currentSite.id) return;
+    setGscBusy(true);
+    try {
+      const res = await apiFetch(`/api/search-console/sites/${currentSite.id}/property`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ property_url: propertyUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Gagal menyimpan property.');
+      setCurrentSite(prev => ({ ...prev, gsc_property_url: propertyUrl }));
+      toast.success('Property Search Console tersimpan.');
+      await fetchSites();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal menyimpan property.');
+    } finally {
+      setGscBusy(false);
+    }
+  };
+
+  const handleSyncGsc = async () => {
+    if (!currentSite.id) return;
+    setGscBusy(true);
+    try {
+      const res = await apiFetch(`/api/search-console/sites/${currentSite.id}/sync`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Gagal memulai sinkronisasi.');
+      toast.success('Sinkronisasi berjalan di background. Periksa Intelligence Hub beberapa saat lagi.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal memulai sinkronisasi.');
+    } finally {
+      setGscBusy(false);
+    }
+  };
+
+  const handleDisconnectGsc = async () => {
+    if (!currentSite.id) return;
+    setGscBusy(true);
+    try {
+      const res = await apiFetch(`/api/search-console/sites/${currentSite.id}/disconnect`, { method: 'POST' });
+      if (!res.ok) throw new Error('Gagal memutus koneksi.');
+      setCurrentSite(prev => ({ ...prev, gsc_connected: false, gsc_property_url: null }));
+      setGscProperties([]);
+      await fetchSites();
+      toast.success('Search Console diputuskan.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Gagal memutus koneksi.');
+    } finally {
+      setGscBusy(false);
+    }
+  };
+
   if (isEditing) {
     return (
       <div className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
@@ -172,7 +271,7 @@ export default function Sites() {
         <div className="flex flex-col md:flex-row gap-6">
           {/* Vertical Tabs */}
           <div className="w-full md:w-64 space-y-1" role="tablist" aria-orientation="vertical">
-            {['wordpress', 'automation', 'telegram', 'facebook', 'pinterest', 'twitter', 'threads'].map((tab) => (
+            {['wordpress', 'automation', 'search-console', 'telegram', 'facebook', 'pinterest', 'twitter', 'threads'].map((tab) => (
               <button
                 key={tab}
                 role="tab"
@@ -619,6 +718,94 @@ export default function Sites() {
                             <Label>Access Token</Label>
                             <Input name="threads_access_token" type="password" value={currentSite.threads_access_token || ''} onChange={handleChange} placeholder={currentSite.has_threads_access_token ? "Sudah tersimpan. Isi untuk mengganti." : "Access token"} />
                           </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {activeTab === 'search-console' && (
+                    <div id="panel-search-console" role="tabpanel" aria-labelledby="tab-search-console" className="space-y-5 animate-in fade-in slide-in-from-right-4 duration-300">
+                      <div className="rounded-xl border bg-muted/20 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="flex items-center gap-2 font-semibold"><SearchCheck className="h-5 w-5 text-primary" /> Google Search Console</div>
+                            <p className="mt-1 text-sm text-muted-foreground">Akses read-only untuk query, impression, klik, CTR, dan posisi pencarian.</p>
+                          </div>
+                          <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${currentSite.gsc_connected ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-border bg-background text-muted-foreground'}`}>
+                            {currentSite.gsc_connected ? 'Connected' : 'Not connected'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 rounded-xl border p-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="gsc_client_id">Google OAuth Client ID</Label>
+                          <Input
+                            id="gsc_client_id"
+                            name="gsc_client_id"
+                            value={currentSite.gsc_client_id || ''}
+                            onChange={handleChange}
+                            placeholder="000000000000-xxxxx.apps.googleusercontent.com"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="gsc_client_secret">Google OAuth Client Secret</Label>
+                          <Input
+                            id="gsc_client_secret"
+                            name="gsc_client_secret"
+                            type="password"
+                            value={currentSite.gsc_client_secret || ''}
+                            onChange={handleChange}
+                            placeholder={currentSite.has_gsc_client_secret ? 'Sudah tersimpan. Isi untuk mengganti.' : 'GOCSPX-...'}
+                          />
+                          <p className="text-xs text-muted-foreground">Client Secret disimpan terenkripsi dan tidak pernah dikirim kembali ke browser.</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Authorized redirect URI</Label>
+                          <div className="rounded-md border bg-muted/30 px-3 py-2 font-mono text-xs break-all">
+                            {`${window.location.origin}/api/search-console/callback`}
+                          </div>
+                          <p className="text-xs text-muted-foreground">Salin URI ini ke Google Cloud → OAuth Client → Authorized redirect URIs.</p>
+                        </div>
+                        {!currentSite.id && (
+                          <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-700">Simpan website terlebih dahulu, lalu buka kembali tab ini untuk menghubungkan akun Google.</p>
+                        )}
+                      </div>
+
+                      {!currentSite.gsc_connected ? (
+                        <Button type="button" onClick={handleConnectGsc} disabled={gscBusy || !currentSite.id || !currentSite.gsc_client_id || (!currentSite.has_gsc_client_secret && !currentSite.gsc_client_secret)} className="gap-2">
+                          <Link2 className="h-4 w-4" /> {gscBusy ? 'Menghubungkan...' : 'Hubungkan Google Search Console'}
+                        </Button>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <Label>Property aktif</Label>
+                            <select
+                              value={currentSite.gsc_property_url || ''}
+                              onChange={(event) => handleSelectGscProperty(event.target.value)}
+                              disabled={gscBusy || gscProperties.length === 0}
+                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            >
+                              <option value="">{currentSite.gsc_property_url || 'Ambil daftar property terlebih dahulu'}</option>
+                              {gscProperties.map(property => (
+                                <option key={property.site_url} value={property.site_url}>{property.site_url} ({property.permission_level})</option>
+                              ))}
+                            </select>
+                            <p className="text-xs text-muted-foreground">Terpilih: {currentSite.gsc_property_url || 'Belum dipilih otomatis'}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" variant="outline" onClick={handleLoadGscProperties} disabled={gscBusy}>
+                              <RefreshCw className="mr-2 h-4 w-4" /> Ambil Property
+                            </Button>
+                            <Button type="button" onClick={handleSyncGsc} disabled={gscBusy || !currentSite.gsc_property_url}>
+                              <SearchCheck className="mr-2 h-4 w-4" /> Sinkronkan 56 Hari
+                            </Button>
+                            <Button type="button" variant="ghost" onClick={handleDisconnectGsc} disabled={gscBusy} className="text-destructive">
+                              <Unlink className="mr-2 h-4 w-4" /> Putuskan
+                            </Button>
+                          </div>
+                          {currentSite.gsc_last_synced_at && <p className="text-xs text-muted-foreground">Sinkron terakhir: {new Date(currentSite.gsc_last_synced_at).toLocaleString('id-ID')}</p>}
+                          {currentSite.gsc_last_error && <p className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700">{currentSite.gsc_last_error}</p>}
                         </div>
                       )}
                     </div>

@@ -17,7 +17,7 @@ MIGRATION_LOCK_ID = 4207311001
 
 # Bump this whenever a new migration step is added to _run_migrations_locked so
 # that already-migrated databases re-run the set exactly once.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 SCHEMA_VERSION_KEY = '__schema_version__'
 
 
@@ -163,6 +163,11 @@ class Database:
             logger.warning(f"Database research quality migration warning: {em}")
 
         try:
+            self.migrate_search_console_foundation()
+        except Exception as em:
+            logger.warning(f"Database Search Console migration warning: {em}")
+
+        try:
             self.migrate_credit_system_tables()
         except Exception as em:
             logger.warning(f"Database credit system migration warning: {em}")
@@ -302,6 +307,25 @@ class Database:
                 'CREATE INDEX IF NOT EXISTS idx_research_researched_at '
                 'ON research_data (researched_at)'
             ))
+
+    def migrate_search_console_foundation(self):
+        """Add encrypted GSC connection fields and analytics snapshot table."""
+        from sqlalchemy import text
+        site_columns = {
+            'gsc_client_id': 'VARCHAR(500)',
+            'gsc_client_secret': 'TEXT',
+            'gsc_refresh_token': 'TEXT',
+            'gsc_property_url': 'VARCHAR(500)',
+            'gsc_permission_level': 'VARCHAR(50)',
+            'gsc_connected_at': 'TIMESTAMP',
+            'gsc_last_synced_at': 'TIMESTAMP',
+            'gsc_last_error': 'TEXT',
+        }
+        with self.get_session() as session:
+            for name, sql_type in site_columns.items():
+                session.execute(text(
+                    f'ALTER TABLE wordpress_sites ADD COLUMN IF NOT EXISTS {name} {sql_type}'
+                ))
 
     def migrate_credit_system_tables(self):
         from sqlalchemy import text

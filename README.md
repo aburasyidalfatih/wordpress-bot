@@ -89,6 +89,7 @@ autowp/
 | Gemini AI | Model artikel & gambar dikonfigurasi terpisah |
 | SEO | Meta description, focus keyword, excerpt, internal linking |
 | Research Intelligence | Google Trends, autocomplete, kompetitor, sosial, YouTube, berita; dilengkapi provenance, freshness, dan quality gate |
+| Search Console Intelligence | OAuth read-only, query/page metrics, quick wins, low CTR, dan tren penurunan |
 | Category Rotation | Rotasi kategori otomatis tiap posting |
 | AI Optimizer | Reorder kategori berdasarkan engagement |
 | Custom Prompts | Override prompt artikel & gambar per site |

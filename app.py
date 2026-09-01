@@ -49,6 +49,7 @@ from routes.sites import sites_bp
 from routes.prompts import prompts_bp
 from routes.payments import payments_bp
 from routes.admin import admin_bp
+from routes.search_console import search_console_bp
 
 load_dotenv()
 
@@ -126,6 +127,7 @@ app.register_blueprint(sites_bp)
 app.register_blueprint(prompts_bp)
 app.register_blueprint(payments_bp)
 app.register_blueprint(admin_bp)
+app.register_blueprint(search_console_bp)
 
 # Background tasks & workers retained in app namespace for RQ compatibility
 

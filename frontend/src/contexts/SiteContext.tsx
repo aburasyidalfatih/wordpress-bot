@@ -53,6 +53,15 @@ export interface WordPressSite {
   threads_user_id?: string;
   threads_access_token?: string;
   has_threads_access_token?: boolean;
+  gsc_connected?: boolean;
+  gsc_client_id?: string;
+  gsc_client_secret?: string;
+  has_gsc_client_secret?: boolean;
+  gsc_property_url?: string | null;
+  gsc_permission_level?: string | null;
+  gsc_connected_at?: string | null;
+  gsc_last_synced_at?: string | null;
+  gsc_last_error?: string | null;
 }
 
 interface SiteContextType {

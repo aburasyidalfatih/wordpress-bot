@@ -4,6 +4,8 @@ from flask import Blueprint, request, jsonify
 
 from core_extensions import db, q, trending, logger, load_config, require_jwt
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from models import SearchConsoleMetric
+from services.search_console import build_search_opportunities
 
 research_bp = Blueprint('research', __name__)
 
@@ -64,7 +66,36 @@ def api_research(user_id):
                     'created_at': researched_at.strftime('%d %b %Y, %H:%M') if researched_at else None,
                 }
     
-    return jsonify({'success': True, 'categories': selected_categories, 'research_data': research_data})
+    with db.get_session() as session:
+        metrics = session.query(SearchConsoleMetric).filter_by(
+            user_id=user_id, site_id=site_id
+        ).order_by(SearchConsoleMetric.synced_at.desc()).all()
+        current_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'current']
+        previous_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'previous']
+        gsc_opportunities = build_search_opportunities(current_metrics, previous_metrics, limit=10)
+
+    return jsonify({
+        'success': True,
+        'categories': selected_categories,
+        'research_data': research_data,
+        'search_console': {
+            'connected': bool(site.gsc_refresh_token),
+            'property_url': site.gsc_property_url,
+            'last_synced_at': site.gsc_last_synced_at.isoformat() if site.gsc_last_synced_at else None,
+            'opportunities': gsc_opportunities,
+        },
+    })
+
+
+def _gsc_metric_dict(row):
+    return {
+        'query': row.query,
+        'page': row.page,
+        'clicks': row.clicks,
+        'impressions': row.impressions,
+        'ctr': row.ctr,
+        'position': row.position,
+    }
 
 @research_bp.route('/api/trending/<category>')
 @require_jwt

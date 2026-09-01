@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 import logging
@@ -100,6 +100,16 @@ class WordPressSite(Base):
     threads_user_id = Column(String(200))
     _threads_access_token = Column('threads_access_token', String(500))
     threads_enabled = Column(Boolean, default=False)
+
+    # Google Search Console (read-only OAuth)
+    gsc_client_id = Column(String(500))
+    _gsc_client_secret = Column('gsc_client_secret', Text)
+    _gsc_refresh_token = Column('gsc_refresh_token', Text)
+    gsc_property_url = Column(String(500))
+    gsc_permission_level = Column(String(50))
+    gsc_connected_at = Column(DateTime)
+    gsc_last_synced_at = Column(DateTime)
+    gsc_last_error = Column(Text)
     
     # Auto Research settings
 
@@ -205,6 +215,53 @@ class WordPressSite(Base):
     def threads_access_token(self, value):
         from security import encrypt_value
         self._threads_access_token = encrypt_value(value)
+
+    @property
+    def gsc_refresh_token(self):
+        from security import decrypt_value
+        return decrypt_value(self._gsc_refresh_token)
+
+    @gsc_refresh_token.setter
+    def gsc_refresh_token(self, value):
+        from security import encrypt_value
+        self._gsc_refresh_token = encrypt_value(value) if value else None
+
+    @property
+    def gsc_client_secret(self):
+        from security import decrypt_value
+        return decrypt_value(self._gsc_client_secret)
+
+    @gsc_client_secret.setter
+    def gsc_client_secret(self, value):
+        from security import encrypt_value
+        self._gsc_client_secret = encrypt_value(value) if value else None
+
+
+class SearchConsoleMetric(Base):
+    __tablename__ = 'search_console_metrics'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True)
+    property_url = Column(String(500))
+    period_start = Column(DateTime, index=True)
+    period_end = Column(DateTime, index=True)
+    period_label = Column(String(20), index=True)  # current / previous
+    query = Column(String(1000), index=True)
+    page = Column(String(1500))
+    clicks = Column(Float, default=0)
+    impressions = Column(Float, default=0)
+    ctr = Column(Float, default=0)
+    position = Column(Float, default=0)
+    synced_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'site_id', 'period_start', 'period_end', 'query', 'page',
+            name='uq_gsc_metric_period_query_page'
+        ),
+        Index('idx_gsc_site_period', 'site_id', 'period_label', 'period_end'),
+    )
 
 class PostLog(Base):
     __tablename__ = 'post_logs'

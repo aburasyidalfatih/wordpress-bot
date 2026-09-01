@@ -70,6 +70,29 @@ def dispatch_jobs():
                 user_id = site.user_id
                 site_id = site.id
                 user = users_dict.get(user_id)
+
+                # Search Console intelligence is read-only and does not consume
+                # credits. Keep snapshots fresh even when auto-post is paused or
+                # the user's article credits are exhausted.
+                if site.gsc_refresh_token and site.gsc_property_url:
+                    sync_due = (
+                        not site.gsc_last_synced_at
+                        or datetime.now() - site.gsc_last_synced_at >= timedelta(hours=24)
+                    )
+                    if sync_due:
+                        gsc_lock = f"scheduler:gsc_sync:{site_id}"
+                        if redis_conn.set(gsc_lock, "1", nx=True, ex=6 * 3600):
+                            try:
+                                q.enqueue(
+                                    'tasks.gsc_jobs.sync_search_console_job',
+                                    user_id,
+                                    site_id,
+                                    job_timeout='10m'
+                                )
+                                logger.info(f"Enqueued daily Search Console sync for site_id={site_id}")
+                            except Exception:
+                                redis_conn.delete(gsc_lock)
+                                raise
                 
                 # Check user credits
                 if not user or (user.credits or 0) <= 0:
