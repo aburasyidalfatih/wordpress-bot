@@ -146,6 +146,13 @@ class SearchConsoleFoundationTests(unittest.TestCase):
         self.assertNotIn('site.gsc_property_url', response_source)
         self.assertNotIn('site.gsc_last_synced_at', response_source)
 
+    def test_search_console_metric_failure_is_isolated(self):
+        source = Path('routes/research.py').read_text(encoding='utf-8')
+
+        self.assertIn('except SQLAlchemyError as exc:', source)
+        self.assertIn("gsc_opportunities = []", source)
+        self.assertIn("'error': gsc_metrics_error", source)
+
 
 if __name__ == '__main__':
     unittest.main()

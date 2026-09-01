@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
+from sqlalchemy.exc import SQLAlchemyError
 
 from core_extensions import db, q, trending, logger, load_config, require_jwt
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
@@ -71,13 +72,21 @@ def api_research(user_id):
                     'created_at': researched_at.strftime('%d %b %Y, %H:%M') if researched_at else None,
                 }
     
-    with db.get_session() as session:
-        metrics = session.query(SearchConsoleMetric).filter_by(
-            user_id=user_id, site_id=site_id
-        ).order_by(SearchConsoleMetric.synced_at.desc()).all()
-        current_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'current']
-        previous_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'previous']
-        gsc_opportunities = build_search_opportunities(current_metrics, previous_metrics, limit=10)
+    gsc_opportunities = []
+    gsc_metrics_error = None
+    try:
+        with db.get_session() as session:
+            metrics = session.query(SearchConsoleMetric).filter_by(
+                user_id=user_id, site_id=site_id
+            ).order_by(SearchConsoleMetric.synced_at.desc()).all()
+            current_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'current']
+            previous_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'previous']
+            gsc_opportunities = build_search_opportunities(current_metrics, previous_metrics, limit=10)
+    except SQLAlchemyError as exc:
+        # Search Console is additive intelligence. A migration/runtime problem in
+        # its metric store must not take the existing Research page offline.
+        logger.error(f'Could not load Search Console metrics for site_id={site_id}: {exc}')
+        gsc_metrics_error = 'Data Search Console belum tersedia. Coba sinkronkan kembali.'
 
     return jsonify({
         'success': True,
@@ -88,6 +97,7 @@ def api_research(user_id):
             'property_url': gsc_property_url,
             'last_synced_at': gsc_last_synced_at.isoformat() if gsc_last_synced_at else None,
             'opportunities': gsc_opportunities,
+            'error': gsc_metrics_error,
         },
     })
 
