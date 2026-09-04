@@ -475,7 +475,7 @@ def paypal_capture(user_id):
 def get_payment_history(user_id):
     settings = get_payment_settings()
     with db.get_session() as session:
-        transactions = session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.created_at.desc()).all()
+        transactions = session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.created_at.desc()).limit(100).all()
         history = []
         for tx in transactions:
             history.append({

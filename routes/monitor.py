@@ -3,10 +3,55 @@ from datetime import datetime
 from flask import Blueprint, jsonify, send_file
 import psutil
 
-from core_extensions import db, logger, get_cached_stats, require_admin
+from core_extensions import db, logger, get_cached_stats, require_admin, redis_conn
 from config import Config
 
 monitor_bp = Blueprint('monitor', __name__)
+
+# Must match dispatcher.py.
+SCHEDULER_HEARTBEAT_KEY = 'scheduler:heartbeat'
+
+
+def _scheduler_status():
+    """Real scheduler state from the dispatcher's heartbeat.
+
+    Previously this was hardcoded to True, so a dead dispatcher still showed as
+    healthy — exactly when you most need to know it is not.
+    """
+    try:
+        raw = redis_conn.get(SCHEDULER_HEARTBEAT_KEY)
+    except Exception as e:
+        logger.warning(f"Could not read scheduler heartbeat: {e}")
+        return {'running': None, 'last_heartbeat': None, 'detail': 'Redis tidak dapat dihubungi'}
+
+    if not raw:
+        return {'running': False, 'last_heartbeat': None,
+                'detail': 'Tidak ada heartbeat. Scheduler kemungkinan mati.'}
+
+    last = raw.decode() if isinstance(raw, bytes) else str(raw)
+    return {'running': True, 'last_heartbeat': last, 'detail': None}
+
+
+def _queued_job_count():
+    try:
+        from core_extensions import q
+        return q.count
+    except Exception as e:
+        logger.warning(f"Could not read queue depth: {e}")
+        return None
+
+
+def _database_size_mb():
+    try:
+        from sqlalchemy import text
+        with db.get_session() as session:
+            size = session.execute(
+                text("SELECT pg_database_size(current_database())")
+            ).scalar()
+        return round((size or 0) / 1024 / 1024, 1)
+    except Exception as e:
+        logger.warning(f"Could not read database size: {e}")
+        return None
 
 @monitor_bp.route('/api/monitor')
 @require_admin
@@ -38,11 +83,13 @@ def api_monitor(user_id):
             
     log_size = os.path.getsize(log_path) / 1024 / 1024 if os.path.exists(log_path) else 0
     
-    # Get service info
+    scheduler = _scheduler_status()
     service_info = {
-        'scheduler_running': True,
-        'scheduler_jobs': len([]),
-        'database_size': 0,  # Size not tracked locally
+        'scheduler_running': scheduler['running'],
+        'scheduler_last_heartbeat': scheduler['last_heartbeat'],
+        'scheduler_detail': scheduler['detail'],
+        'scheduler_jobs': _queued_job_count(),
+        'database_size': _database_size_mb(),
         'log_size': log_size
     }
     
@@ -93,12 +140,15 @@ def health_metrics(user_id):
         except OSError:
             _disk_percent = psutil.disk_usage('C:\\').percent
         
+        scheduler = _scheduler_status()
         return jsonify({
             'timestamp': datetime.now().isoformat(),
             'service': {
-                'status': 'healthy',
-                'scheduler_running': True,
-                'scheduler_jobs': len([]),
+                'status': 'healthy' if scheduler['running'] else 'degraded',
+                'scheduler_running': scheduler['running'],
+                'scheduler_last_heartbeat': scheduler['last_heartbeat'],
+                'scheduler_detail': scheduler['detail'],
+                'scheduler_jobs': _queued_job_count(),
                 'log_size': log_size
             },
             'system': {
@@ -128,7 +178,7 @@ def download_logs(user_id):
                         download_name=f'bot_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
     except Exception as e:
         logger.error(f"Download logs error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Could not read the log file'}), 500
 
 @monitor_bp.route('/health')
 def health():
@@ -139,13 +189,12 @@ def health():
             from models import User
             session.query(User).first()
         
-        # Check Redis connection
-        from core_extensions import redis_conn
         redis_conn.ping()
-        
+
+        scheduler = _scheduler_status()
         return jsonify({
-            'status': 'healthy',
-            'scheduler_running': True,
+            'status': 'healthy' if scheduler['running'] else 'degraded',
+            'scheduler_running': scheduler['running'],
             'database_connected': True,
             'redis_connected': True
         }), 200

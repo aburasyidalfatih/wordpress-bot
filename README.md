@@ -163,6 +163,17 @@ Auto-post memakai gate bukti yang **sama** dengan jalur manual: riset harus
 berconfidence high/medium/low dan berumur maksimal `MAX_RESEARCH_AGE_DAYS` (7 hari).
 Kalau tidak ada yang memenuhi, sistem jatuh ke rotasi kategori biasa.
 
+## Monitoring
+
+`dispatcher.py` menulis heartbeat ke Redis (`scheduler:heartbeat`, TTL 180 detik)
+di setiap awal loop. Endpoint `/api/monitor`, `/api/health-metrics`, dan `/health`
+membaca key itu untuk melaporkan status scheduler yang sebenarnya — sebelumnya
+nilainya di-hardcode `True`, sehingga dispatcher yang mati tetap tampil sehat.
+
+Status `degraded` berarti web dan database sehat tapi scheduler tidak mengirim
+heartbeat. Jumlah job antrean dan ukuran database juga kini dibaca sungguhan
+(`pg_database_size`), bukan nilai mati.
+
 ## Jadwal Posting
 
 Per site, field `schedule_hours` (default `0,6,12,18` = 4x sehari) dengan timezone

@@ -16,6 +16,45 @@ from collections import Counter
 
 logger = logging.getLogger(__name__)
 
+# A Search Console sync stores up to 5000 rows per period, so a site can hold
+# ~10000 metric rows. Only rows with real impressions can ever become an
+# opportunity (build_search_opportunities discards impressions < 20), so loading
+# the whole table into memory on every page view and every article generation was
+# pure waste. These bounds keep the working set small.
+MIN_USEFUL_IMPRESSIONS = 20
+MAX_METRIC_ROWS_PER_PERIOD = 500
+
+
+def load_search_metrics(session, user_id, site_id):
+    """Load only the Search Console rows that can influence a decision.
+
+    Returns (current_rows, previous_rows) as plain dicts. Filtering and limiting
+    happen in SQL rather than in Python.
+    """
+    from models import SearchConsoleMetric
+
+    def rows_for(label):
+        records = session.query(
+            SearchConsoleMetric.query, SearchConsoleMetric.page,
+            SearchConsoleMetric.clicks, SearchConsoleMetric.impressions,
+            SearchConsoleMetric.ctr, SearchConsoleMetric.position
+        ).filter(
+            SearchConsoleMetric.user_id == user_id,
+            SearchConsoleMetric.site_id == site_id,
+            SearchConsoleMetric.period_label == label,
+            SearchConsoleMetric.impressions >= MIN_USEFUL_IMPRESSIONS
+        ).order_by(
+            SearchConsoleMetric.impressions.desc()
+        ).limit(MAX_METRIC_ROWS_PER_PERIOD).all()
+
+        return [
+            {'query': r[0], 'page': r[1], 'clicks': r[2],
+             'impressions': r[3], 'ctr': r[4], 'position': r[5]}
+            for r in records
+        ]
+
+    return rows_for('current'), rows_for('previous')
+
 # Each opportunity type needs a different response. Writing a brand new article
 # for a low-CTR page that already ranks on page one wastes a credit and creates a
 # competing page; the fix there is the title and meta, not more content.

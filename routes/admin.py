@@ -1,7 +1,8 @@
 import os
 from flask import Blueprint, request, jsonify
+from sqlalchemy import func
 
-from core_extensions import db, logger, require_admin, send_email_notification
+from core_extensions import db, q, logger, require_admin, send_email_notification
 from database import Config as DBConfig
 from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
@@ -37,15 +38,18 @@ def bulk_update_year_endpoint(user_id):
         return jsonify({'success': False, 'error': 'Missing site_id, from_year, or to_year'}), 400
         
     try:
-        from worker import redis_conn
-        from rq import Queue
-        from app import bulk_update_year_task
-        q = Queue('default', connection=redis_conn)
-        job = q.enqueue(bulk_update_year_task, user_id, site_id, from_year, to_year, job_timeout='1h')
+        # Enqueue by dotted path against the shared queue. The previous version
+        # imported redis_conn from a worker.py that no longer exists and pulled the
+        # task from app.py, where it has never lived, so this always failed.
+        job = q.enqueue(
+            'tasks.research_jobs.bulk_update_year_task',
+            user_id, site_id, from_year, to_year,
+            job_timeout='1h'
+        )
         return jsonify({'success': True, 'message': 'Bulk update task started', 'job_id': job.id})
     except Exception as e:
         logger.error(f"Failed to start bulk update task: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Could not start the bulk update task'}), 500
 
 
 @admin_bp.route('/api/admin/pending-payments', methods=['GET'])
@@ -53,10 +57,21 @@ def bulk_update_year_endpoint(user_id):
 def get_pending_payments(user_id):
     with db.get_session() as session:
         # Get transactions awaiting approval, including user details
-        transactions = session.query(Transaction).filter_by(status='awaiting_approval').order_by(Transaction.created_at.desc()).all()
+        transactions = session.query(Transaction).filter_by(
+            status='awaiting_approval'
+        ).order_by(Transaction.created_at.desc()).limit(200).all()
+
+        # Batch-load the users instead of one query per transaction.
+        user_ids = {tx.user_id for tx in transactions if tx.user_id}
+        users_by_id = {}
+        if user_ids:
+            users_by_id = {
+                u.id: u for u in session.query(User).filter(User.id.in_(user_ids)).all()
+            }
+
         result = []
         for tx in transactions:
-            user = session.query(User).filter_by(id=tx.user_id).first()
+            user = users_by_id.get(tx.user_id)
             result.append({
                 'id': tx.id,
                 'user_id': tx.user_id,
@@ -122,7 +137,7 @@ def reject_payment(user_id, transaction_id):
 @require_admin
 def get_users(user_id):
     with db.get_session() as session:
-        users = session.query(User).order_by(User.id.asc()).all()
+        users = session.query(User).order_by(User.id.asc()).limit(500).all()
         result = []
         for u in users:
             result.append({
@@ -204,10 +219,14 @@ def get_admin_stats(user_id):
         total_users = session.query(User).count()
         total_pro = session.query(User).filter_by(tier='pro').count()
         
-        # Calculate earnings and credits
-        transactions_success = session.query(Transaction).filter_by(status='success').all()
-        total_earnings = sum(tx.amount for tx in transactions_success)
-        total_credits_purchased = sum(tx.credits_purchased for tx in transactions_success)
+        # Aggregate in SQL rather than loading every successful transaction just to
+        # sum two columns.
+        earnings, credits_purchased = session.query(
+            func.coalesce(func.sum(Transaction.amount), 0),
+            func.coalesce(func.sum(Transaction.credits_purchased), 0)
+        ).filter(Transaction.status == 'success').one()
+        total_earnings = float(earnings or 0)
+        total_credits_purchased = int(credits_purchased or 0)
         
         # Active queue count
         queue_count = session.query(ContentQueue).count()

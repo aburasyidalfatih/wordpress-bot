@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from core_extensions import db, optimizer, require_jwt
+from core_extensions import db, optimizer, require_jwt, get_cached_stats
 from services.wp_publisher import WordPressPublisher
 
 dashboard_bp = Blueprint('dashboard', __name__)
@@ -45,7 +45,9 @@ def api_dashboard(user_id):
                 'comments': 0,
                 'engagement_score': 0
             })
-        stats = db.get_stats(user_id, site_id=site_id)
+        # Use the shared 5s cache instead of hitting the database on every poll;
+        # the dashboard is refreshed frequently.
+        stats = get_cached_stats(user_id, site_id=site_id)
         insights = optimizer.get_content_recommendations(user_id, site_id=site_id) 
         performance = db.get_category_performance(user_id, site_id=site_id)
         
