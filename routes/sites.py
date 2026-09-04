@@ -16,7 +16,7 @@ def _should_update_secret(value):
 def get_sites(user_id):
     with db.get_session() as session:
         from models import WordPressSite
-        sites = session.query(WordPressSite).filter_by(user_id=user_id).order_by(WordPressSite.created_at.desc()).all()
+        sites = session.query(WordPressSite).filter_by(user_id=user_id).order_by(WordPressSite.created_at.desc()).limit(100).all()
         return jsonify({
             'success': True,
             'sites': [{

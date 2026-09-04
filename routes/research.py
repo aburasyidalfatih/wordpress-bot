@@ -8,10 +8,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from core_extensions import db, q, trending, logger, load_config, require_jwt
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 from database import MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS
-from models import SearchConsoleMetric
 from services.search_console import build_search_opportunities
 from services.content_planner import (
-    plan_from_opportunities, topic_candidates_from_opportunities,
+    load_search_metrics, plan_from_opportunities, topic_candidates_from_opportunities,
     keyword_demand_map, annotate_keywords_with_demand,
     find_content_gaps, classify_intent, intent_guidance,
 )
@@ -39,17 +38,29 @@ def api_research(user_id):
         gsc_property_url = site.gsc_property_url
         gsc_last_synced_at = site.gsc_last_synced_at
     
-    # Get latest research data for each category
+    # Get the latest two research runs per category in ONE query, instead of a
+    # query per category plus another per category for the delta.
     research_data = {}
     with db.get_session() as session:
         from models import ResearchData
-        for category in selected_categories:
-            latest = session.query(ResearchData).filter(
+        category_names = [c['name'] for c in selected_categories if c.get('name')]
+        runs_by_category = {}
+        if category_names:
+            all_runs = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
-                ResearchData.category == category['name']
-            ).order_by(ResearchData.created_at.desc()).first()
-            
+                ResearchData.category.in_(category_names)
+            ).order_by(ResearchData.created_at.desc()).all()
+            for run in all_runs:
+                bucket = runs_by_category.setdefault(run.category, [])
+                if len(bucket) < 2:  # latest + previous is all the UI needs
+                    bucket.append(run)
+
+        for category in selected_categories:
+            runs = runs_by_category.get(category['name']) or []
+            latest = runs[0] if runs else None
+            previous = runs[1] if len(runs) > 1 else None
+
             if latest:
                 researched_at = latest.researched_at or latest.created_at
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -78,6 +89,7 @@ def api_research(user_id):
                     'age_hours': age_hours,
                     'is_stale': age_hours is not None and age_hours > 168,
                     'created_at': researched_at.strftime('%d %b %Y, %H:%M') if researched_at else None,
+                    'change_since_last_run': _research_delta(latest, previous),
                 }
     
     gsc_opportunities = []
@@ -85,11 +97,7 @@ def api_research(user_id):
     current_metrics = []
     try:
         with db.get_session() as session:
-            metrics = session.query(SearchConsoleMetric).filter_by(
-                user_id=user_id, site_id=site_id
-            ).order_by(SearchConsoleMetric.synced_at.desc()).all()
-            current_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'current']
-            previous_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'previous']
+            current_metrics, previous_metrics = load_search_metrics(session, user_id, site_id)
             raw_opportunities = build_search_opportunities(current_metrics, previous_metrics, limit=20)
             # Each opportunity now carries the action it actually calls for, so the
             # UI can distinguish "write something new" from "fix the title".
@@ -120,7 +128,6 @@ def api_research(user_id):
             )
             entry['keywords'] = annotate_keywords_with_demand(entry.get('keywords'), demand)
             entry['intent'] = classify_intent(name)
-            entry['change_since_last_run'] = _research_delta(user_id, site_id, name)
     except SQLAlchemyError as exc:
         logger.error(f'Could not build content gaps for site_id={site_id}: {exc}')
 
@@ -139,42 +146,35 @@ def api_research(user_id):
     })
 
 
-def _research_delta(user_id, site_id, category):
-    """Compare the two most recent research runs for a category.
+def _research_delta(latest, previous):
+    """Compare two already-loaded research runs.
 
-    The history is already stored; surfacing the movement turns a snapshot into a
-    trend, e.g. "trend score up 12, 3 new keywords since the last run".
+    Takes the ORM rows rather than fetching them, so the caller can load every
+    category's runs in a single query.
     """
-    try:
-        from models import ResearchData
-        with db.get_session() as session:
-            runs = session.query(ResearchData).filter(
-                ResearchData.user_id == user_id,
-                ResearchData.site_id == site_id,
-                ResearchData.category == category
-            ).order_by(ResearchData.created_at.desc()).limit(2).all()
-
-            if len(runs) < 2:
-                return None
-
-            latest, previous = runs[0], runs[1]
-            latest_kw = {str(k).lower() for k in (latest.keywords or [])}
-            previous_kw = {str(k).lower() for k in (previous.keywords or [])}
-
-            return {
-                'trend_score_change': (latest.trend_score or 0) - (previous.trend_score or 0),
-                'quality_score_change': (latest.quality_score or 0) - (previous.quality_score or 0),
-                'new_keywords': sorted(latest_kw - previous_kw)[:5],
-                'lost_keywords': sorted(previous_kw - latest_kw)[:5],
-                'previous_confidence': previous.confidence_level,
-                'previous_researched_at': (
-                    previous.researched_at.strftime('%d %b %Y, %H:%M')
-                    if previous.researched_at else None
-                ),
-            }
-    except SQLAlchemyError as exc:
-        logger.error(f'Could not compute research delta for {category}: {exc}')
+    if not latest or not previous:
         return None
+
+    def keyword_set(run):
+        return {
+            str(k.get('keyword') if isinstance(k, dict) else k).lower()
+            for k in (run.keywords or [])
+        }
+
+    latest_kw = keyword_set(latest)
+    previous_kw = keyword_set(previous)
+
+    return {
+        'trend_score_change': (latest.trend_score or 0) - (previous.trend_score or 0),
+        'quality_score_change': (latest.quality_score or 0) - (previous.quality_score or 0),
+        'new_keywords': sorted(latest_kw - previous_kw)[:5],
+        'lost_keywords': sorted(previous_kw - latest_kw)[:5],
+        'previous_confidence': previous.confidence_level,
+        'previous_researched_at': (
+            previous.researched_at.strftime('%d %b %Y, %H:%M')
+            if previous.researched_at else None
+        ),
+    }
 
 
 def _normalize_title(title):
@@ -200,16 +200,6 @@ def _filter_duplicate_titles(candidates, existing_titles, threshold=0.72):
         kept_normalized.append(norm)
     return kept
 
-
-def _gsc_metric_dict(row):
-    return {
-        'query': row.query,
-        'page': row.page,
-        'clicks': row.clicks,
-        'impressions': row.impressions,
-        'ctr': row.ctr,
-        'position': row.position,
-    }
 
 @research_bp.route('/api/trending/<category>')
 @require_jwt
@@ -403,11 +393,7 @@ def generate_titles(user_id, category):
         content_gaps = []
         try:
             with db.get_session() as session:
-                metrics = session.query(SearchConsoleMetric).filter_by(
-                    user_id=user_id, site_id=site_id
-                ).order_by(SearchConsoleMetric.synced_at.desc()).all()
-                current_rows = [_gsc_metric_dict(r) for r in metrics if r.period_label == 'current']
-                previous_rows = [_gsc_metric_dict(r) for r in metrics if r.period_label == 'previous']
+                current_rows, previous_rows = load_search_metrics(session, user_id, site_id)
                 opportunities = build_search_opportunities(current_rows, previous_rows, limit=20)
                 gsc_topics = topic_candidates_from_opportunities(opportunities, limit=6)
 

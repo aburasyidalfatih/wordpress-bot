@@ -31,6 +31,20 @@ db = Database(Config.DATABASE_URL)
 STUCK_POSTING_TIMEOUT_MINUTES = 90
 
 
+# Monitoring used to hardcode scheduler_running=True, so a dead dispatcher still
+# showed green. It now writes a heartbeat each pass; the monitor treats a missing
+# or expired key as "not running". TTL is generous enough to survive one slow pass.
+HEARTBEAT_KEY = 'scheduler:heartbeat'
+HEARTBEAT_TTL_SECONDS = 180
+
+
+def write_heartbeat():
+    try:
+        redis_conn.setex(HEARTBEAT_KEY, HEARTBEAT_TTL_SECONDS, datetime.now().isoformat())
+    except Exception as e:
+        logger.warning(f"Could not write scheduler heartbeat: {e}")
+
+
 def reset_stuck_queue_items():
     """Return abandoned 'posting' queue items to 'pending' so they get retried."""
     from models import ContentQueue
@@ -176,6 +190,10 @@ if __name__ == '__main__':
     pass_count = 0
 
     while True:
+        # Written before the work so a slow or failing pass still reports "alive";
+        # only a genuinely dead process lets the key expire.
+        write_heartbeat()
+
         try:
             dispatch_jobs()
         except Exception as e:

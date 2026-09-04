@@ -61,28 +61,15 @@ def _attach_search_evidence(seo_data, user_id, site_id, category_name):
     must never block article generation.
     """
     try:
-        from models import SearchConsoleMetric
         from services.search_console import build_search_opportunities
         from services.content_planner import (
-            topic_candidates_from_opportunities, keyword_demand_map,
-            annotate_keywords_with_demand, find_content_gaps,
+            load_search_metrics, topic_candidates_from_opportunities,
+            keyword_demand_map, annotate_keywords_with_demand, find_content_gaps,
             classify_intent, intent_guidance,
         )
 
         with db.get_session() as session:
-            metrics = session.query(SearchConsoleMetric).filter_by(
-                user_id=user_id, site_id=site_id
-            ).order_by(SearchConsoleMetric.synced_at.desc()).all()
-            current_rows = [
-                {'query': m.query, 'page': m.page, 'clicks': m.clicks,
-                 'impressions': m.impressions, 'ctr': m.ctr, 'position': m.position}
-                for m in metrics if m.period_label == 'current'
-            ]
-            previous_rows = [
-                {'query': m.query, 'page': m.page, 'clicks': m.clicks,
-                 'impressions': m.impressions, 'ctr': m.ctr, 'position': m.position}
-                for m in metrics if m.period_label == 'previous'
-            ]
+            current_rows, previous_rows = load_search_metrics(session, user_id, site_id)
             published_titles = [
                 row[0] for row in session.query(PostLog.title).filter(
                     PostLog.user_id == user_id,

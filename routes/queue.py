@@ -176,8 +176,16 @@ def reorder_queue_api(user_id):
     with db.get_session() as session:
         # Keep order compatible with the queue query, which sorts created_at ascending.
         base_time = datetime.datetime.now() - datetime.timedelta(seconds=len(ids))
+        # Fetch every item in one query rather than one per id; a drag-and-drop
+        # reorder posts the whole list.
+        items_by_id = {
+            item.id: item for item in session.query(ContentQueue).filter(
+                ContentQueue.id.in_(ids),
+                ContentQueue.user_id == user_id
+            ).all()
+        }
         for idx, item_id in enumerate(ids):
-            item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
+            item = items_by_id.get(item_id)
             if item:
                 item.created_at = base_time + datetime.timedelta(seconds=idx)
         session.commit()
