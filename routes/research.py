@@ -17,6 +17,12 @@ from services.content_planner import (
 
 research_bp = Blueprint('research', __name__)
 
+# Generous per-category budget: a category can spend ~20-30s across Trends,
+# autocomplete, competitor scraping, social, YouTube and news, and a slow or
+# rate-limited provider stretches that further.
+RESEARCH_SECONDS_PER_CATEGORY = 180
+RESEARCH_MIN_TIMEOUT_SECONDS = 600
+
 @research_bp.route('/api/research_data')
 @require_jwt
 def api_research(user_id):
@@ -315,8 +321,21 @@ def manual_research(user_id):
             }), 400
 
         # Enqueue outside the validation query. If Redis/RQ fails, refund the user.
+        #
+        # This was the only job enqueued without an explicit job_timeout, so it fell
+        # back to RQ's 180 second default. A single category takes roughly 20-30s
+        # (Trends, autocomplete, competitor scraping, social, YouTube, Wikipedia,
+        # news), so researching every category was killed after the first one or two.
+        timeout_seconds = max(
+            RESEARCH_MIN_TIMEOUT_SECONDS,
+            required_credits * RESEARCH_SECONDS_PER_CATEGORY
+        )
         try:
-            job = q.enqueue('tasks.research_jobs.deep_research_job', user_id, True, site_id, category)
+            job = q.enqueue(
+                'tasks.research_jobs.deep_research_job',
+                user_id, True, site_id, category,
+                job_timeout=timeout_seconds
+            )
         except Exception as enqueue_error:
             db.refund_user_credits(user_id, required_credits)
             logger.error(f"Manual research enqueue failed, refunded {required_credits} credits: {enqueue_error}")

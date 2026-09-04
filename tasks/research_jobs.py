@@ -1,3 +1,9 @@
+try:
+    from rq.timeouts import BaseTimeoutException
+except ImportError:  # pragma: no cover - older/newer RQ layouts
+    class BaseTimeoutException(Exception):
+        pass
+
 from core_extensions import db, trending, logger, send_telegram_notification
 
 MIN_RESEARCH_QUALITY_SCORE = 35
@@ -153,6 +159,16 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                 logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
                 successful_categories += 1
                 
+            except BaseTimeoutException:
+                # RQ's death penalty raises inside the job and is an Exception
+                # subclass, so the per-category handler below used to swallow it and
+                # keep looping past the deadline. Let it propagate: the outer handler
+                # refunds every category that was not completed.
+                logger.error(
+                    f"Research job hit its time limit while processing '{category_name}'. "
+                    f"Completed {successful_categories} categories."
+                )
+                raise
             except Exception as cat_error:
                 logger.error(f"Failed to research category {category_name}: {cat_error}")
                 failed_categories += 1

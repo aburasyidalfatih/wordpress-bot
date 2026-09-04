@@ -13,6 +13,7 @@ def patched_init(self, *args, **kwargs):
     original_init(self, *args, **kwargs)
 urllib3.util.retry.Retry.__init__ = patched_init
 
+import os
 import re
 import requests
 import json
@@ -39,6 +40,11 @@ except ImportError:
     YouTubeTranscriptApi = None
 
 logger = logging.getLogger(__name__)
+
+# Google Trends seasonality lookup doubles the request rate per category. Enable
+# with ENABLE_TREND_SEASONALITY=true only if your Trends quota tolerates it.
+ENABLE_TREND_SEASONALITY = os.getenv('ENABLE_TREND_SEASONALITY', 'false').lower() == 'true'
+
 
 class SEOResearch:
     """Advanced Research using DDGS, Pytrends, and YouTube Transcripts"""
@@ -225,9 +231,13 @@ class SEOResearch:
             pytrends.build_payload([keyword], cat=0, timeframe='now 7-d', geo=geo)
             data = pytrends.interest_over_time()
 
-            # A 7-day window cannot tell a seasonal peak from a one-off spike, so
-            # also look at 12 months to detect recurring demand.
-            seasonality = self._get_seasonality(pytrends, keyword, geo)
+            # A 12-month pass detects seasonality, but it doubles the number of
+            # Google Trends requests. Trends throttles aggressively, and a 429 costs
+            # the category 25 quality points, which is enough to push it below the
+            # evidence threshold and drop it entirely. Off unless explicitly enabled.
+            seasonality = None
+            if ENABLE_TREND_SEASONALITY:
+                seasonality = self._get_seasonality(pytrends, keyword, geo)
             if not data.empty and keyword in data.columns:
                 values = [float(v) for v in data[keyword].tolist()]
                 recent = values[-min(24, len(values)):]
