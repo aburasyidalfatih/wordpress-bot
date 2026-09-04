@@ -15,11 +15,13 @@ urllib3.util.retry.Retry.__init__ = patched_init
 
 import os
 import re
+import time
 import requests
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from threading import Lock
 
 try:
     from pytrends.request import TrendReq
@@ -45,6 +47,10 @@ logger = logging.getLogger(__name__)
 # with ENABLE_TREND_SEASONALITY=true only if your Trends quota tolerates it.
 ENABLE_TREND_SEASONALITY = os.getenv('ENABLE_TREND_SEASONALITY', 'false').lower() == 'true'
 
+# DuckDuckGo rate-limits per IP. Competitors, social, YouTube and news all go
+# through it, so they are spaced out rather than fired together.
+DDG_CALL_SPACING_SECONDS = float(os.getenv('DDG_CALL_SPACING_SECONDS', '3'))
+
 
 class SEOResearch:
     """Advanced Research using DDGS, Pytrends, and YouTube Transcripts"""
@@ -53,28 +59,77 @@ class SEOResearch:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        if DDGS:
-            try:
-                # Try simple initialization (v6.x compatibility)
-                self.ddgs = DDGS()
-            except Exception as e:
-                logger.warning(f"Failed to initialize DDGS with default arguments: {e}. Trying verify=False fallback.")
-                try:
-                    # Fallback for older versions if needed
-                    self.ddgs = DDGS(verify=True)
-                except Exception as ex:
-                    logger.error(f"Failed to initialize DDGS: {ex}")
-                    self.ddgs = None
-        else:
-            self.ddgs = None
+        self.ddgs_available = DDGS is not None
         self.source_status = {}
+        self._status_lock = Lock()
+
+    def _new_ddgs(self):
+        """Create a fresh DDGS client for a single call.
+
+        The client is not thread-safe and latches into a failed state: once one
+        call errors, every later call on the same instance raises "Exception
+        occurred in previous call". A single shared instance was fine while the
+        providers ran sequentially, but they now run concurrently, so one failure
+        took out competitors, social, YouTube and news together — 45 of the 100
+        quality points, which is enough to drop every category.
+        """
+        if not DDGS:
+            return None
+        try:
+            return DDGS()
+        except Exception as e:
+            logger.error(f"Failed to initialize DDGS: {e}")
+            return None
+
+    def _run_providers(self, independent, duckduckgo, label=''):
+        """Run providers grouped by the upstream they hit.
+
+        `independent` targets distinct hosts (Google autocomplete, Wikipedia,
+        Trends) and can safely run at once. `duckduckgo` all share one host that
+        rate-limits per IP, so firing them concurrently looks like a burst and gets
+        the whole server blocked; they run one at a time with a gap between them.
+        The two groups still overlap with each other.
+        """
+        collected = {}
+
+        def run_duckduckgo_group():
+            for index, (name, fn) in enumerate(duckduckgo.items()):
+                if index:
+                    time.sleep(DDG_CALL_SPACING_SECONDS)
+                try:
+                    collected[name] = fn()
+                except Exception as exc:
+                    logger.error(f"Research provider '{name}' failed{label}: {exc}")
+                    collected[name] = None
+
+        with ThreadPoolExecutor(max_workers=len(independent) + 1) as pool:
+            futures = {pool.submit(fn): name for name, fn in independent.items()}
+            ddg_future = pool.submit(run_duckduckgo_group) if duckduckgo else None
+
+            for future in as_completed(list(futures)):
+                name = futures[future]
+                try:
+                    collected[name] = future.result()
+                except Exception as exc:
+                    logger.error(f"Research provider '{name}' failed{label}: {exc}")
+                    collected[name] = None
+
+            if ddg_future:
+                try:
+                    ddg_future.result()
+                except Exception as exc:
+                    logger.error(f"DuckDuckGo provider group failed{label}: {exc}")
+
+        return collected
 
     def _mark_source(self, provider, status, **details):
-        self.source_status[provider] = {
-            'status': status,
-            'checked_at': datetime.now(timezone.utc).isoformat(),
-            **details,
-        }
+        # Called concurrently by the parallel providers.
+        with self._status_lock:
+            self.source_status[provider] = {
+                'status': status,
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                **details,
+            }
 
     @staticmethod
     def _deduplicate(values, key=None):
@@ -201,9 +256,10 @@ class SEOResearch:
     def get_latest_news(self, keyword, limit=3):
         """Get latest news headlines using DuckDuckGo News"""
         news_headlines = []
-        if self.ddgs:
+        ddgs = self._new_ddgs()
+        if ddgs:
             try:
-                results = self.ddgs.news(keyword, max_results=limit)
+                results = ddgs.news(keyword, max_results=limit)
                 for res in results:
                     news_headlines.append({
                         'title': res.get('title', ''),
@@ -365,13 +421,14 @@ class SEOResearch:
         sleep between each, which dominated the runtime of a whole research pass.
         """
         competitors = []
-        if not self.ddgs:
+        ddgs = self._new_ddgs()
+        if not ddgs:
             self._mark_source('competitors', 'unavailable', count=0)
             return []
 
         try:
             region = 'us-en' if language == 'en' else 'id-id'
-            results = list(self.ddgs.text(keyword, region=region, max_results=limit))
+            results = list(ddgs.text(keyword, region=region, max_results=limit))
         except Exception as e:
             logger.error(f"DDGS competitor search error: {e}")
             self._mark_source('competitors', 'unavailable', count=0, reason=type(e).__name__)
@@ -398,14 +455,15 @@ class SEOResearch:
     def get_social_insights(self, keyword, language='id'):
         """Search Quora & Reddit for real human questions"""
         insights = []
-        if not self.ddgs:
+        ddgs = self._new_ddgs()
+        if not ddgs:
             self._mark_source('social', 'unavailable', count=0)
             return []
 
         try:
             query = f"site:quora.com OR site:reddit.com {keyword}"
             region = 'us-en' if language == 'en' else 'id-id'
-            results = list(self.ddgs.text(query, region=region, max_results=5))
+            results = list(ddgs.text(query, region=region, max_results=5))
             for res in results:
                 title = res.get('title', '')
                 if language == 'en':
@@ -430,14 +488,15 @@ class SEOResearch:
     def get_youtube_insights(self, keyword, language='id'):
         """Find top YouTube video and get transcript summary"""
         insights = []
-        if not self.ddgs or not YouTubeTranscriptApi:
+        ddgs = self._new_ddgs()
+        if not ddgs or not YouTubeTranscriptApi:
             self._mark_source('youtube', 'unavailable', count=0)
             return []
 
         try:
             query = f"site:youtube.com {keyword}"
             region = 'us-en' if language == 'en' else 'id-id'
-            results = list(self.ddgs.text(query, region=region, max_results=2))
+            results = list(ddgs.text(query, region=region, max_results=2))
             
             for res in results:
                 url = res.get('href', '')
@@ -555,23 +614,17 @@ class SEOResearch:
         logger.info(f"Topic-level research: '{topic}' (category={category_name})")
         self.source_status = {}
 
-        tasks = {
-            'suggestions': lambda: self.get_keyword_suggestions(topic, limit=10, language=language),
-            'questions': lambda: self.get_related_questions(topic, limit=8, language=language),
-            'competitors': lambda: self.analyze_competitors(topic, language=language, limit=3),
-            'social': lambda: self.get_social_insights(topic, language=language),
-        }
-
-        collected = {}
-        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-            futures = {pool.submit(fn): name for name, fn in tasks.items()}
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    collected[name] = future.result()
-                except Exception as exc:
-                    logger.error(f"Topic research provider '{name}' failed for '{topic}': {exc}")
-                    collected[name] = None
+        collected = self._run_providers(
+            independent={
+                'suggestions': lambda: self.get_keyword_suggestions(topic, limit=10, language=language),
+                'questions': lambda: self.get_related_questions(topic, limit=8, language=language),
+            },
+            duckduckgo={
+                'competitors': lambda: self.analyze_competitors(topic, language=language, limit=3),
+                'social': lambda: self.get_social_insights(topic, language=language),
+            },
+            label=f" for '{topic}'",
+        )
 
         suggestions = collected.get('suggestions') or []
         questions = collected.get('questions') or []
@@ -608,34 +661,23 @@ class SEOResearch:
                 job.meta['message'] = msg
                 job.save_meta()
                 
-        # These providers are independent network calls. Running them serially made a
-        # single category take tens of seconds; with ten categories that dominated the
-        # whole job. Fan them out and collect the results.
-        update_progress(25, f'Gathering evidence for {category_name}...')
-        tasks = {
-            'suggestions': lambda: self.get_keyword_suggestions(category_name, limit=10, language=language),
-            'trend_analysis': lambda: self.get_trend_analysis(category_name, language=language),
-            'competitors': lambda: self.analyze_competitors(category_name, language=language),
-            'social': lambda: self.get_social_insights(category_name, language=language),
-            'youtube': lambda: self.get_youtube_insights(category_name, language=language),
-            'questions': lambda: self.get_related_questions(category_name, limit=10, language=language),
-            'wikipedia': lambda: self.get_wikipedia_context(category_name, language=language),
-            'news': lambda: self.get_latest_news(category_name, limit=3),
-        }
-
-        collected = {}
-        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-            futures = {pool.submit(fn): name for name, fn in tasks.items()}
-            done = 0
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    collected[name] = future.result()
-                except Exception as exc:
-                    logger.error(f"Research provider '{name}' failed for {category_name}: {exc}")
-                    collected[name] = None
-                done += 1
-                update_progress(25 + int(65 * done / len(tasks)), f'{name} done for {category_name}...')
+        update_progress(30, f'Gathering evidence for {category_name}...')
+        collected = self._run_providers(
+            independent={
+                'suggestions': lambda: self.get_keyword_suggestions(category_name, limit=10, language=language),
+                'trend_analysis': lambda: self.get_trend_analysis(category_name, language=language),
+                'questions': lambda: self.get_related_questions(category_name, limit=10, language=language),
+                'wikipedia': lambda: self.get_wikipedia_context(category_name, language=language),
+            },
+            duckduckgo={
+                'competitors': lambda: self.analyze_competitors(category_name, language=language),
+                'social': lambda: self.get_social_insights(category_name, language=language),
+                'youtube': lambda: self.get_youtube_insights(category_name, language=language),
+                'news': lambda: self.get_latest_news(category_name, limit=3),
+            },
+            label=f" for {category_name}",
+        )
+        update_progress(90, f'Scoring evidence for {category_name}...')
 
         suggestions = collected.get('suggestions') or []
         trend_analysis = collected.get('trend_analysis') or {'score': None, 'status': 'unavailable'}
