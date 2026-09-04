@@ -147,7 +147,8 @@ def plan_from_opportunities(opportunities, limit=10):
             'action_label': ACTION_LABELS[action],
             'intent': intent,
         })
-    planned.sort(key=lambda item: item.get('score', 0), reverse=True)
+    # build_search_opportunities names this field 'opportunity_score'.
+    planned.sort(key=lambda item: item.get('opportunity_score') or 0, reverse=True)
     return planned[:limit]
 
 
@@ -171,7 +172,7 @@ def topic_candidates_from_opportunities(opportunities, limit=8):
             'query': query,
             'impressions': opp.get('impressions'),
             'position': opp.get('position'),
-            'score': opp.get('score'),
+            'score': opp.get('opportunity_score'),
             'intent': opp.get('intent'),
         })
         if len(candidates) >= limit:

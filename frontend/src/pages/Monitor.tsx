@@ -12,8 +12,13 @@ interface MonitorSystemInfo {
 }
 
 interface MonitorServiceInfo {
-  scheduler_running: boolean;
-  scheduler_jobs: number;
+  // null means the heartbeat could not be read (e.g. Redis unreachable), which is
+  // different from the scheduler being confirmed down.
+  scheduler_running: boolean | null;
+  scheduler_last_heartbeat?: string | null;
+  scheduler_detail?: string | null;
+  scheduler_jobs: number | null;
+  database_size?: number | null;
   log_size: number;
 }
 
@@ -140,13 +145,28 @@ export default function Monitor() {
           <CardContent className="space-y-4">
             <div className="flex justify-between items-center py-2 border-b">
               <span className="text-muted-foreground">Scheduler Status</span>
-              <span className={`px-2 py-1 rounded-md text-xs font-medium ${service_info?.scheduler_running ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                {service_info?.scheduler_running ? 'Running' : 'Stopped'}
+              <span
+                title={service_info?.scheduler_detail || service_info?.scheduler_last_heartbeat || undefined}
+                className={`px-2 py-1 rounded-md text-xs font-medium ${
+                  service_info?.scheduler_running === true
+                    ? 'bg-green-100 text-green-800'
+                    : service_info?.scheduler_running === false
+                      ? 'bg-red-100 text-red-800'
+                      : 'bg-yellow-100 text-yellow-800'
+                }`}
+              >
+                {service_info?.scheduler_running === true
+                  ? 'Running'
+                  : service_info?.scheduler_running === false
+                    ? 'Stopped'
+                    : 'Unknown'}
               </span>
             </div>
             <div className="flex justify-between items-center py-2 border-b">
               <span className="text-muted-foreground">Active Jobs</span>
-              <span className="font-medium">{service_info?.scheduler_jobs} jobs pending</span>
+              <span className="font-medium">
+                {service_info?.scheduler_jobs != null ? `${service_info.scheduler_jobs} jobs pending` : '—'}
+              </span>
             </div>
             <div className="flex justify-between items-center py-2 border-b">
               <span className="text-muted-foreground">Log File Size</span>
