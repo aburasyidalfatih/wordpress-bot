@@ -1,3 +1,5 @@
+import re
+
 try:
     from rq.timeouts import BaseTimeoutException
 except ImportError:  # pragma: no cover - older/newer RQ layouts
@@ -7,6 +9,51 @@ except ImportError:  # pragma: no cover - older/newer RQ layouts
 from core_extensions import db, trending, logger, send_telegram_notification
 
 MIN_RESEARCH_QUALITY_SCORE = 35
+
+# Search Console evidence is capped so a site with lots of impressions cannot pass
+# on that alone, but it is weighted enough to keep a category viable when Google
+# Trends and DuckDuckGo block the server IP.
+GSC_MAX_BONUS = 20
+
+
+def _load_search_console_queries(user_id, site_id):
+    """Queries this site already receives impressions for. Empty when GSC is unused."""
+    try:
+        from services.content_planner import load_search_metrics
+        with db.get_session() as session:
+            current_rows, _ = load_search_metrics(session, user_id, site_id)
+        return [
+            {'query': row['query'], 'impressions': row['impressions'], 'position': row['position']}
+            for row in current_rows if row.get('query')
+        ]
+    except Exception as e:
+        logger.warning(f"Could not load Search Console evidence for site {site_id}: {e}")
+        return []
+
+
+def _search_console_evidence(gsc_queries, category_name):
+    """Queries whose wording overlaps the category, so the match is explainable."""
+    stopwords = {'and', 'the', 'for', 'with', 'your', 'dan', 'untuk', 'yang', 'dengan'}
+
+    def tokens(text):
+        words = re.findall(r'\w+', (text or '').lower())
+        # Crude singular form so "beginner" matches "beginners" and "saving"
+        # matches "savings"; without it obvious matches were missed.
+        return {
+            re.sub(r's$', '', w)
+            for w in words if len(w) > 3 and w not in stopwords
+        }
+
+    wanted = tokens(category_name)
+    if not wanted:
+        return []
+
+    matches = []
+    for item in gsc_queries:
+        if tokens(item['query']) & wanted:
+            matches.append(item)
+    matches.sort(key=lambda i: i.get('impressions') or 0, reverse=True)
+    return matches
 
 def deep_research_job(user_id, force=True, site_id=None, category=None):
     """Deep research job to find trending topics"""
@@ -49,6 +96,16 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
         from seo_research import SEOResearch
         seo = SEOResearch()
         
+        # Loaded once for the whole job rather than per category.
+        gsc_queries = _load_search_console_queries(user_id, site_id)
+        if gsc_queries:
+            logger.info(f"Search Console evidence available: {len(gsc_queries)} queries for site {site_id}")
+        else:
+            logger.info(
+                f"No Search Console evidence for site {site_id}. Connecting Search Console "
+                "would keep categories viable when Trends/DuckDuckGo block this server."
+            )
+
         successful_categories = 0
         failed_categories = 0
         
@@ -92,10 +149,25 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                         'count': related_count,
                         'checked_at': (trending_data or {}).get('timestamp'),
                     }
+                    # Search Console is first-party evidence: real queries that really
+                    # reached this site. It does not depend on scraping Google Trends
+                    # or DuckDuckGo, both of which block server IPs, so it keeps a
+                    # category viable when the scraped providers are unavailable.
+                    gsc_matches = _search_console_evidence(gsc_queries, category_name)
+                    source_metadata['search_console'] = {
+                        'status': 'real' if gsc_matches else 'unavailable',
+                        'count': len(gsc_matches),
+                        'queries': gsc_matches[:10],
+                    }
+
                     # Related queries are direct category evidence and add a small,
                     # bounded bonus to the research evidence score.
-                    quality_score = min(100, int(quality.get('score', 0)) + min(10, related_count))
-                    real_provider_count = int(quality.get('real_provider_count', 0)) + (1 if related_count else 0)
+                    quality_score = min(100, int(quality.get('score', 0))
+                                        + min(10, related_count)
+                                        + min(GSC_MAX_BONUS, len(gsc_matches) * 2))
+                    real_provider_count = (int(quality.get('real_provider_count', 0))
+                                           + (1 if related_count else 0)
+                                           + (1 if gsc_matches else 0))
                     if quality_score >= 75 and real_provider_count >= 5:
                         confidence_level = 'high'
                     elif quality_score >= 50 and real_provider_count >= 3:
