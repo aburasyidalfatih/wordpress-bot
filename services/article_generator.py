@@ -185,13 +185,55 @@ class ArticleGenerator:
                     seo_section += f"- {news}\n"
                 has_evidence = True
 
+            # Queries this site already gets impressions for. Strongest signal here,
+            # so it goes first and is called out as first-party data.
+            search_queries = seo_data.get('search_queries') or []
+            if search_queries:
+                label = ("SEARCH QUERIES THIS SITE ALREADY RANKS FOR (first-party data)"
+                         if language == 'en' else
+                         "QUERY PENCARIAN YANG SUDAH MENJANGKAU SITUS INI (data first-party)")
+                seo_section += f"\n\n[{label}]\n"
+                for item in search_queries:
+                    seo_section += (f"- \"{item['query']}\" ({int(item.get('impressions') or 0)} impressions, "
+                                    f"position {item.get('position')})\n")
+                if language == 'en':
+                    seo_section += "Cover these explicitly; they are proven demand, not guesses.\n"
+                else:
+                    seo_section += "Bahas ini secara eksplisit; ini permintaan yang terbukti, bukan tebakan.\n"
+                has_evidence = True
+
+            content_gaps = seo_data.get('content_gaps') or []
+            if content_gaps:
+                label = ("SUBTOPICS COMPETITORS COVER AND THIS SITE DOES NOT"
+                         if language == 'en' else
+                         "SUBTOPIK YANG DIBAHAS KOMPETITOR TAPI BELUM ADA DI SITUS INI")
+                seo_section += f"\n\n[{label}]\n"
+                for gap in content_gaps:
+                    seo_section += f"- {gap['topic']}\n"
+                if language == 'en':
+                    seo_section += "Covering these closes a real gap. Prioritise them where relevant.\n"
+                else:
+                    seo_section += "Membahas ini menutup celah nyata. Prioritaskan bila relevan.\n"
+                has_evidence = True
+
+            intent = seo_data.get('intent')
+            if intent:
+                label = "SEARCH INTENT" if language == 'en' else "INTENT PENCARIAN"
+                guidance = seo_data.get('intent_guidance') or ''
+                seo_section += f"\n\n[{label}]\n{intent}. {guidance}\n"
+
             if keywords:
                 label = "RELATED KEYWORDS (use naturally)" if language == 'en' else "KEYWORD TERKAIT (gunakan natural)"
                 seo_section += f"\n\n[{label}]\n"
                 for kw in keywords[:10]:
-                    kw_text = kw.get('keyword') if isinstance(kw, dict) else str(kw)
+                    if isinstance(kw, dict):
+                        kw_text = kw.get('keyword')
+                        impressions = kw.get('impressions')
+                        suffix = f" ({int(impressions)} impressions)" if impressions else ""
+                    else:
+                        kw_text, suffix = str(kw), ""
                     if kw_text:
-                        seo_section += f"- {kw_text}\n"
+                        seo_section += f"- {kw_text}{suffix}\n"
 
             if questions:
                 label = "QUESTIONS REAL USERS ASK (answer these)" if language == 'en' else "PERTANYAAN NYATA PENGGUNA (jawab ini)"

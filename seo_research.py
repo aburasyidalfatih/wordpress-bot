@@ -13,10 +13,11 @@ def patched_init(self, *args, **kwargs):
     original_init(self, *args, **kwargs)
 urllib3.util.retry.Retry.__init__ = patched_init
 
+import re
 import requests
 import json
-import time
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 try:
@@ -220,9 +221,13 @@ class SEOResearch:
             hl = 'en-US' if language == 'en' else 'id-ID'
             geo = 'US' if language == 'en' else 'ID'
             pytrends = TrendReq(hl=hl, tz=360 if language == 'en' else 420, retries=2, backoff_factor=0.5)
-            # Use a slightly broader timeframe and just one keyword
+            # Short window drives the momentum score.
             pytrends.build_payload([keyword], cat=0, timeframe='now 7-d', geo=geo)
             data = pytrends.interest_over_time()
+
+            # A 7-day window cannot tell a seasonal peak from a one-off spike, so
+            # also look at 12 months to detect recurring demand.
+            seasonality = self._get_seasonality(pytrends, keyword, geo)
             if not data.empty and keyword in data.columns:
                 values = [float(v) for v in data[keyword].tolist()]
                 recent = values[-min(24, len(values)):]
@@ -246,6 +251,7 @@ class SEOResearch:
                     'growth': round(growth, 1),
                     'volatility': round(volatility, 1),
                     'status': 'real',
+                    'seasonality': seasonality,
                 }
         except Exception as e:
             logger.error(f"Pytrends error for {keyword}: {e}")
@@ -253,12 +259,101 @@ class SEOResearch:
         return {'score': None, 'current': None, 'average': None, 'growth': None,
                 'volatility': None, 'status': 'unavailable'}
 
+    @staticmethod
+    def _get_seasonality(pytrends, keyword, geo):
+        """Detect recurring demand from a 12-month interest curve.
+
+        Returns the peak months and whether the topic looks seasonal, so a topic
+        can be scheduled when demand actually rises rather than at random.
+        """
+        try:
+            pytrends.build_payload([keyword], cat=0, timeframe='today 12-m', geo=geo)
+            yearly = pytrends.interest_over_time()
+            if yearly.empty or keyword not in yearly.columns:
+                return None
+
+            by_month = {}
+            for timestamp, value in yearly[keyword].items():
+                by_month.setdefault(timestamp.month, []).append(float(value))
+            monthly_avg = {m: sum(v) / len(v) for m, v in by_month.items() if v}
+            if len(monthly_avg) < 6:
+                return None
+
+            overall = sum(monthly_avg.values()) / len(monthly_avg)
+            if overall <= 0:
+                return None
+            peak_months = sorted(
+                (m for m, v in monthly_avg.items() if v >= overall * 1.3),
+                key=lambda m: monthly_avg[m], reverse=True
+            )[:3]
+            spread = max(monthly_avg.values()) - min(monthly_avg.values())
+            return {
+                'is_seasonal': bool(peak_months) and spread >= overall * .5,
+                'peak_months': peak_months,
+                'monthly_average': {str(m): round(v, 1) for m, v in sorted(monthly_avg.items())},
+            }
+        except Exception as e:
+            logger.warning(f"Seasonality lookup failed for '{keyword}': {e}")
+            return None
+
     def get_trend_score(self, keyword, language='id'):
         """Backward-compatible score accessor; zero means unavailable, never fake average."""
         return self.get_trend_analysis(keyword, language).get('score') or 0
 
-    def analyze_competitors(self, keyword, language='id'):
-        """Scrape top 3 competitors via DuckDuckGo and extract their headers"""
+    def _scrape_competitor(self, url, title):
+        """Fetch one competitor page and extract its structure.
+
+        Captures word count, full heading outline and any visible date, so callers
+        can judge how thorough and how current the competing page is.
+        """
+        try:
+            page_resp = requests.get(f"https://r.jina.ai/{url}", timeout=20)
+        except Exception as ex:
+            logger.warning(f"Failed to fetch competitor {url}: {ex}")
+            return None
+
+        if page_resp.status_code == 429:
+            logger.warning(f"Jina Reader rate-limited while fetching {url}; skipping.")
+            return None
+        if page_resp.status_code != 200:
+            logger.warning(f"Competitor fetch for {url} returned {page_resp.status_code}")
+            return None
+
+        content = page_resp.text
+        headers = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if line.startswith('## ') or line.startswith('### '):
+                header_text = re.sub(r'^#+\s*', '', line).strip()
+                if 10 < len(header_text) < 120:
+                    headers.append(header_text)
+            if len(headers) >= 15:
+                break
+
+        word_count = len(re.findall(r'\w+', content))
+        published = None
+        date_match = re.search(
+            r'\b(20\d{2}-\d{2}-\d{2})\b|\b(\d{1,2}\s+\w+\s+20\d{2})\b', content[:4000]
+        )
+        if date_match:
+            published = date_match.group(0)
+
+        return {
+            'url': url,
+            'title': title,
+            'headers': headers if headers else [title],
+            'heading_count': len(headers),
+            'word_count': word_count,
+            'published_hint': published,
+            'retrieved_via': 'duckduckgo+jina',
+        }
+
+    def analyze_competitors(self, keyword, language='id', limit=4):
+        """Scrape the top competitors via DuckDuckGo and extract their structure.
+
+        Pages are fetched concurrently: previously this ran serially with a 2 second
+        sleep between each, which dominated the runtime of a whole research pass.
+        """
         competitors = []
         if not self.ddgs:
             self._mark_source('competitors', 'unavailable', count=0)
@@ -266,43 +361,25 @@ class SEOResearch:
 
         try:
             region = 'us-en' if language == 'en' else 'id-id'
-            results = list(self.ddgs.text(keyword, region=region, max_results=3))
-            for res in results:
-                url = res.get('href')
-                title = res.get('title')
-                
-                # Fetch page content via Jina Reader to bypass Cloudflare
-                try:
-                    jina_url = f"https://r.jina.ai/{url}"
-                    page_resp = requests.get(jina_url, timeout=15)
-                    time.sleep(2) # Prevent Jina AI rate limiting
-                    if page_resp.status_code == 200:
-                        content = page_resp.text
-                        import re
-                        headers = []
-                        for line in content.split('\n'):
-                            line = line.strip()
-                            # Match Markdown headers ## or ###
-                            if line.startswith('## ') or line.startswith('### '):
-                                header_text = re.sub(r'^#+\s*', '', line)
-                                if 10 < len(header_text) < 100:
-                                    headers.append(header_text)
-                                    if len(headers) >= 5:
-                                        break
-                        
-                        competitors.append({
-                            'url': url,
-                            'title': title,
-                            'headers': headers if headers else [title],
-                            'retrieved_via': 'duckduckgo+jina',
-                        })
-                except Exception as ex:
-                    logger.warning(f"Failed to scrape competitor {url} via Jina: {ex}")
-                    continue
+            results = list(self.ddgs.text(keyword, region=region, max_results=limit))
         except Exception as e:
             logger.error(f"DDGS competitor search error: {e}")
             self._mark_source('competitors', 'unavailable', count=0, reason=type(e).__name__)
             return []
+
+        targets = [(r.get('href'), r.get('title')) for r in results if r.get('href')]
+        if targets:
+            with ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
+                futures = {pool.submit(self._scrape_competitor, url, title): url
+                           for url, title in targets}
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                    except Exception as ex:
+                        logger.warning(f"Competitor scrape failed for {futures[future]}: {ex}")
+                        continue
+                    if result:
+                        competitors.append(result)
 
         competitors = self._deduplicate(competitors, key=lambda item: item.get('url'))
         self._mark_source('competitors', 'real' if competitors else 'unavailable', count=len(competitors))
@@ -457,6 +534,53 @@ class SEOResearch:
             'passes_minimum': confidence != 'insufficient',
         }
 
+    def research_topic(self, topic, category_name=None, language='id'):
+        """Focused research for one specific article topic.
+
+        research_category() researches a broad category name, which produces generic
+        evidence for a specific article. This runs the same providers against the
+        actual title/topic, so the article is written against evidence for what it
+        is really about. Cheaper than a full category pass: no Trends, no news.
+        """
+        logger.info(f"Topic-level research: '{topic}' (category={category_name})")
+        self.source_status = {}
+
+        tasks = {
+            'suggestions': lambda: self.get_keyword_suggestions(topic, limit=10, language=language),
+            'questions': lambda: self.get_related_questions(topic, limit=8, language=language),
+            'competitors': lambda: self.analyze_competitors(topic, language=language, limit=3),
+            'social': lambda: self.get_social_insights(topic, language=language),
+        }
+
+        collected = {}
+        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+            futures = {pool.submit(fn): name for name, fn in tasks.items()}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    collected[name] = future.result()
+                except Exception as exc:
+                    logger.error(f"Topic research provider '{name}' failed for '{topic}': {exc}")
+                    collected[name] = None
+
+        suggestions = collected.get('suggestions') or []
+        questions = collected.get('questions') or []
+
+        autocomplete_is_fallback = (self.source_status.get('google_autocomplete') or {}).get('status') == 'fallback'
+        questions_are_fallback = (self.source_status.get('related_questions') or {}).get('status') == 'fallback'
+
+        return {
+            'topic': topic,
+            'category': category_name,
+            'keywords': [] if autocomplete_is_fallback else suggestions,
+            'questions': [] if questions_are_fallback else questions,
+            'competitor_outlines': collected.get('competitors') or [],
+            'social_insights': collected.get('social') or [],
+            'long_tail_keywords': self.build_long_tail_keywords(topic, suggestions, questions),
+            'source_metadata': self.source_status,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }
+
     def research_category(self, category_name, language='id'):
         """Deep Research a category including competitors, social, and youtube"""
         logger.info(f"Advanced Researching category: {category_name} with language={language}")
@@ -474,36 +598,55 @@ class SEOResearch:
                 job.meta['message'] = msg
                 job.save_meta()
                 
-        update_progress(20, f'Fetching keyword suggestions for {category_name}...')
-        # 1. Basic Keyword Suggestions
-        suggestions = self.get_keyword_suggestions(category_name, limit=10, language=language)
-        
-        update_progress(35, f'Analyzing Google Trends for {category_name}...')
-        # 2. Trend Score
-        trend_analysis = self.get_trend_analysis(category_name, language=language)
+        # These providers are independent network calls. Running them serially made a
+        # single category take tens of seconds; with ten categories that dominated the
+        # whole job. Fan them out and collect the results.
+        update_progress(25, f'Gathering evidence for {category_name}...')
+        tasks = {
+            'suggestions': lambda: self.get_keyword_suggestions(category_name, limit=10, language=language),
+            'trend_analysis': lambda: self.get_trend_analysis(category_name, language=language),
+            'competitors': lambda: self.analyze_competitors(category_name, language=language),
+            'social': lambda: self.get_social_insights(category_name, language=language),
+            'youtube': lambda: self.get_youtube_insights(category_name, language=language),
+            'questions': lambda: self.get_related_questions(category_name, limit=10, language=language),
+            'wikipedia': lambda: self.get_wikipedia_context(category_name, language=language),
+            'news': lambda: self.get_latest_news(category_name, limit=3),
+        }
+
+        collected = {}
+        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+            futures = {pool.submit(fn): name for name, fn in tasks.items()}
+            done = 0
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    collected[name] = future.result()
+                except Exception as exc:
+                    logger.error(f"Research provider '{name}' failed for {category_name}: {exc}")
+                    collected[name] = None
+                done += 1
+                update_progress(25 + int(65 * done / len(tasks)), f'{name} done for {category_name}...')
+
+        suggestions = collected.get('suggestions') or []
+        trend_analysis = collected.get('trend_analysis') or {'score': None, 'status': 'unavailable'}
         trend_score = trend_analysis.get('score') or 0
-        
-        update_progress(50, f'Scraping top competitors for {category_name}...')
-        # 3. Competitor Analysis
-        competitor_outlines = self.analyze_competitors(category_name, language=language)
-        
-        update_progress(65, f'Listening to social forums for {category_name}...')
-        # 4. Social Listening
-        social_insights = self.get_social_insights(category_name, language=language)
-        
-        update_progress(80, f'Extracting YouTube insights for {category_name}...')
-        # 5. YouTube Insights
-        youtube_insights = self.get_youtube_insights(category_name, language=language)
-        
-        update_progress(90, f'Finding related questions for {category_name}...')
-        # 6. Questions
-        questions = self.get_related_questions(category_name, limit=10, language=language)
-        
-        update_progress(95, f'Extracting Semantic Entities and News for {category_name}...')
-        # 7. Wikipedia & News
-        semantic_context = self.get_wikipedia_context(category_name, language=language)
-        news_insights = self.get_latest_news(category_name, limit=3)
+        competitor_outlines = collected.get('competitors') or []
+        social_insights = collected.get('social') or []
+        youtube_insights = collected.get('youtube') or []
+        questions = collected.get('questions') or []
+        semantic_context = collected.get('wikipedia') or ''
+        news_insights = collected.get('news') or []
+
+        update_progress(95, f'Scoring evidence for {category_name}...')
         long_tail_keywords = self.build_long_tail_keywords(category_name, suggestions, questions)
+
+        # Keywords produced by the offline fallback are invented, not observed. They
+        # are fine as UI hints but must not reach the article generator, which is now
+        # under an evidence policy.
+        autocomplete_is_fallback = (self.source_status.get('google_autocomplete') or {}).get('status') == 'fallback'
+        questions_are_fallback = (self.source_status.get('related_questions') or {}).get('status') == 'fallback'
+        evidence_suggestions = [] if autocomplete_is_fallback else suggestions
+        evidence_questions = [] if questions_are_fallback else questions
         transcript_count = sum(1 for item in youtube_insights if item.get('transcript_available'))
         quality = self.evaluate_quality(
             self.source_status,
@@ -516,6 +659,9 @@ class SEOResearch:
         result = {
             'category': category_name,
             'suggestions': suggestions,
+            # Only observed evidence is passed to the generator; see above.
+            'evidence_suggestions': evidence_suggestions,
+            'evidence_questions': evidence_questions,
             'trend_score': trend_score,
             'trend_analysis': trend_analysis,
             'competitor_outlines': competitor_outlines,

@@ -90,7 +90,8 @@ autowp/
 | SEO | Meta description, focus keyword, excerpt per-artikel, internal linking tervalidasi, schema BlogPosting + FAQPage |
 | Quality Gate | Menolak artikel terpotong, terlalu pendek, bocor template, atau mengandung kredensial karangan — sebelum publish |
 | Research Intelligence | Google Trends, autocomplete, kompetitor, sosial, YouTube, berita; dilengkapi provenance, freshness, dan quality gate |
-| Search Console Intelligence | OAuth read-only, query/page metrics, quick wins, low CTR, dan tren penurunan |
+| Search Console Intelligence | OAuth read-only, query/page metrics, quick wins, low CTR, tren penurunan — dipakai sebagai sumber topik & bukti saat menulis |
+| Content Planner | Aksi per peluang (artikel baru / rewrite meta / refresh konten), content gap vs kompetitor, deteksi search intent, volume dari impressions GSC |
 | Category Rotation | Rotasi kategori otomatis tiap posting |
 | AI Optimizer | Reorder kategori berdasarkan engagement |
 | Custom Prompts | Override prompt artikel & gambar per site |
@@ -132,6 +133,35 @@ di daftar yang diberikan ke model akan dilepas tag `<a>`-nya.
 
 Prompt tidak lagi terikat ke niche tertentu — konteks artikel dibangun dari nama
 kategori, deskripsi kategori, dan keyword hasil riset milik site itu sendiri.
+
+## Riset & Perencanaan Konten
+
+Riset berjalan dua tahap. `research_category()` mengumpulkan bukti di level kategori;
+saat topik spesifik sudah dipilih, `research_topic()` meriset topik itu sendiri dan
+hasilnya digabung di depan bukti kategori. Semua provider dijalankan paralel.
+
+Data Search Console tidak lagi sekadar ditampilkan — ia masuk ke pemilihan topik dan
+ke prompt artikel sebagai bukti first-party. Setiap peluang dipetakan ke aksi yang
+tepat di `services/content_planner.py`:
+
+| Peluang | Aksi | Alasan |
+|---|---|---|
+| `quick_win` (posisi 4–20) | Artikel baru / pendukung | Permintaan terbukti, tinggal diperkuat |
+| `low_ctr` (posisi ≤10, CTR <2%) | Rewrite title & meta | Sudah ranking; artikel baru justru bersaing sendiri |
+| `declining` (klik turun >20%) | Refresh artikel lama | Kontennya usang, bukan kurang konten |
+
+Tambahan lain: impressions GSC dipakai sebagai proxy volume pencarian, content gap
+dihitung dari heading kompetitor vs judul yang sudah terbit, search intent
+(transactional / commercial / informational / navigational) menentukan struktur
+artikel, dan Google Trends kini juga mengambil jendela 12 bulan untuk mendeteksi
+pola musiman.
+
+Judul baru di-dedup terhadap seluruh antrean dan artikel terbit di situs itu —
+lintas kategori — supaya dua kategori tidak menghasilkan judul yang bersaing.
+
+Auto-post memakai gate bukti yang **sama** dengan jalur manual: riset harus
+berconfidence high/medium/low dan berumur maksimal `MAX_RESEARCH_AGE_DAYS` (7 hari).
+Kalau tidak ada yang memenuhi, sistem jatuh ke rotasi kategori biasa.
 
 ## Jadwal Posting
 

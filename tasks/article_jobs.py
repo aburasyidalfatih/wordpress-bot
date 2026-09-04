@@ -12,6 +12,102 @@ from core_extensions import (
     post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
 )
 
+def _merge_topic_research(seo_data, topic, category_name, language='id'):
+    """Run topic-level research and merge it ahead of the category-level evidence.
+
+    Returns seo_data unchanged on failure; this is an enrichment step and must not
+    be able to fail an article.
+    """
+    try:
+        from seo_research import SEOResearch
+        topic_data = SEOResearch().research_topic(topic, category_name, language=language)
+    except Exception as e:
+        logger.warning(f"Topic-level research failed for '{topic}': {e}")
+        return seo_data
+
+    merged = dict(seo_data or {})
+
+    def combine(key, limit):
+        # Topic-specific evidence first, category evidence as backfill.
+        values = list(topic_data.get(key) or []) + list(merged.get(key) or [])
+        seen, output = set(), []
+        for value in values:
+            marker = value.get('url') if isinstance(value, dict) and value.get('url') else str(value)
+            marker = marker.lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            output.append(value)
+            if len(output) >= limit:
+                break
+        return output
+
+    merged['keywords'] = combine('keywords', 12)
+    merged['questions'] = combine('questions', 8)
+    merged['competitor_outlines'] = combine('competitor_outlines', 4)
+    merged['social_insights'] = combine('social_insights', 6)
+    merged['long_tail'] = combine('long_tail_keywords', 12)
+    logger.info(
+        f"Merged topic research for '{topic}': "
+        f"{len(merged['keywords'])} keywords, {len(merged['competitor_outlines'])} competitors"
+    )
+    return merged
+
+
+def _attach_search_evidence(seo_data, user_id, site_id, category_name):
+    """Add Search Console queries, content gaps and intent to the research payload.
+
+    Returns seo_data unchanged on any failure: this is additive intelligence and
+    must never block article generation.
+    """
+    try:
+        from models import SearchConsoleMetric
+        from services.search_console import build_search_opportunities
+        from services.content_planner import (
+            topic_candidates_from_opportunities, keyword_demand_map,
+            annotate_keywords_with_demand, find_content_gaps,
+            classify_intent, intent_guidance,
+        )
+
+        with db.get_session() as session:
+            metrics = session.query(SearchConsoleMetric).filter_by(
+                user_id=user_id, site_id=site_id
+            ).order_by(SearchConsoleMetric.synced_at.desc()).all()
+            current_rows = [
+                {'query': m.query, 'page': m.page, 'clicks': m.clicks,
+                 'impressions': m.impressions, 'ctr': m.ctr, 'position': m.position}
+                for m in metrics if m.period_label == 'current'
+            ]
+            previous_rows = [
+                {'query': m.query, 'page': m.page, 'clicks': m.clicks,
+                 'impressions': m.impressions, 'ctr': m.ctr, 'position': m.position}
+                for m in metrics if m.period_label == 'previous'
+            ]
+            published_titles = [
+                row[0] for row in session.query(PostLog.title).filter(
+                    PostLog.user_id == user_id,
+                    PostLog.site_id == site_id,
+                    PostLog.success.is_(True)
+                ).order_by(PostLog.created_at.desc()).limit(200).all()
+                if row[0]
+            ]
+
+        data = dict(seo_data or {})
+        if current_rows:
+            opportunities = build_search_opportunities(current_rows, previous_rows, limit=20)
+            data['search_queries'] = topic_candidates_from_opportunities(opportunities, limit=6)
+            data['keywords'] = annotate_keywords_with_demand(
+                data.get('keywords'), keyword_demand_map(current_rows)
+            )
+        data['content_gaps'] = find_content_gaps(data.get('competitor_outlines'), published_titles, limit=5)
+        data['intent'] = classify_intent(category_name)
+        data['intent_guidance'] = intent_guidance(data['intent'])
+        return data
+    except Exception as e:
+        logger.warning(f"Could not attach search evidence for site {site_id}: {e}")
+        return seo_data
+
+
 def _set_queue_item_status(item_id, user_id, status, post_url=None):
     if not item_id:
         return
@@ -448,7 +544,20 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                         logger.info(f"Using SEO data: {len(seo_data.get('keywords', []))} keywords, {len(seo_data.get('questions', []))} questions, {len(seo_data.get('competitor_outlines', []))} competitors, {len(seo_data.get('social_insights', []))} social, {len(seo_data.get('youtube_insights', []))} youtube")
             except Exception as e:
                 logger.error(f"Error getting SEO data: {e}")
-        
+
+        # Second research stage. Category-level evidence is broad; once the actual
+        # topic is known, research that topic directly so the article is grounded in
+        # evidence about what it is really about.
+        if custom_topic:
+            seo_data = _merge_topic_research(seo_data, custom_topic, category['name'],
+                                             site_config.get('language', 'id'))
+
+        # Layer first-party Search Console evidence on top of the researched data.
+        # These are queries this exact site already ranks for, so they are the most
+        # reliable signal available about what the audience actually searches.
+        seo_data = _attach_search_evidence(seo_data, user_id, site_id, category['name'])
+
+
         custom_article_prompt = site_config.get('article_prompt') or None
         custom_image_prompt = site_config.get('image_prompt') or None
         
