@@ -63,8 +63,10 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
                 # Get SEO research data
                 try:
                     seo_data = seo.research_category(category_name, language=language)
-                    keywords = seo_data.get('suggestions', [])
-                    questions = seo_data.get('questions', [])
+                    # Fallback-generated keywords/questions are invented; store only
+                    # observed evidence so the article generator never sees them.
+                    keywords = seo_data.get('evidence_suggestions', seo_data.get('suggestions', []))
+                    questions = seo_data.get('evidence_questions', seo_data.get('questions', []))
                     competitor_outlines = seo_data.get('competitor_outlines', [])
                     youtube_insights = seo_data.get('youtube_insights', [])
                     social_insights = seo_data.get('social_insights', [])
@@ -220,8 +222,13 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
                 'site_name': site.site_name
             }
         
-        from bot import WordPressPublisher
-        bot = WordPressPublisher(site_config['wordpress_url'], site_config['wordpress_username'], site_config['wordpress_password'])
+        from services.wp_publisher import WordPressPublisher
+        bot = WordPressPublisher(
+            site_config['wordpress_url'],
+            site_config['wordpress_username'],
+            site_config['wordpress_password'],
+            site_name=site_config.get('site_name')
+        )
         
         # Get all posts
         page = 1

@@ -1,12 +1,20 @@
 import json
+import re
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import SQLAlchemyError
 
 from core_extensions import db, q, trending, logger, load_config, require_jwt
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from database import MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS
 from models import SearchConsoleMetric
 from services.search_console import build_search_opportunities
+from services.content_planner import (
+    plan_from_opportunities, topic_candidates_from_opportunities,
+    keyword_demand_map, annotate_keywords_with_demand,
+    find_content_gaps, classify_intent, intent_guidance,
+)
 
 research_bp = Blueprint('research', __name__)
 
@@ -74,6 +82,7 @@ def api_research(user_id):
     
     gsc_opportunities = []
     gsc_metrics_error = None
+    current_metrics = []
     try:
         with db.get_session() as session:
             metrics = session.query(SearchConsoleMetric).filter_by(
@@ -81,12 +90,39 @@ def api_research(user_id):
             ).order_by(SearchConsoleMetric.synced_at.desc()).all()
             current_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'current']
             previous_metrics = [_gsc_metric_dict(row) for row in metrics if row.period_label == 'previous']
-            gsc_opportunities = build_search_opportunities(current_metrics, previous_metrics, limit=10)
+            raw_opportunities = build_search_opportunities(current_metrics, previous_metrics, limit=20)
+            # Each opportunity now carries the action it actually calls for, so the
+            # UI can distinguish "write something new" from "fix the title".
+            gsc_opportunities = plan_from_opportunities(raw_opportunities, limit=10)
     except SQLAlchemyError as exc:
         # Search Console is additive intelligence. A migration/runtime problem in
         # its metric store must not take the existing Research page offline.
         logger.error(f'Could not load Search Console metrics for site_id={site_id}: {exc}')
         gsc_metrics_error = 'Data Search Console belum tersedia. Coba sinkronkan kembali.'
+
+    # Content gaps: competitor subtopics we have never published about. Uses data
+    # already stored on both sides, so it costs one extra query per category.
+    try:
+        with db.get_session() as session:
+            from models import PostLog
+            published_titles = [
+                row[0] for row in session.query(PostLog.title).filter(
+                    PostLog.user_id == user_id,
+                    PostLog.site_id == site_id,
+                    PostLog.success.is_(True)
+                ).order_by(PostLog.created_at.desc()).limit(200).all()
+                if row[0]
+            ]
+        demand = keyword_demand_map(current_metrics)
+        for name, entry in research_data.items():
+            entry['content_gaps'] = find_content_gaps(
+                entry.get('competitor_outlines'), published_titles
+            )
+            entry['keywords'] = annotate_keywords_with_demand(entry.get('keywords'), demand)
+            entry['intent'] = classify_intent(name)
+            entry['change_since_last_run'] = _research_delta(user_id, site_id, name)
+    except SQLAlchemyError as exc:
+        logger.error(f'Could not build content gaps for site_id={site_id}: {exc}')
 
     return jsonify({
         'success': True,
@@ -97,9 +133,72 @@ def api_research(user_id):
             'property_url': gsc_property_url,
             'last_synced_at': gsc_last_synced_at.isoformat() if gsc_last_synced_at else None,
             'opportunities': gsc_opportunities,
+            'topic_candidates': topic_candidates_from_opportunities(gsc_opportunities),
             'error': gsc_metrics_error,
         },
     })
+
+
+def _research_delta(user_id, site_id, category):
+    """Compare the two most recent research runs for a category.
+
+    The history is already stored; surfacing the movement turns a snapshot into a
+    trend, e.g. "trend score up 12, 3 new keywords since the last run".
+    """
+    try:
+        from models import ResearchData
+        with db.get_session() as session:
+            runs = session.query(ResearchData).filter(
+                ResearchData.user_id == user_id,
+                ResearchData.site_id == site_id,
+                ResearchData.category == category
+            ).order_by(ResearchData.created_at.desc()).limit(2).all()
+
+            if len(runs) < 2:
+                return None
+
+            latest, previous = runs[0], runs[1]
+            latest_kw = {str(k).lower() for k in (latest.keywords or [])}
+            previous_kw = {str(k).lower() for k in (previous.keywords or [])}
+
+            return {
+                'trend_score_change': (latest.trend_score or 0) - (previous.trend_score or 0),
+                'quality_score_change': (latest.quality_score or 0) - (previous.quality_score or 0),
+                'new_keywords': sorted(latest_kw - previous_kw)[:5],
+                'lost_keywords': sorted(previous_kw - latest_kw)[:5],
+                'previous_confidence': previous.confidence_level,
+                'previous_researched_at': (
+                    previous.researched_at.strftime('%d %b %Y, %H:%M')
+                    if previous.researched_at else None
+                ),
+            }
+    except SQLAlchemyError as exc:
+        logger.error(f'Could not compute research delta for {category}: {exc}')
+        return None
+
+
+def _normalize_title(title):
+    text = re.sub(r'\d+', '', (title or '').lower())
+    text = re.sub(r'[^\w\s]', ' ', text)
+    return ' '.join(text.split())
+
+
+def _filter_duplicate_titles(candidates, existing_titles, threshold=0.72):
+    """Drop candidate titles too similar to existing ones, or to each other."""
+    normalized_existing = [_normalize_title(t) for t in existing_titles if t]
+    kept = []
+    kept_normalized = []
+    for title in candidates:
+        norm = _normalize_title(title)
+        if not norm:
+            continue
+        pool = normalized_existing + kept_normalized
+        if any(SequenceMatcher(None, norm, other).ratio() >= threshold for other in pool):
+            logger.info(f"Skipping near-duplicate title: {title}")
+            continue
+        kept.append(title)
+        kept_normalized.append(norm)
+    return kept
 
 
 def _gsc_metric_dict(row):
@@ -277,8 +376,9 @@ def generate_titles(user_id, category):
             confidence = latest.confidence_level or 'unknown'
             research_time = latest.researched_at or latest.created_at
             age_days = (datetime.now() - research_time).days if research_time else 999
-            if confidence not in {'high', 'medium', 'low'} or age_days > 7:
-                reason = 'bukti riset belum terverifikasi' if confidence not in {'high', 'medium', 'low'} else 'data riset sudah lebih dari 7 hari'
+            if confidence not in USABLE_CONFIDENCE_LEVELS or age_days > MAX_RESEARCH_AGE_DAYS:
+                reason = ('bukti riset belum terverifikasi' if confidence not in USABLE_CONFIDENCE_LEVELS
+                          else f'data riset sudah lebih dari {MAX_RESEARCH_AGE_DAYS} hari')
                 return jsonify({
                     'success': False,
                     'error': f'Tidak aman membuat judul dari data ini: {reason}. Silakan riset ulang.'
@@ -286,15 +386,74 @@ def generate_titles(user_id, category):
             
             keywords = latest.keywords or []
             questions = latest.questions or []
+            competitor_outlines = latest.competitor_outlines or []
             site_name = site.site_name
             language = site.language or 'id'
-            
+
             category_desc = ""
             for cat in (site.categories or []):
                 if cat.get('name') == category:
                     category_desc = cat.get('description', '')
                     break
         
+        # Search Console queries are the strongest topic signal available: real
+        # searches that already produced impressions for this exact site. Feed the
+        # quick-win queries and the content gaps into the title prompt.
+        gsc_topics = []
+        content_gaps = []
+        try:
+            with db.get_session() as session:
+                metrics = session.query(SearchConsoleMetric).filter_by(
+                    user_id=user_id, site_id=site_id
+                ).order_by(SearchConsoleMetric.synced_at.desc()).all()
+                current_rows = [_gsc_metric_dict(r) for r in metrics if r.period_label == 'current']
+                previous_rows = [_gsc_metric_dict(r) for r in metrics if r.period_label == 'previous']
+                opportunities = build_search_opportunities(current_rows, previous_rows, limit=20)
+                gsc_topics = topic_candidates_from_opportunities(opportunities, limit=6)
+
+                from models import PostLog
+                published_titles = [
+                    row[0] for row in session.query(PostLog.title).filter(
+                        PostLog.user_id == user_id,
+                        PostLog.site_id == site_id,
+                        PostLog.success.is_(True)
+                    ).order_by(PostLog.created_at.desc()).limit(200).all()
+                    if row[0]
+                ]
+            content_gaps = find_content_gaps(competitor_outlines, published_titles, limit=5)
+        except SQLAlchemyError as exc:
+            logger.error(f'Could not load search evidence for titles (site_id={site_id}): {exc}')
+
+        gsc_block = ""
+        if gsc_topics:
+            lines = "\n".join(
+                f"- \"{t['query']}\" ({int(t['impressions'] or 0)} impressions, posisi {t['position']})"
+                for t in gsc_topics
+            )
+            if language == 'en':
+                gsc_block = (
+                    "\n\nREAL SEARCH QUERIES this site already gets impressions for. These are\n"
+                    "the highest-value topics; prioritise them:\n" + lines + "\n"
+                )
+            else:
+                gsc_block = (
+                    "\n\nQUERY PENCARIAN NYATA yang sudah mendatangkan impression ke situs ini.\n"
+                    "Ini topik paling bernilai, prioritaskan:\n" + lines + "\n"
+                )
+
+        gap_block = ""
+        if content_gaps:
+            lines = "\n".join(f"- {g['topic']}" for g in content_gaps)
+            if language == 'en':
+                gap_block = ("\n\nCONTENT GAPS - competitors cover these, this site does not:\n"
+                             + lines + "\n")
+            else:
+                gap_block = ("\n\nCELAH KONTEN - dibahas kompetitor tapi belum ada di situs ini:\n"
+                             + lines + "\n")
+
+        category_intent = classify_intent(category)
+        intent_block = f"\n\nSEARCH INTENT: {category_intent}. {intent_guidance(category_intent, language)}\n"
+
         # Use ArticleGenerator to suggest titles
         from services.article_generator import ArticleGenerator
         generator = ArticleGenerator(
@@ -319,6 +478,7 @@ Additional Context:
 - Related keywords: {', '.join(keywords[:5]) if keywords else category}
 - Frequently asked questions: {', '.join(questions[:3]) if questions else ''}
 
+{gsc_block}{gap_block}{intent_block}
 Output format must be a JSON list of strings without markdown formatting like this:
 ["Article Title 1", "Article Title 2", "Article Title 3"]"""
         else:
@@ -336,6 +496,7 @@ Konteks Tambahan:
 - Kata kunci terkait: {', '.join(keywords[:5]) if keywords else category}
 - Isu/pertanyaan yang sering dicari: {', '.join(questions[:3]) if questions else ''}
 
+{gsc_block}{gap_block}{intent_block}
 Format output harus berupa JSON list of strings tanpa markdown formatting seperti ini:
 ["Judul Artikel 1", "Judul Artikel 2", "Judul Artikel 3"]"""
 
@@ -354,10 +515,34 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
         if not isinstance(titles, list):
             raise ValueError('Respons AI bukan daftar judul')
         titles = [str(title).strip() for title in titles if isinstance(title, str) and title.strip()]
-        titles = list(dict.fromkeys(titles))[:count]
+        titles = list(dict.fromkeys(titles))
+
+        # Deduplicate against everything this site already has queued or published,
+        # across all categories. Two categories can otherwise produce near-identical
+        # titles that end up competing with each other.
+        with db.get_session() as session:
+            from models import PostLog
+            existing = [
+                row[0] for row in session.query(ContentQueue.title).filter(
+                    ContentQueue.user_id == user_id,
+                    ContentQueue.site_id == site_id
+                ).all() if row[0]
+            ]
+            existing += [
+                row[0] for row in session.query(PostLog.title).filter(
+                    PostLog.user_id == user_id,
+                    PostLog.site_id == site_id,
+                    PostLog.success.is_(True)
+                ).order_by(PostLog.created_at.desc()).limit(300).all() if row[0]
+            ]
+
+        titles = _filter_duplicate_titles(titles, existing)[:count]
         if not titles:
-            raise ValueError('AI tidak menghasilkan judul valid')
-        
+            return jsonify({
+                'success': False,
+                'error': 'Semua judul yang dihasilkan terlalu mirip dengan yang sudah ada. Coba riset ulang atau ganti kategori.'
+            }), 409
+
         # Save to ContentQueue
         with db.get_session() as session:
             for title in titles:

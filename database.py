@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
@@ -19,6 +19,11 @@ MIGRATION_LOCK_ID = 4207311001
 # that already-migrated databases re-run the set exactly once.
 SCHEMA_VERSION = 4
 SCHEMA_VERSION_KEY = '__schema_version__'
+
+# Research older than this is not used to drive new articles. Shared by the
+# automated path and the manual title generator so both apply the same bar.
+MAX_RESEARCH_AGE_DAYS = 7
+USABLE_CONFIDENCE_LEVELS = ('high', 'medium', 'low')
 
 
 class Database:
@@ -650,14 +655,31 @@ class Database:
             logger.info(f"Research data saved for category: {category}")
     
     def get_unused_research_topic(self, user_id, site_id, category):
+        """Pick the next researched topic for an automated post.
+
+        Applies the same evidence bar as the manual /api/generate-titles route.
+        Auto-posting runs unattended, so it must not be looser than the path a
+        human is watching: stale or low-confidence research is skipped entirely.
+        """
+        cutoff = datetime.now() - timedelta(days=MAX_RESEARCH_AGE_DAYS)
         with self.get_session() as session:
             research = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
                 ResearchData.category == category,
-                ResearchData.used.is_(False)
+                ResearchData.used.is_(False),
+                ResearchData.confidence_level.in_(USABLE_CONFIDENCE_LEVELS),
+                ResearchData.researched_at >= cutoff
             ).order_by(ResearchData.created_at.desc()).first()
-            
+
+            if not research:
+                logger.info(
+                    f"No fresh, confident research topic for category '{category}' "
+                    f"(site_id={site_id}); falling back to category rotation."
+                )
+                return None
+
+
             if research and research.suggested_topics:
                 topics_list = list(research.suggested_topics) if research.suggested_topics else []
                 topic = topics_list[0] if topics_list else None
