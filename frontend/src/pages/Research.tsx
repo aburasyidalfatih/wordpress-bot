@@ -61,10 +61,19 @@ export interface CategoryType {
   description?: string;
 }
 
+export interface ResearchKeyword {
+  keyword: string;
+  impressions: number | null;
+  has_demand_data: boolean;
+  intent?: string;
+}
+
 export interface ResearchStats {
   created_at: string;
   trend_score: number;
-  keywords: string[];
+  // The API annotates keywords with Search Console demand. Older responses (and
+  // research saved before that change) may still return plain strings.
+  keywords: (ResearchKeyword | string)[];
   quality_score: number;
   confidence_level: 'high' | 'medium' | 'low' | 'insufficient' | 'unknown';
   is_fallback: boolean;
@@ -564,11 +573,24 @@ export default function Research() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {stats.keywords && stats.keywords.length > 0 ? (
-                          stats.keywords.map((kw: string, i: number) => (
-                            <span key={i} className="text-xs px-2.5 py-1 bg-background border shadow-sm rounded-full text-foreground/80 hover:text-foreground transition-colors">
-                              {kw}
-                            </span>
-                          ))
+                          stats.keywords.map((kw, i: number) => {
+                            const text = typeof kw === 'string' ? kw : kw.keyword;
+                            const impressions = typeof kw === 'string' ? null : kw.impressions;
+                            return (
+                              <span
+                                key={i}
+                                title={impressions ? `${impressions} impressions di Search Console` : undefined}
+                                className="text-xs px-2.5 py-1 bg-background border shadow-sm rounded-full text-foreground/80 hover:text-foreground transition-colors inline-flex items-center gap-1.5"
+                              >
+                                {text}
+                                {impressions ? (
+                                  <span className="text-[10px] font-medium text-primary">
+                                    {impressions.toLocaleString('id-ID')}
+                                  </span>
+                                ) : null}
+                              </span>
+                            );
+                          })
                         ) : (
                           <span className="text-xs text-muted-foreground italic">No keywords found</span>
                         )}
