@@ -87,7 +87,8 @@ autowp/
 | Auto Post | Generate & publish terjadwal per site (timezone-aware) |
 | Multi-platform | Telegram (chat & channel), Facebook, Twitter/X, Threads, Pinterest |
 | Gemini AI | Model artikel & gambar dikonfigurasi terpisah |
-| SEO | Meta description, focus keyword, excerpt, internal linking |
+| SEO | Meta description, focus keyword, excerpt per-artikel, internal linking tervalidasi, schema BlogPosting + FAQPage |
+| Quality Gate | Menolak artikel terpotong, terlalu pendek, bocor template, atau mengandung kredensial karangan — sebelum publish |
 | Research Intelligence | Google Trends, autocomplete, kompetitor, sosial, YouTube, berita; dilengkapi provenance, freshness, dan quality gate |
 | Search Console Intelligence | OAuth read-only, query/page metrics, quick wins, low CTR, dan tren penurunan |
 | Category Rotation | Rotasi kategori otomatis tiap posting |
@@ -108,6 +109,29 @@ DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image'
 Semua modul mengimpor konstanta ini — jangan menulis ulang string model secara
 hardcode. Pilihan yang tersedia di UI ada di `frontend/src/pages/AdminDashboard.tsx`;
 kalau menambah opsi di sana, pastikan tetap konsisten dengan konstanta di atas.
+
+## Kebijakan Konten
+
+Prompt artikel memuat **Evidence Policy** yang berprioritas tertinggi dan mengalahkan
+instruksi lain, termasuk custom prompt per site:
+
+- Angka dan statistik hanya boleh dipakai kalau muncul di data riset yang diberikan.
+- Dilarang mengarang kutipan atau mengatribusikan pernyataan ke orang/lembaga bernama.
+- Dilarang mengklaim pengalaman langsung yang tidak dimiliki penerbit.
+- Studi kasus tanpa dukungan data harus jelas ditulis sebagai hipotetis.
+
+Alasannya: mengarang kredensial dan statistik adalah E-E-A-T palsu — persis yang
+disasar kebijakan spam dan helpful content Google, selain membawa risiko hukum.
+Keahlian ditunjukkan lewat penalaran, struktur, dan panduan yang benar-benar bisa
+dipraktikkan.
+
+`services/quality_gate.py` menegakkan ini sebelum publish. Artikel ditolak (kredit
+dikembalikan) kalau terpotong, di bawah 900 kata, kurang dari 3 heading H2, bocor
+label template, atau memuat frasa kredensial karangan. Link internal yang tidak ada
+di daftar yang diberikan ke model akan dilepas tag `<a>`-nya.
+
+Prompt tidak lagi terikat ke niche tertentu — konteks artikel dibangun dari nama
+kategori, deskripsi kategori, dan keyword hasil riset milik site itu sendiri.
 
 ## Jadwal Posting
 

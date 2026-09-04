@@ -1,6 +1,7 @@
 from google import genai
 from google.genai import types
 import re
+from datetime import datetime
 from io import BytesIO
 from PIL import Image
 import logging
@@ -9,12 +10,67 @@ from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 logger = logging.getLogger(__name__)
 
+# A 2000-2500 word HTML article plus meta, FAQs and takeaways does not fit in 8k
+# tokens. Truncated output used to be published as-is with unclosed HTML tags.
+MAX_OUTPUT_TOKENS = 16384
+
+
+class TruncatedGenerationError(Exception):
+    """Raised when the model hit the output token limit mid-article."""
+
+
 def sanitize_filename(name):
     import unicodedata
     name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
     name = re.sub(r'[^a-zA-Z0-9._-]', '-', name)
     name = re.sub(r'-+', '-', name)
     return name.strip('-')
+
+
+def strip_html(text):
+    """Plain text from HTML, for deriving excerpts and counting words."""
+    if not text:
+        return ""
+    text = re.sub(r'<script[^>]*>.*?</script>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<style[^>]*>.*?</style>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    import html as html_mod
+    text = html_mod.unescape(text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def derive_excerpt(content, limit=160):
+    """Build an excerpt from the article's own opening prose.
+
+    Never returns a canned template — a per-article excerpt is what makes the
+    meta description unique across the site.
+    """
+    plain = strip_html(content)
+    if not plain:
+        return ""
+    sentences = re.split(r'(?<=[.!?])\s+', plain)
+    excerpt = ""
+    for sentence in sentences:
+        candidate = (excerpt + " " + sentence).strip() if excerpt else sentence
+        if len(candidate) > limit:
+            break
+        excerpt = candidate
+    if not excerpt:
+        excerpt = plain[:limit].rsplit(' ', 1)[0]
+    return excerpt.strip()
+
+
+def derive_takeaways(content, limit=4):
+    """Fall back to the article's own H2 headings rather than a fixed template."""
+    headings = re.findall(r'<h2[^>]*>(.*?)</h2>', content or '', flags=re.DOTALL | re.IGNORECASE)
+    takeaways = []
+    for heading in headings:
+        text = strip_html(heading)
+        if text and len(text) > 3:
+            takeaways.append(text)
+        if len(takeaways) >= limit:
+            break
+    return takeaways
 
 class ArticleGenerator:
     def __init__(self, api_key, model=DEFAULT_GEMINI_MODEL, image_model=DEFAULT_GEMINI_IMAGE_MODEL):
@@ -25,7 +81,10 @@ class ArticleGenerator:
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type((genai.errors.ServerError, genai.errors.APIError, ConnectionError, TimeoutError))
+        retry=retry_if_exception_type((
+            genai.errors.ServerError, genai.errors.APIError,
+            ConnectionError, TimeoutError, TruncatedGenerationError
+        ))
     )
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
         # Resolve custom prompt from either parameter name
@@ -38,71 +97,23 @@ class ArticleGenerator:
         else:
             target_audience = f"Pembaca website {target_site}"
         
-        # Context mapping untuk setiap kategori
-        context_map = {
-            'Digitalisasi Pendidikan': 'transformasi digital sekolah, sistem informasi manajemen pendidikan, platform pembelajaran online, administrasi paperless, teknologi pendidikan',
-            'Strategi Pemasaran': 'digital marketing sekolah, social media strategy, branding lembaga pendidikan, student recruitment, SEO website sekolah, promosi online',
-            'Pengembangan Kurikulum': 'Kurikulum Merdeka, implementasi kurikulum, student-centered learning, assessment methods, pelatihan guru, IHT',
-            'Manajemen Keuangan': 'manajemen keuangan sekolah, budgeting pendidikan, transparansi keuangan, software akuntansi, ISAK 35 compliance',
-            'Legalitas Dan Perizinan': 'izin operasional sekolah, akreditasi, compliance regulasi pendidikan, dokumen legal lembaga',
-            'Manajemen SDM': 'rekrutmen guru, performance management, teacher training, retention strategy, pengembangan SDM pendidikan',
-            'Layanan Orang Tua': 'komunikasi sekolah-orang tua, parent engagement, sistem informasi orang tua, keterlibatan keluarga',
-            'Pembuatan SOP': 'standar operasional prosedur sekolah, dokumentasi proses, quality assurance pendidikan',
-            'Manajemen Asrama': 'pengelolaan asrama, boarding school management, kesejahteraan siswa asrama',
-            'Unit Usaha Sekolah': 'kewirausahaan sekolah, income generating activities, koperasi sekolah, bisnis unit pendidikan',
-            'Hotnews Pendidikan': 'berita viral pendidikan, trending education news, isu pendidikan terkini, viral education stories, hot topics pendidikan Indonesia',
-            'Biaya Pendidikan': 'biaya sekolah swasta, biaya masuk universitas, PSB pendaftaran siswa baru, biaya kuliah, beasiswa pendidikan, informasi biaya pendidikan Indonesia'
-        }
+        # Context for the article is derived from this site's own data (category name,
+        # the admin-written category description, and researched keywords) instead of a
+        # hardcoded industry vocabulary. AutoWP is multi-tenant: a fixed niche map made
+        # every tenant's articles read as if they were about that one niche.
+        current_year = datetime.now().year
+        category_desc = kwargs.get('category_desc')
 
-        context_map_en = {
-            'Digitalisasi Pendidikan': 'school digital transformation, education management information system, online learning platform, paperless administration, edtech',
-            'Strategi Pemasaran': 'school digital marketing, social media strategy, education branding, student recruitment, school website SEO, online promotion',
-            'Pengembangan Kurikulum': 'curriculum implementation, student-centered learning, assessment methods, teacher training, professional development',
-            'Manajemen Keuangan': 'school financial management, education budgeting, financial transparency, accounting software, compliance',
-            'Legalitas Dan Perizinan': 'school operational permit, accreditation, educational regulation compliance, legal documents',
-            'Manajemen SDM': 'teacher recruitment, performance management, teacher training, retention strategy, educational HR development',
-            'Layanan Orang Tua': 'school-parent communication, parent engagement, parent information system, family involvement',
-            'Pembuatan SOP': 'school standard operating procedures, process documentation, educational quality assurance',
-            'Manajemen Asrama': 'dormitory management, boarding school management, student welfare',
-            'Unit Usaha Sekolah': 'school entrepreneurship, income generating activities, school cooperative, education business unit',
-            'Hotnews Pendidikan': 'viral education news, trending education news, current education issues, viral education stories, hot topics in education',
-            'Biaya Pendidikan': 'private school fees, university admission fees, student enrollment, tuition fees, scholarships, education cost information'
-        }
+        context_parts = [topic]
+        if category_desc:
+            context_parts.append(category_desc)
+        if seo_data:
+            for kw in (seo_data.get('keywords') or [])[:8]:
+                kw_text = kw.get('keyword') if isinstance(kw, dict) else str(kw)
+                if kw_text:
+                    context_parts.append(kw_text)
+        context = ", ".join(dict.fromkeys(p for p in context_parts if p))
 
-        context_map_en_keys = {
-            'Digital Education': 'school digital transformation, education management information system, online learning platform, paperless administration, edtech',
-            'Marketing Strategy': 'school digital marketing, social media strategy, education branding, student recruitment, school website SEO, online promotion',
-            'Curriculum Development': 'curriculum implementation, student-centered learning, assessment methods, teacher training, professional development',
-            'Financial Management': 'school financial management, education budgeting, financial transparency, accounting software, compliance',
-            'Legality and Licensing': 'school operational permit, accreditation, educational regulation compliance, legal documents',
-            'HR Management': 'teacher recruitment, performance management, teacher training, retention strategy, educational HR development',
-            'Parent Services': 'school-parent communication, parent engagement, parent information system, family involvement',
-            'SOP Creation': 'school standard operating procedures, process documentation, educational quality assurance',
-            'Dormitory Management': 'dormitory management, boarding school management, student welfare',
-            'School Business Unit': 'school entrepreneurship, income generating activities, school cooperative, education business unit',
-            'Education Hotnews': 'viral education news, trending education news, current education issues, viral education stories, hot topics in education',
-            'Education Cost': 'private school fees, university admission fees, student enrollment, tuition fees, scholarships, education cost information'
-        }
-        
-        context = topic
-        if language == 'en':
-            found = False
-            for k, v in context_map_en_keys.items():
-                if k.lower() == topic.lower():
-                    context = v
-                    found = True
-                    break
-            if not found:
-                for k, v in context_map_en.items():
-                    if k.lower() == topic.lower():
-                        context = v
-                        break
-        else:
-            for k, v in context_map.items():
-                if k.lower() == topic.lower():
-                    context = v
-                    break
-        
         # Add existing titles to prompt to avoid duplicates
         existing_titles_text = ""
         if existing_titles:
@@ -152,111 +163,180 @@ class ArticleGenerator:
         else:
             research_note = f"\n\nðŸ”¥ TRENDING TOPIC: {custom_topic}\nFokuskan artikel pada topik trending ini dalam konteks {topic}.\n" if custom_topic else ""
         
-        # Add SEO data if available
+        # Research evidence handed to the model. Everything factual the article claims
+        # must be traceable back to this block; see the EVIDENCE POLICY in the prompt.
         seo_section = ""
+        has_evidence = False
         if seo_data:
             keywords = seo_data.get('keywords', [])
             questions = seo_data.get('questions', [])
             semantic_context = seo_data.get('semantic_context', "")
             news_insights = seo_data.get('news_insights', [])
-            
+
             if semantic_context:
-                if language == 'en':
-                    seo_section += f"\n\nðŸ“š SEMANTIC CONTEXT (Wikipedia Background):\n{semantic_context}\n"
-                else:
-                    seo_section += f"\n\nðŸ“š KONTEKS SEMANTIK (Latar Belakang Wikipedia):\n{semantic_context}\n"
-                    
+                label = "BACKGROUND CONTEXT" if language == 'en' else "KONTEKS LATAR BELAKANG"
+                seo_section += f"\n\n[{label}]\n{semantic_context}\n"
+                has_evidence = True
+
             if news_insights:
-                if language == 'en':
-                    seo_section += f"\n\nðŸ“° LATEST NEWS (Incorporate these current events as 'Angle'):\n"
-                else:
-                    seo_section += f"\n\nðŸ“° BERITA TERKINI (Gunakan sebagai 'Angle' Kekinian):\n"
+                label = "RECENT NEWS (verified sources)" if language == 'en' else "BERITA TERKINI (sumber terverifikasi)"
+                seo_section += f"\n\n[{label}]\n"
                 for news in news_insights:
                     seo_section += f"- {news}\n"
-                    
+                has_evidence = True
+
             if keywords:
-                if language == 'en':
-                    seo_section += f"\n\nðŸ”‘ RELATED KEYWORDS (use naturally in the article):\n"
-                else:
-                    seo_section += f"\n\nðŸ”‘ RELATED KEYWORDS (gunakan natural di artikel):\n"
+                label = "RELATED KEYWORDS (use naturally)" if language == 'en' else "KEYWORD TERKAIT (gunakan natural)"
+                seo_section += f"\n\n[{label}]\n"
                 for kw in keywords[:10]:
-                    seo_section += f"- {kw}\n"
-            
+                    kw_text = kw.get('keyword') if isinstance(kw, dict) else str(kw)
+                    if kw_text:
+                        seo_section += f"- {kw_text}\n"
+
             if questions:
-                if language == 'en':
-                    seo_section += f"\n\nâ“ FREQUENTLY ASKED QUESTIONS (answer in the article):\n"
-                else:
-                    seo_section += f"\n\nâ“ PERTANYAAN YANG SERING DICARI (jawab di artikel):\n"
+                label = "QUESTIONS REAL USERS ASK (answer these)" if language == 'en' else "PERTANYAAN NYATA PENGGUNA (jawab ini)"
+                seo_section += f"\n\n[{label}]\n"
                 for q in questions[:5]:
-                    seo_section += f"- {q}\n"
-                if language == 'en':
-                    seo_section += "\nðŸ’¡ Ensure the article answers these questions comprehensively!\n"
-                else:
-                    seo_section += "\nðŸ’¡ Pastikan artikel menjawab pertanyaan-pertanyaan ini secara lengkap!\n"
-                    
+                    q_text = q.get('question') if isinstance(q, dict) else str(q)
+                    if q_text:
+                        seo_section += f"- {q_text}\n"
+                has_evidence = True
+
             competitor_outlines = seo_data.get('competitor_outlines', [])
             if competitor_outlines:
-                if language == 'en':
-                    seo_section += f"\n\nâš”ï¸ COMPETITOR ANALYSIS (Top Ranking Pages):\n"
-                else:
-                    seo_section += f"\n\nâš”ï¸ ANALISIS KOMPETITOR (Halaman Ranking Atas):\n"
+                label = "TOPICS COMPETITORS COVER" if language == 'en' else "TOPIK YANG DIBAHAS KOMPETITOR"
+                seo_section += f"\n\n[{label}]\n"
                 for comp in competitor_outlines[:3]:
                     headers_str = ", ".join(comp.get('headers', [])[:5])
-                    seo_section += f"- Competitor '{comp.get('title')}' covers: {headers_str}\n"
+                    seo_section += f"- '{comp.get('title')}' covers: {headers_str}\n"
                 if language == 'en':
-                    seo_section += "ðŸ’¡ MANDATORY: Your article MUST be more comprehensive, detailed, and cover angles these competitors missed!\n"
+                    seo_section += "Cover these angles at least as thoroughly, and add depth where they are thin.\n"
                 else:
-                    seo_section += "ðŸ’¡ WAJIB: Artikelmu HARUS lebih komprehensif, lebih detail, dan membahas sudut pandang yang dilewatkan oleh kompetitor ini!\n"
-                    
+                    seo_section += "Bahas sudut pandang ini minimal sama lengkapnya, dan perdalam bagian yang dangkal.\n"
+                has_evidence = True
+
             social_insights = seo_data.get('social_insights', [])
             if social_insights:
-                if language == 'en':
-                    seo_section += f"\n\nðŸ—£ï¸ REAL AUDIENCE INSIGHTS (Quora/Reddit Discussions):\n"
-                else:
-                    seo_section += f"\n\nðŸ—£ï¸ KELUHAN AUDIENS ASLI (Diskusi Quora/Reddit):\n"
+                label = "REAL AUDIENCE PAIN POINTS (public discussions)" if language == 'en' else "KELUHAN NYATA AUDIENS (diskusi publik)"
+                seo_section += f"\n\n[{label}]\n"
                 for insight in social_insights[:5]:
                     insight_text = insight.get('text', '') if isinstance(insight, dict) else str(insight)
                     if insight_text:
                         seo_section += f"- {insight_text}\n"
                 if language == 'en':
-                    seo_section += "ðŸ’¡ Address these real pain points and questions directly in your content.\n"
+                    seo_section += "Address these directly. They are real questions from real people.\n"
                 else:
-                    seo_section += "ðŸ’¡ Jawab keresahan dan masalah nyata dari manusia-manusia ini ke dalam artikelmu.\n"
-                    
+                    seo_section += "Jawab ini langsung. Ini pertanyaan nyata dari orang sungguhan.\n"
+                has_evidence = True
+
             youtube_insights = seo_data.get('youtube_insights', [])
             if youtube_insights:
-                if language == 'en':
-                    seo_section += f"\n\nðŸŽ¥ YOUTUBE EXPERT INSIGHTS (Transcripts from top videos):\n"
-                else:
-                    seo_section += f"\n\nðŸŽ¥ WAWASAN PAKAR YOUTUBE (Transkrip dari video teratas):\n"
                 transcript_items = [yt for yt in youtube_insights if yt.get('transcript_available') and yt.get('snippets')]
-                for yt in transcript_items[:2]:
-                    seo_section += f"- Video '{yt.get('title')}': \"{yt.get('snippets')}\"\n"
-                if language == 'en':
-                    seo_section += "ðŸ’¡ Weave these expert insights naturally into the article to boost E-E-A-T signals.\n"
-                else:
-                    seo_section += "ðŸ’¡ Selipkan wawasan dari transkrip video ini agar artikelmu memiliki sudut pandang praktisi (E-E-A-T).\n"
-        
+                if transcript_items:
+                    label = "PRACTITIONER INSIGHTS (video transcripts)" if language == 'en' else "WAWASAN PRAKTISI (transkrip video)"
+                    seo_section += f"\n\n[{label}]\n"
+                    for yt in transcript_items[:2]:
+                        seo_section += f"- Video '{yt.get('title')}': {yt.get('snippets')}\n"
+                    if language == 'en':
+                        seo_section += "You may cite these, attributed to the video title. Do not invent additional quotes.\n"
+                    else:
+                        seo_section += "Boleh dikutip dengan menyebut judul videonya. Jangan mengarang kutipan tambahan.\n"
+                    has_evidence = True
+
+        # The single most important rule in this prompt. The previous version asked the
+        # model to invent "realistic" case studies, named people and statistics. That is
+        # fabricated E-E-A-T and is precisely what Google's spam and helpful-content
+        # policies target.
+        if language == 'en':
+            evidence_state = ("You have been given researched evidence above."
+                              if has_evidence else
+                              "You have NOT been given researched evidence for this topic.")
+            evidence_policy = f"""
+
+=== EVIDENCE POLICY (HIGHEST PRIORITY - OVERRIDES EVERYTHING ELSE) ===
+{evidence_state}
+
+ABSOLUTE RULES:
+1. NEVER invent statistics, percentages, survey results, or numeric claims. Use a
+   number ONLY if it appears in the evidence above. Otherwise describe the effect
+   qualitatively ("costs typically fall", not "costs fall 40%").
+2. NEVER invent quotes. Do not attribute statements to named people, companies, or
+   institutions that were not given to you above. No made-up experts, no made-up
+   customers, no "realistic" placeholder names.
+3. NEVER claim first-hand experience the publisher does not have. Do not write
+   "based on our experience with 50+ clients", "our internal data shows", or any
+   similar manufactured credential.
+4. Case studies must be clearly generic and hypothetical when not evidence-backed.
+   Write "consider an organisation that..." - NOT "Acme Corp in Chicago grew 40%".
+5. If you cannot support a claim, make a weaker but honest claim. An accurate article
+   that is less impressive beats a confident article that is fabricated.
+6. Demonstrate expertise through clear reasoning, useful structure, correct
+   terminology and genuinely practical guidance - not through invented authority.
+
+Violating any rule above makes the article unusable.
+=== END EVIDENCE POLICY ===
+"""
+        else:
+            evidence_state = ("Kamu sudah diberi data riset di atas."
+                              if has_evidence else
+                              "Kamu TIDAK diberi data riset untuk topik ini.")
+            evidence_policy = f"""
+
+=== KEBIJAKAN BUKTI (PRIORITAS TERTINGGI - MENGALAHKAN SEMUA ATURAN LAIN) ===
+{evidence_state}
+
+ATURAN MUTLAK:
+1. JANGAN PERNAH mengarang statistik, persentase, hasil survei, atau klaim angka.
+   Gunakan angka HANYA jika muncul di data riset di atas. Kalau tidak ada, jelaskan
+   secara kualitatif ("biaya biasanya turun", bukan "biaya turun 40%").
+2. JANGAN PERNAH mengarang kutipan. Jangan mengatribusikan pernyataan kepada orang,
+   perusahaan, atau lembaga bernama yang tidak diberikan di atas. Tidak ada pakar
+   karangan, tidak ada narasumber karangan, tidak ada nama "yang realistis".
+3. JANGAN mengklaim pengalaman langsung yang tidak dimiliki penerbit. Jangan menulis
+   "berdasarkan pengalaman kami menangani 50+ klien", "data internal kami menunjukkan",
+   atau kredensial buatan sejenis.
+4. Studi kasus harus jelas bersifat umum dan hipotetis kalau tidak didukung data.
+   Tulis "bayangkan sebuah organisasi yang..." - BUKAN "SMA Harapan di Bandung naik 40%".
+5. Kalau sebuah klaim tidak bisa didukung, tulis klaim yang lebih lemah tapi jujur.
+   Artikel akurat yang terdengar biasa lebih baik daripada artikel meyakinkan yang palsu.
+6. Tunjukkan keahlian lewat penalaran jernih, struktur rapi, istilah yang tepat, dan
+   panduan yang benar-benar bisa dipraktikkan - bukan lewat otoritas karangan.
+
+Melanggar salah satu aturan di atas membuat artikel tidak bisa dipakai.
+=== AKHIR KEBIJAKAN BUKTI ===
+"""
+
         category_desc_text = ""
-        category_desc = kwargs.get('category_desc')
         if category_desc:
             if language == 'en':
-                category_desc_text = f"\n\nðŸ“‚ CATEGORY DESCRIPTION / WRITING INSTRUCTIONS:\n{category_desc}\nFollow these category instructions and focus the article style and scope on this description."
+                category_desc_text = f"\n\n[CATEGORY BRIEF]\n{category_desc}\nFollow this brief for the article's scope and angle."
             else:
-                category_desc_text = f"\n\nðŸ“‚ DESKRIPSI KATEGORI / PETUNJUK PENULISAN:\n{category_desc}\nIkuti petunjuk kategori ini dan fokuskan gaya serta ruang lingkup artikel pada deskripsi tersebut."
+                category_desc_text = f"\n\n[BRIEF KATEGORI]\n{category_desc}\nIkuti brief ini untuk ruang lingkup dan sudut pandang artikel."
 
         internal_links_text = ""
+        allowed_link_urls = []
         if internal_links_context:
+            allowed_link_urls = [p['url'] for p in internal_links_context[:30] if p.get('url')]
             if language == 'en':
-                internal_links_text = f"\n\nðŸ”— INTERNAL LINKING STRATEGY:\nHere are some of our previous articles:\n"
+                internal_links_text = "\n\n[INTERNAL LINKING]\nPreviously published articles on this site:\n"
                 for post in internal_links_context[:30]:
-                    internal_links_text += f"- Title: {post['title']} (URL: {post['url']})\n"
-                internal_links_text += "ðŸ’¡ IMPORTANT: Find 3-5 opportunities in your article where the topic naturally relates to the titles above. When it does, weave the title/context naturally into a sentence and make it an HTML link `<a href=\"...\">anchor text</a>`. DO NOT list them at the end; weave them inside paragraphs organically!\n"
+                    internal_links_text += f"- {post['title']} -> {post['url']}\n"
+                internal_links_text += (
+                    "Weave 3-5 of these into your paragraphs as natural HTML links "
+                    "<a href=\"URL\">anchor text</a>. CRITICAL: only use URLs copied "
+                    "exactly from the list above. Never invent a URL. Do not add a link "
+                    "list at the end.\n"
+                )
             else:
-                internal_links_text = f"\n\nðŸ”— STRATEGI INTERNAL LINKING:\nBerikut adalah artikel-artikel lama kita:\n"
+                internal_links_text = "\n\n[INTERNAL LINKING]\nArtikel yang sudah terbit di situs ini:\n"
                 for post in internal_links_context[:30]:
-                    internal_links_text += f"- Judul: {post['title']} (URL: {post['url']})\n"
-                internal_links_text += "ðŸ’¡ PENTING: Sisipkan 3-5 link secara natural di dalam paragraf artikelmu. Jika kalimatmu relevan dengan salah satu judul di atas, jadikan kalimat itu sebagai anchor text menggunakan tag HTML `<a href=\"...\">teks</a>`. JANGAN membuat daftar link di akhir artikel, sisipkan secara organik di dalam teks bacaan!\n"
+                    internal_links_text += f"- {post['title']} -> {post['url']}\n"
+                internal_links_text += (
+                    "Sisipkan 3-5 di antaranya ke dalam paragraf sebagai link HTML natural "
+                    "<a href=\"URL\">teks anchor</a>. PENTING: gunakan HANYA URL yang "
+                    "disalin persis dari daftar di atas. Jangan pernah mengarang URL. "
+                    "Jangan membuat daftar link di akhir artikel.\n"
+                )
 
         if custom_prompt:
             prompt = custom_prompt
@@ -268,236 +348,179 @@ class ArticleGenerator:
             prompt = prompt.replace('{internal_links_text}', internal_links_text)
             prompt = prompt.replace('{target_site}', target_site)
             prompt = prompt.replace('{target_audience}', target_audience)
+            prompt = prompt.replace('{current_year}', str(current_year))
         elif language == 'en':
-            prompt = f"""Write a high-quality, SEO-optimized blog article for the website {target_site} about: {topic_focus}
+            prompt = f"""Write an in-depth, genuinely useful article for the website {target_site} about: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
 TARGET AUDIENCE: {target_audience}
-RELATED KEYWORDS: {context}
+TOPIC CONTEXT: {context}
+CURRENT YEAR: {current_year} (use this year when a year is relevant)
 
-âš ï¸ IMPORTANT - CURRENT YEAR: 2026
-- If mentioning years, use 2026 or "currently"
-- Do not use the year 2024 or 2025
-- Example: "Complete Guide 2026" or "Latest Strategies"
+LENGTH: 2000-2500 words. Depth comes from genuinely covering the subject, not from
+padding. Every section must add information a reader could act on.
 
-ARTICLE STRUCTURE (MINIMUM 2000-2500 WORDS - STRICTLY REQUIRED!):
-âš ï¸ WRITE IN EXTREME DETAIL AND LENGTH. DO NOT SUMMARIZE. EACH SUB-HEADING MUST CONSIST OF AT LEAST 4-5 LONG AND COMPREHENSIVE PARAGRAPHS. CREATE A VERY DEEP ARTICLE. IF IT IS LESS THAN 2000 WORDS, THIS ARTICLE WILL BE REJECTED.
+STRUCTURE:
 
-1. INTRODUCTORY HOOK (100 words):
-   âš ï¸ MUST BE VARIATIVE - Use one of these approaches (DO NOT always use statistics):
-   
-   A. Story/Anecdote: "John, a manager in London, was almost desperate when..."
-   B. Problem Statement: "Imagine: Your costs went up by 20%, but your retention is dropping..."
-   C. Provocative Question: "What makes 3 out of 5 startups fail to survive?"
-   D. Surprising Fact: "In 2026, more businesses are closing than opening..."
-   E. Contrast: "Company A is full of customers, Company B is empty. The difference is only one thing..."
-   
-   âœ“ End with a promise: "This article will guide you..."
-   âœ— DO NOT always start with the same pattern
-   âœ— DO NOT use the same opening pattern as previous articles
+1. OPENING (about 100 words)
+   Vary the approach between articles - a concrete scenario, a sharp problem
+   statement, a question, or a counter-intuitive observation. End by telling the
+   reader what they will be able to do after reading.
 
-2. EXECUTIVE SUMMARY / TL;DR (AEO Box for Google AI Overviews):
-   - MUST create a box `<div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">`
-   - Contains 3 bullet points (`<ul>`) answering the core topic directly.
-   - This is crucial for Answer Engine Optimization 2026.
+2. KEY POINTS BOX (for Answer Engine Optimization / AI Overviews)
+   <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
+   containing a <ul> of 3 bullets that answer the core question directly and
+   specifically. These must be real answers, not teasers.
 
-3. CONTEXT (200 words):
-   - Current global or relevant regional situation related to the topic
-   - Why this topic is urgent and important
-   - Who needs this solution the most
+3. CONTEXT (about 200 words)
+   Why this matters now, and who it matters most to.
 
-3. MAIN CONTENT (1500-1700 words):
-   
-   H2: Core Concept & Importance (300 words)
-   - Clear definition with practical language
-   - Why this is critical for the target audience/organization
-   - Concrete real-world examples
-   
-   H2: Step-by-Step Practical Implementation (600 words)
-   - Actionable guide with a numbered list
-   - Realistic timeline (weeks/months)
-   - Tools/templates that can be used
-   - Checklist to get started
-   - Budget estimation if relevant
-   
-   H2: Real-World Case Study (400 words)
-   - Real-world or highly realistic company/organization (realistic name & location)
-   - Challenge â†’ Solution â†’ Result (with specific numbers)
-   - Lesson learned that can be applied
-   - MUST: Direct quote from a manager/expert (make it realistic & natural)
-     Format: "engaging and specific quote," says Full Name, Title at Organization in City.
-     Example: "Initially we were hesitant, but after 3 months of implementation, our efficiency went up by 40%," says Robert Chen, Operations Director at TechCorp in Chicago.
-   
-   H2: Tips & Best Practices (300 words)
-   - Do's and Don'ts in an HTML table format (DO NOT use ASCII art or Unicode box drawing)
-   - Common mistakes to avoid
-   - Pro tips from practitioners (can add a short quote)
-   - Quick wins that can be applied immediately
+4. MAIN BODY (1500-1700 words)
+   H2: Core concept and why it matters (~300 words)
+       Clear definition in plain language. Concrete, checkable examples.
+   H2: Step-by-step implementation (~600 words)
+       Numbered, actionable steps. Realistic timeframes. Tools or templates that
+       genuinely exist. A starting checklist.
+   H2: Worked example (~400 words)
+       A clearly hypothetical scenario ("consider a mid-sized team that...").
+       Walk through challenge, approach, and outcome. Keep outcomes qualitative
+       unless the evidence section gave you real figures.
+   H2: Practical tips and common mistakes (~300 words)
+       A do/don't comparison as an HTML <table>. Real mistakes people make.
 
-4. CONCLUSION (150 words):
-   - Recap 3-5 key takeaways
-   - Clear next action steps
-   - CTA: invitation to consult/download resource
+5. CONCLUSION (about 150 words)
+   Recap the 3-5 things that matter most, then a clear next step.
 
-5. FAQ (150 words):
-   - 3-5 common questions with short answers
-   - Use Q&A format
+6. FAQ (about 150 words)
+   3-5 questions people genuinely ask, with direct answers.
 
-QUALITY REQUIREMENTS:
+WRITING QUALITY:
+- Tone: professional but direct. Address the reader as "you".
+- Use <strong> on key terms, metrics and concepts so the page is scannable.
+- Use related terminology naturally. Never keyword-stuff.
+- Vary sentence length deliberately. Short sentences for emphasis. Longer ones to
+  develop an argument fully. Avoid a uniform rhythm.
+- Short paragraphs: 2-3 sentences, often one.
+- Avoid filler openers: "It is important to note that", "In this context",
+  "Let's discuss", "In conclusion".
+- Every article must open differently from the ones listed above.
 
-E-E-A-T SIGNALS (MUST):
-âœ“ Experience: "Based on implementation across 50+ organizations..."
-âœ“ Expertise: Reference to industry standards, regulations, or research
-âœ“ Authoritativeness: Statistical data
-âœ“ Trustworthiness: Transparency (pros & cons), update date
-âœ“ Current: Use the year 2026 for current context
+SEO:
+- Focus keyword within the first 100 words.
+- Keyword variations in H2 headings.
+- Structure list and table content so it can be lifted as a featured snippet.
+- Use the internal links exactly as instructed above.
 
-WRITING STYLE & SEO 2026:
-âœ“ Tone: Professional but approachable, use "you"
-âœ“ Personal Approach (E-E-A-T): Start a paragraph with "Based on our practitioners' experience..." to simulate Authoritativeness.
-âœ“ Text Emphasis (Scannability): MUST use bold text (<strong>) on core concepts, important metrics/numbers, or key terms.
-âœ“ Semantic SEO (Entities): Use LSI Keywords and Semantic Entities naturally. Insert specific technical terms that prove deep expertise. DO NOT keyword stuff.
-âœ“ Sentences (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
-  - VARY sentence length drastically for a natural rhythm (Burstiness).
-  - Very short sentences (2-5 words): For emotional emphasis/surprise. "That's wrong." "The opposite is true."
-  - Medium sentences (15-20 words): For standard explanations.
-  - Long sentences (25-35 words): To string together deep logic and details.
-  - Use unpredictable word choices (High Perplexity) but keep it natural. Avoid clichÃ©s.
-âœ“ Paragraphs: EXTREMELY SHORT. Maximum 2-3 sentences per paragraph. Frequently use 1-sentence paragraphs. MUST use many line breaks (enter) so there is plenty of whitespace to inject ADS.
-âœ“ Examples: Always from a realistic context with specific names
-âœ“ Data: Include relevant statistics/numbers (but VARY the sources)
-âœ“ Empathy: Understand the pain points of the target audience
-âœ“ Quotes: Insert 1-2 realistic quotes from practitioners
-âœ“ Transitions: Use natural transitions, avoid repetitive connector phrases
+FORMATTING RULES:
+- No emoji anywhere in the content.
+- No placeholder markers like [INFOGRAPHIC: ...] or [CHECKLIST: ...].
+- No ASCII art or box-drawing characters. Tables must be real HTML <table>.
+- Do not repeat the title inside the content.
+- Do not write literal section labels such as "H2:" or "1. OPENING" in the output.
 
-âš ï¸ AVOID REPETITIVE & AI-LIKE PHRASES:
-âœ— "Our internal data shows...", "Based on our experience..."
-âœ— "It is important to note that...", "Keep in mind that..."
-âœ— "In this context...", "It is crucial to..."
-âœ— "Let's discuss...", "In conclusion..."
-âœ“ Use variation: recent research, case studies, real stories, questions, etc.
-âœ“ Every article MUST have a UNIQUE and DIFFERENT opening
-âœ“ Use conversational language, not overly formal/academic
+OUTPUT FORMAT - use these XML tags exactly, no JSON, no markdown fences:
+<TITLE>Compelling, accurate title, 50-60 characters. Title text only.</TITLE>
+<META_DESCRIPTION>150-160 characters, specific to THIS article, includes the keyword.</META_DESCRIPTION>
+<FOCUS_KEYWORD>primary keyword</FOCUS_KEYWORD>
+<EXCERPT>One or two sentences summarising what THIS specific article covers, 140-160 characters. Must not be generic.</EXCERPT>
+<KEY_TAKEAWAYS>
+- First specific takeaway drawn from this article's actual content
+- Second specific takeaway
+- Third specific takeaway
+</KEY_TAKEAWAYS>
+<CONTENT>
+Full HTML article, 2000-2500 words. Start with the opening paragraph. Use h2, h3,
+strong, em, ul, ol, table, blockquote.
+</CONTENT>
+<FAQS>
+Q: Question 1?
+A: Answer 1
 
-SEO OPTIMIZATION:
-âœ“ Keyword in first 100 words
-âœ“ Keyword variations in H2 headings
-âœ“ LSI keywords naturally throughout
-âœ“ Internal Links: You MUST weave the provided internal links into the content organically (as instructed above).
-âœ“ Optimize for featured snippets (use lists/tables)
-
-âš ï¸ STRICT PROHIBITIONS:
-âœ— DO NOT use placeholders like [FLOWCHART: ...], [INFOGRAPHIC: ...], [CHECKLIST: ...]
-âœ— DO NOT use ASCII art or Unicode box drawing characters (â”€, â”‚, â”¼, â”œ, â”¤, etc.)
-âœ— DO NOT insert JSON artifacts or metadata inside the content
-âœ— Use HTML table (<table>) for tables, NOT ASCII art
-âœ— If you want a checklist, use <ul> or <ol>, NOT placeholders
-
-OUTPUT FORMAT (XML TAGS - MANDATORY):
-<TITLE>Title with high CTR formula (50-60 characters) - ONLY the title text. DO NOT add word count notes or brackets.</TITLE>
-<META_DESCRIPTION>Meta description 150-160 characters with CTA and keyword</META_DESCRIPTION>
-<CONTENT>Full content of AT LEAST 2000-2500 words in HTML. MANDATORY: You must generate a very long and comprehensive article. Write at least 20 paragraphs. Use semantic markup (h2, h3, strong, em, ul, ol, blockquote). IMPORTANT: Use HTML table tags (<table>, <tr>, <td>) for tables, DO NOT use ASCII art or Unicode box drawing characters. DO NOT put the title inside the content.</CONTENT>
-<FOCUS_KEYWORD>main keyword of the article</FOCUS_KEYWORD>
-
-IMPORTANT:
-- Output MUST use XML tags as shown above. DO NOT output JSON.
-- DO NOT use ```xml or ``` in output
-- Return ONLY the XML tagged content
-- Content must be cleanly formatted in HTML
+Q: Question 2?
+A: Answer 2
+</FAQS>
 """
         else:
-            prompt = f"""Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic_focus}
+            prompt = f"""Tulis artikel mendalam yang benar-benar berguna untuk website {target_site} tentang: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
-TARGET AUDIENCE: {target_audience}
-RELATED KEYWORDS: {context}
+TARGET PEMBACA: {target_audience}
+KONTEKS TOPIK: {context}
+TAHUN SEKARANG: {current_year} (pakai tahun ini kalau perlu menyebut tahun)
 
-⚠️ PENTING - TAHUN SAAT INI: 2026
-- Jika menyebutkan tahun, gunakan 2026 atau "saat ini"
-- Jangan gunakan tahun 2024 atau 2025
+PANJANG: 2000-2500 kata. Kedalaman datang dari benar-benar membahas topiknya, bukan
+dari mengulang-ulang. Setiap bagian harus menambah informasi yang bisa ditindaklanjuti.
 
-STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
-⚠️ TULIS DENGAN SANGAT MENDETAIL DAN PANJANG. JANGAN MERINGKAS. SETIAP SUB-HEADING HARUS TERDIRI DARI MINIMAL 4-5 PARAGRAF PANJANG DAN KOMPREHENSIF. BENTUKLAH ARTIKEL YANG SANGAT DALAM. JIKA KURANG DARI 2000 KATA, ARTIKEL INI AKAN DITOLAK.
+STRUKTUR:
 
-1. HOOK PEMBUKA (100 kata):
-   ⚠️ WAJIB VARIATIF - Gunakan salah satu pendekatan ini (JANGAN selalu pakai statistik):
-   A. Story/Anekdot: "Pak Budi, kepala sekolah di Bandung, hampir putus asa ketika..."
-   B. Problem Statement: "Bayangkan: SPP sudah naik 20%, tapi guru tetap resign..."
-   C. Pertanyaan Provokatif: "Apa yang membuat 3 dari 5 sekolah swasta gagal bertahan?"
-   D. Fakta Mengejutkan: "Tahun 2026, lebih banyak sekolah tutup daripada yang buka..."
-   E. Kontras: "Sekolah A penuh siswa, Sekolah B sepi. Bedanya hanya satu hal..."
-   ✓ Akhiri dengan promise: "Artikel ini akan memandu Anda..."
-   ✗ JANGAN selalu mulai dengan "Data internal kami di KelasMaster..."
+1. PEMBUKA (sekitar 100 kata)
+   Variasikan pendekatan antar artikel - skenario konkret, pernyataan masalah yang
+   tajam, pertanyaan, atau pengamatan yang berlawanan dengan dugaan umum. Akhiri
+   dengan menjelaskan apa yang bisa pembaca lakukan setelah membaca.
 
-2. RINGKASAN EKSEKUTIF / TL;DR (Kotak AEO untuk Google AI Overviews):
-   - WAJIB buat kotak <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
-   - Berisi 3 poin bullet (<ul>) yang menjawab inti topik secara langsung.
-   - Ini krusial untuk fitur Answer Engine Optimization 2026.
+2. KOTAK POIN UTAMA (untuk Answer Engine Optimization / AI Overviews)
+   <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
+   berisi <ul> dengan 3 poin yang menjawab inti pertanyaan secara langsung dan
+   spesifik. Ini harus jawaban sungguhan, bukan pancingan.
 
-3. CONTEXT (200 kata):
-   - Situasi pendidikan Indonesia saat ini terkait topik
-   - Mengapa topik ini urgent dan penting
-   - Siapa yang paling membutuhkan solusi ini
+3. KONTEKS (sekitar 200 kata)
+   Kenapa ini penting sekarang, dan siapa yang paling membutuhkannya.
 
-4. KONTEN UTAMA (1500-1700 kata):
-   H2: Konsep Dasar & Pentingnya (300 kata)
-   - Definisi clear dengan bahasa praktis
-   - Mengapa ini critical untuk lembaga pendidikan
-   - Contoh konkret dari sekolah Indonesia
+4. ISI UTAMA (1500-1700 kata)
+   H2: Konsep inti dan kenapa penting (~300 kata)
+       Definisi jelas dengan bahasa sederhana. Contoh konkret yang bisa dicek.
+   H2: Implementasi langkah demi langkah (~600 kata)
+       Langkah bernomor yang bisa dikerjakan. Perkiraan waktu yang realistis.
+       Tools atau template yang benar-benar ada. Checklist untuk memulai.
+   H2: Contoh penerapan (~400 kata)
+       Skenario yang jelas hipotetis ("bayangkan sebuah tim berukuran menengah
+       yang..."). Bahas tantangan, pendekatan, dan hasilnya. Jaga hasil tetap
+       kualitatif kecuali bagian data riset memberimu angka nyata.
+   H2: Tips praktis dan kesalahan umum (~300 kata)
+       Perbandingan lakukan/hindari dalam bentuk <table> HTML. Kesalahan nyata
+       yang sering terjadi.
 
-   H2: Implementasi Praktis Step-by-Step (600 kata)
-   - Panduan actionable dengan numbered list
-   - Timeline realistis (minggu/bulan)
-   - Tools/template yang bisa digunakan
-   - Checklist untuk memulai
+5. KESIMPULAN (sekitar 150 kata)
+   Rangkum 3-5 hal terpenting, lalu langkah lanjutan yang jelas.
 
-   H2: Studi Kasus Nyata (400 kata)
-   - Sekolah X di Kota Y, Indonesia (nama & lokasi realistis)
-   - Challenge → Solution → Result (dengan angka spesifik)
-   - WAJIB: Quote langsung dari kepala sekolah
-     Format: "Quote," ujar Nama Lengkap, Kepala Sekolah X di Kota Y.
+6. FAQ (sekitar 150 kata)
+   3-5 pertanyaan yang benar-benar sering ditanyakan, dengan jawaban langsung.
 
-   H2: Tips & Best Practices (300 kata)
-   - Analisis Perbandingan (Do's and Don'ts atau Mitos vs Fakta) dalam format HTML table
-   - Common mistakes yang harus dihindari
-   - Quick wins yang bisa langsung diterapkan
+KUALITAS PENULISAN:
+- Nada: profesional tapi lugas. Sapa pembaca dengan "Anda".
+- Gunakan <strong> pada istilah kunci, metrik, dan konsep penting agar mudah dipindai.
+- Gunakan istilah terkait secara natural. Jangan menumpuk keyword.
+- Variasikan panjang kalimat dengan sengaja. Kalimat pendek untuk penegasan. Kalimat
+  panjang untuk mengembangkan argumen. Hindari ritme yang seragam.
+- Paragraf pendek: 2-3 kalimat, sering cukup satu.
+- Hindari pembuka kosong: "Penting untuk dicatat bahwa", "Dalam konteks ini",
+  "Mari kita bahas", "Kesimpulannya".
+- Setiap artikel harus dibuka berbeda dari judul-judul yang terdaftar di atas.
 
-4. KESIMPULAN (150 kata):
-   - Recap 3-5 key takeaways
-   - CTA: ajakan konsultasi/download resource
+SEO:
+- Focus keyword muncul di 100 kata pertama.
+- Variasi keyword di heading H2.
+- Susun isi list dan tabel supaya bisa diangkat jadi featured snippet.
+- Gunakan link internal persis seperti instruksi di atas.
 
-5. FAQ (150 kata):
-   - 3-5 pertanyaan umum dengan jawaban singkat
+ATURAN FORMAT:
+- Tidak ada emoji di dalam konten.
+- Tidak ada penanda placeholder seperti [INFOGRAFIS: ...] atau [CHECKLIST: ...].
+- Tidak ada ASCII art atau karakter box-drawing. Tabel harus <table> HTML asli.
+- Jangan mengulang judul di dalam konten.
+- Jangan menulis label struktur seperti "H2:" atau "1. PEMBUKA" di output.
 
-GAYA PENULISAN & SEO 2026 (SANGAT PENTING):
-✓ Tone: Profesional tapi approachable, gunakan "Anda"
-✓ Pendekatan Personal (Experience/E-E-A-T): Mulailah salah satu paragraf (misal di Context atau Kesimpulan) dengan "Berdasarkan pengalaman tim praktisi kami..." untuk mensimulasikan Kredensial Penulis (Authoritativeness).
-✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci.
-✓ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Hindari pengulangan keyword utama (keyword stuffing). Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam.
-✓ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
-  - VARIASIKAN panjang kalimat secara drastis untuk ritme natural (Burstiness).
-  - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional.
-  - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
-  - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
-✓ Contoh selalu dari konteks Indonesia
-✓ Transisi natural: "Hasilnya?", "Yang terjadi?", "Faktanya:"
-✗ Hindari: "Dengan demikian", "Oleh karena itu", "Pada akhirnya", "Kesimpulannya"
-✗ Hindari: "Penting untuk dicatat bahwa...", "Perlu diingat bahwa..."
-✗ JANGAN gunakan ASCII art atau Unicode box drawing
-✗ Gunakan HTML table (<table>) untuk tabel, BUKAN ASCII art
-
-SEO OPTIMIZATION:
-✓ Keyword di first 100 words
-✓ Keyword variations di H2 headings
-✓ LSI keywords natural throughout
-✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
-✓ Optimasi untuk featured snippet (gunakan list/table)
-
-FORMAT OUTPUT (Gunakan XML-Tags berikut):
-
-<TITLE>Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter). WAJIB: HANYA berisi judul murni.</TITLE>
-<META_DESCRIPTION>Meta description 150-160 karakter dengan CTA dan keyword</META_DESCRIPTION>
-<FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>
+FORMAT OUTPUT - gunakan tag XML berikut persis, tanpa JSON, tanpa pagar markdown:
+<TITLE>Judul menarik dan akurat, 50-60 karakter. Hanya teks judul.</TITLE>
+<META_DESCRIPTION>150-160 karakter, spesifik untuk artikel INI, mengandung keyword.</META_DESCRIPTION>
+<FOCUS_KEYWORD>keyword utama</FOCUS_KEYWORD>
+<EXCERPT>Satu atau dua kalimat yang merangkum isi spesifik artikel INI, 140-160 karakter. Tidak boleh generik.</EXCERPT>
+<KEY_TAKEAWAYS>
+- Poin spesifik pertama yang diambil dari isi artikel ini
+- Poin spesifik kedua
+- Poin spesifik ketiga
+</KEY_TAKEAWAYS>
 <CONTENT>
-Konten HTML lengkap 2000-2500 kata. WAJIB: Langsung mulai dengan tag HTML paragraf pembuka, JANGAN ulangi judul di dalam konten. Bebas berkreasi tanpa batasan string!
+Artikel HTML lengkap 2000-2500 kata. Mulai langsung dengan paragraf pembuka. Gunakan
+h2, h3, strong, em, ul, ol, table, blockquote.
 </CONTENT>
 <FAQS>
 Q: Pertanyaan 1?
@@ -506,110 +529,127 @@ A: Jawaban 1
 Q: Pertanyaan 2?
 A: Jawaban 2
 </FAQS>
-
-PENTING:
-- Output HARUS menggunakan TAG XML di atas.
-- Content harus dalam format HTML yang rapi
-- JUDUL: Fokus pada benefit/solusi, BUKAN nama kategori (contoh: "7 Strategi Meningkatkan Pendaftaran Siswa Baru" bukan "Strategi Pemasaran untuk Sekolah")"""
-        # Force strict system rules regardless of custom prompt
-        system_rules = """
-⚠️ SYSTEM OVERRIDE - STRICT INSTRUCTIONS ⚠️
-1. DO NOT write literal template labels (e.g., "H1:", "H2:", "1. HOOK PEMBUKA:", "Checklist 1:") in the final HTML content. Output ONLY the natural text and HTML tags.
-2. DO NOT use ANY emojis (like ✨, 🚀, 👍, etc.) in the content. It must look professional and academic.
-3. Your output MUST use XML Tags (e.g. <CONTENT>...</CONTENT>). IGNORE ANY PREVIOUS INSTRUCTIONS ABOUT JSON FORMATTING. DO NOT OUTPUT A JSON OBJECT!
-4. CRITICAL: You MUST write AT LEAST 2000-2500 words inside the <CONTENT> tag. Expand heavily on each section! Write at least 20 paragraphs.
 """
+
+        # The evidence policy is appended last so it is the most recent instruction the
+        # model sees, and it explicitly outranks anything above it.
+        system_rules = f"""
+
+=== OUTPUT CONTRACT ===
+1. Do NOT write literal template labels (e.g. "H2:", "1. OPENING") in the HTML.
+2. Do NOT use emoji in the content.
+3. Output MUST use the XML tags specified. Never output JSON.
+4. Write the full 2000-2500 words inside <CONTENT>. Close every HTML tag you open.
+5. <EXCERPT> and <KEY_TAKEAWAYS> must describe THIS article specifically. Generic
+   filler such as "practical tips you can apply immediately" is rejected.
+{evidence_policy}"""
         prompt = prompt + "\n\n" + system_rules
 
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=0.85,
+                # Lower than before: this content makes factual claims, and high
+                # temperature was compounding the fabrication problem.
+                temperature=0.7,
                 top_p=0.9,
-                max_output_tokens=8192
+                max_output_tokens=MAX_OUTPUT_TOKENS
             )
         )
-        
-        # Clean response text
-        response_text = response.text.strip()
-        
-        # Remove markdown code blocks
+
+        # Detect a hard stop at the token ceiling. Previously truncated output was
+        # silently salvaged by the unclosed-tag fallback below and published with
+        # broken HTML; now it fails so @retry can regenerate.
+        for candidate in getattr(response, 'candidates', None) or []:
+            finish_reason = str(getattr(candidate, 'finish_reason', '') or '')
+            if 'MAX_TOKENS' in finish_reason.upper():
+                raise TruncatedGenerationError(
+                    f"Model hit the {MAX_OUTPUT_TOKENS} output token limit; "
+                    "article was cut off mid-generation."
+                )
+
+        response_text = (response.text or '').strip()
+
         if response_text.startswith('```'):
             response_text = response_text.replace('```json', '').replace('```', '').strip()
-        
-        # Remove invalid control characters for JSON
-        # Remove invalid control characters for JSON, EXCEPT newlines and tabs
+
+        # Strip control characters, keeping newlines and tabs.
         response_text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]', '', response_text)
-        
-        # Extract fields using XML tags
+
         def extract_tag(tag, text, default=""):
             match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
             if match:
                 return match.group(1).strip()
-            # Fallback for unclosed tags (e.g. truncated output)
+            # Unclosed tag: the model stopped early. Salvage what is there; the
+            # quality gate downstream decides whether it is publishable.
             match_open = re.search(f'<{tag}>(.*)', text, re.DOTALL | re.IGNORECASE)
             if match_open:
+                logger.warning(f"Tag <{tag}> was not closed in model output; salvaging partial value.")
                 return match_open.group(1).strip()
             return default
-            
+
         title = extract_tag('TITLE', response_text)
         meta_desc = extract_tag('META_DESCRIPTION', response_text)
         content = extract_tag('CONTENT', response_text)
         focus_keyword = extract_tag('FOCUS_KEYWORD', response_text, default=topic)
-        
-        # If XML parsing fails entirely, fallback to full text
+        excerpt = extract_tag('EXCERPT', response_text)
+
         if not content:
             content = response_text
-            
-        # Strip remaining prompt XML tags from content just in case
-        for tag in ['TITLE', 'META_DESCRIPTION', 'CONTENT', 'FOCUS_KEYWORD', 'FAQS']:
+
+        for tag in ['TITLE', 'META_DESCRIPTION', 'CONTENT', 'FOCUS_KEYWORD',
+                    'FAQS', 'EXCERPT', 'KEY_TAKEAWAYS']:
             content = re.sub(f'</?{tag}>', '', content, flags=re.IGNORECASE)
-            
-        # Clean content artifacts
+
         content = content.replace('```html', '').replace('```', '').strip()
-            
+
         if not title:
-            fallback_title = f"Complete Guide to {topic}" if language == 'en' else f"Panduan Lengkap {topic}"
-            title_match = content.split('\n')[0] if '\n' in content else fallback_title
-            if title_match.startswith('#'):
-                title_match = title_match.replace('#', '').strip()
-            title = title_match[:200] if len(title_match) < 200 else fallback_title
-            
-        # Parse FAQs from text
+            first_heading = re.search(r'<h[12][^>]*>(.*?)</h[12]>', content, re.DOTALL | re.IGNORECASE)
+            if first_heading:
+                title = strip_html(first_heading.group(1))[:200]
+            else:
+                title = strip_html(content)[:120].rsplit(' ', 1)[0]
+
+        # Parse FAQs. Tolerates a missing trailing newline on the last pair, which the
+        # previous newline-anchored regex silently dropped.
         faqs_text = extract_tag('FAQS', response_text)
         faqs = []
         if faqs_text:
-            # simple parse Q: ... A: ...
-            q_matches = re.finditer(r'Q:\s*(.*?)\n', faqs_text)
-            a_matches = re.finditer(r'A:\s*(.*?)(?=\nQ:|$)', faqs_text, re.DOTALL)
-            questions = [m.group(1).strip() for m in q_matches]
-            answers = [m.group(1).strip() for m in a_matches]
-            for q, a in zip(questions, answers):
-                faqs.append({"question": q, "answer": a})
-                
-        word_count = len(content.split())
-        reading_time = f"{max(1, word_count // 200)} menit" if language != 'en' else f"{max(1, word_count // 200)} min read"
-        
-        if language == 'en':
-            key_takeaways = [
-                f"Complete guide to {topic}",
-                "Practical tips you can apply immediately",
-                "Real-world examples and proven strategies"
-            ]
-            excerpt = f"Comprehensive guide to {topic} with practical tips that can be applied immediately. Complete with case studies and actionable checklist."
-            if not meta_desc:
-                meta_desc = f"Learn practical strategies and tips for {topic}. Complete guide with real-world case studies."
-        else:
-            key_takeaways = [
-                f"Panduan lengkap {topic}",
-                "Tips praktis yang bisa langsung diterapkan",
-                "Studi kasus nyata dan implementasinya"
-            ]
-            excerpt = f"Panduan komprehensif {topic} dengan tips praktis yang bisa langsung diterapkan. Dilengkapi studi kasus nyata dan checklist yang dapat ditindaklanjuti."
-            if not meta_desc:
-                meta_desc = f"Pelajari strategi dan tips praktis {topic} untuk kemajuan Anda. Panduan lengkap dengan studi kasus nyata."
-        
+            pairs = re.findall(
+                r'Q:\s*(.+?)\s*\n\s*A:\s*(.*?)(?=\n\s*Q:|$)',
+                faqs_text,
+                re.DOTALL
+            )
+            for question, answer in pairs:
+                question = question.strip()
+                answer = strip_html(answer).strip()
+                if question and answer:
+                    faqs.append({"question": question, "answer": answer})
+
+        # Key takeaways come from the model, describing this article. Only if that is
+        # missing do we fall back to the article's own H2 headings. Neither path uses a
+        # fixed template, so the box is no longer identical across every post.
+        takeaways_text = extract_tag('KEY_TAKEAWAYS', response_text)
+        key_takeaways = []
+        if takeaways_text:
+            for line in takeaways_text.split('\n'):
+                line = re.sub(r'^\s*[-*\u2022]\s*', '', line).strip()
+                line = strip_html(line)
+                if len(line) > 8:
+                    key_takeaways.append(line)
+        if not key_takeaways:
+            key_takeaways = derive_takeaways(content)
+
+        if not excerpt:
+            excerpt = derive_excerpt(content)
+        if not meta_desc:
+            meta_desc = excerpt or derive_excerpt(content)
+
+        plain_text = strip_html(content)
+        word_count = len(plain_text.split())
+        reading_time = (f"{max(1, word_count // 200)} min read" if language == 'en'
+                        else f"{max(1, word_count // 200)} menit")
+
         return {
             "title": title,
             "meta_description": meta_desc,
@@ -618,9 +658,11 @@ PENTING:
             "excerpt": excerpt,
             "reading_time": reading_time,
             "key_takeaways": key_takeaways,
-            "faqs": faqs
+            "faqs": faqs,
+            "word_count": word_count,
+            "allowed_link_urls": allowed_link_urls
         }
-    
+
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from services.article_generator import sanitize_filename
 import requests
 import base64
@@ -12,10 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 class WordPressPublisher:
-    def __init__(self, url, username, password):
+    def __init__(self, url, username, password, site_name=None, enable_youtube_embed=False):
         self.url = url.rstrip('/')
         self.username = username
         self.password = password
+        self.site_name = site_name
+        # Off by default: an auto-picked video is only worth embedding when it is
+        # genuinely relevant, so this is opt-in per site.
+        self.enable_youtube_embed = enable_youtube_embed
         self.api_url = f"{self.url}/wp-json/wp/v2"
     
     def _get_auth(self):
@@ -152,6 +158,59 @@ class WordPressPublisher:
             logger.error(f"Failed to upload image: {response.status_code} - {response.text}")
             return None
     
+    def _find_relevant_video(self, search_term):
+        """Find a YouTube video whose title genuinely overlaps the search term.
+
+        Returns a video id, or None when nothing sufficiently relevant is found.
+        Embedding an unrelated video hurts the page more than having no video.
+        """
+        if not search_term:
+            return None
+
+        stopwords = {
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'what', 'how',
+            'yang', 'dan', 'untuk', 'dengan', 'dari', 'apa', 'bagaimana', 'di', 'ke'
+        }
+
+        def tokens(text):
+            words = re.findall(r'\w+', (text or '').lower())
+            return {w for w in words if len(w) > 2 and w not in stopwords}
+
+        wanted = tokens(search_term)
+        if not wanted:
+            return None
+
+        try:
+            from duckduckgo_search import DDGS
+            results = DDGS().text(f"site:youtube.com {search_term}", max_results=5) or []
+        except Exception as e:
+            logger.warning(f"YouTube search failed: {e}")
+            return None
+
+        for result in results:
+            url = result.get('href', '') or ''
+            candidate_tokens = tokens(f"{result.get('title', '')} {result.get('body', '')}")
+            if not candidate_tokens:
+                continue
+
+            overlap = len(wanted & candidate_tokens) / len(wanted)
+            if overlap < 0.5:
+                continue
+
+            parsed = urllib.parse.urlparse(url)
+            video_id = None
+            if 'youtube.com/watch' in url:
+                video_id = urllib.parse.parse_qs(parsed.query).get('v', [None])[0]
+            elif 'youtu.be/' in url:
+                video_id = parsed.path.lstrip('/')
+
+            if video_id and re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+                logger.info(f"Embedding YouTube video {video_id} (title overlap {overlap:.0%})")
+                return video_id
+
+        logger.info(f"No sufficiently relevant YouTube video found for '{search_term}'; skipping embed.")
+        return None
+
     def get_categories(self):
         """Fetch all categories from WordPress"""
         try:
@@ -172,7 +231,7 @@ class WordPressPublisher:
             logger.error(f"Error fetching categories: {e}")
             return []
     
-    def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
+    def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
         import urllib.parse
         import json
         
@@ -225,16 +284,34 @@ class WordPressPublisher:
 </div>"""
             content = box + "\n" + content
             
-        # Inject FAQ Schema (JSON-LD)
+        # Structured data. FAQPage rich results are heavily restricted these days, so
+        # its main value is as machine-readable Q&A for answer engines. BlogPosting is
+        # what actually carries the authorship and freshness signals.
+        graph = []
+
+        blog_posting = {
+            "@type": "BlogPosting",
+            "headline": title[:110],
+            "datePublished": datetime.now().astimezone().isoformat(),
+            "dateModified": datetime.now().astimezone().isoformat(),
+            "publisher": {"@type": "Organization", "name": self.site_name or self.url},
+            "mainEntityOfPage": {"@type": "WebPage", "@id": self.url}
+        }
+        if author_name:
+            blog_posting["author"] = {"@type": "Person", "name": author_name}
+        else:
+            blog_posting["author"] = {"@type": "Organization", "name": self.site_name or self.url}
+        if meta_description:
+            blog_posting["description"] = meta_description
+        if focus_keyword:
+            blog_posting["keywords"] = focus_keyword
+        graph.append(blog_posting)
+
         if faqs and isinstance(faqs, list):
-            schema = {
-                "@context": "https://schema.org",
-                "@type": "FAQPage",
-                "mainEntity": []
-            }
+            faq_schema = {"@type": "FAQPage", "mainEntity": []}
             for faq in faqs:
                 if 'question' in faq and 'answer' in faq:
-                    schema["mainEntity"].append({
+                    faq_schema["mainEntity"].append({
                         "@type": "Question",
                         "name": faq["question"],
                         "acceptedAnswer": {
@@ -242,41 +319,38 @@ class WordPressPublisher:
                             "text": faq["answer"]
                         }
                     })
-            if schema["mainEntity"]:
-                schema_html = f'\n<script type="application/ld+json">{json.dumps(schema)}</script>\n'
-                content += schema_html
-                
-        # YouTube Auto-Embed
-        try:
-            from duckduckgo_search import DDGS
-            search_term = focus_keyword if focus_keyword else title
-            ddgs = DDGS()
-            results = ddgs.text(f"site:youtube.com {search_term}", max_results=1)
-            if results:
-                url = results[0].get('href', '')
-                parsed = urllib.parse.urlparse(url)
-                video_id = None
-                if 'youtube.com/watch' in url:
-                    qs = urllib.parse.parse_qs(parsed.query)
-                    video_id = qs.get('v', [None])[0]
-                elif 'youtu.be/' in url:
-                    video_id = parsed.path.lstrip('/')
-                
-                if video_id and re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
-                    iframe = f'\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;"><iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>\n'
-                    parts = re.split(r'(<h2.*?>)', content)
-                    if len(parts) >= 3:
-                        mid_idx = len(parts) // 2
-                        if mid_idx % 2 == 0:
-                            mid_idx += 1
-                        parts.insert(mid_idx, iframe)
-                        content = "".join(parts)
-                    else:
-                        content += iframe
-        except Exception as e:
-            from core_extensions import logger
-            logger.warning(f"Failed to embed YouTube video: {e}")
-        
+            if faq_schema["mainEntity"]:
+                graph.append(faq_schema)
+
+        schema_payload = {"@context": "https://schema.org", "@graph": graph}
+        content += f'\n<script type="application/ld+json">{json.dumps(schema_payload, ensure_ascii=False)}</script>\n'
+
+
+        # YouTube auto-embed. Opt-in, and only when a result's title actually overlaps
+        # the article topic — previously the first search hit was embedded blind, which
+        # could put an unrelated or competitor video in the middle of the article.
+        if self.enable_youtube_embed:
+            video_id = self._find_relevant_video(focus_keyword or title)
+            if video_id:
+                iframe = (
+                    '\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; '
+                    'height: 0; overflow: hidden; max-width: 100%;">'
+                    '<iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" '
+                    f'src="https://www.youtube.com/embed/{video_id}" frameborder="0" loading="lazy" '
+                    'title="Related video" '
+                    'allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
+                    'allowfullscreen></iframe></div>\n'
+                )
+                parts = re.split(r'(<h2.*?>)', content)
+                if len(parts) >= 3:
+                    mid_idx = len(parts) // 2
+                    if mid_idx % 2 == 0:
+                        mid_idx += 1
+                    parts.insert(mid_idx, iframe)
+                    content = "".join(parts)
+                else:
+                    content += iframe
+
         clean_slug = re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
         
         post_data = {
@@ -311,10 +385,10 @@ class WordPressPublisher:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout))
     )
-    def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
+    def create_post(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
-        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs)
+        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs, author_name)
         try:
             response = requests.post(
                 f"{self.api_url}/posts",
@@ -347,10 +421,10 @@ class WordPressPublisher:
         
         return response.status_code == 201, response.json() if response.status_code == 201 else response.text
         
-    def update_post_content(self, post_id, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None):
+    def update_post_content(self, post_id, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
-        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs)
+        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs, author_name)
         response = requests.post(
             f"{self.api_url}/posts/{post_id}",
             headers=headers,
