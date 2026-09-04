@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import requests
 
 from services.article_generator import ArticleGenerator
+from services.quality_gate import check_article, strip_invalid_internal_links
 from services.wp_publisher import WordPressPublisher
 from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
@@ -206,9 +207,20 @@ def regenerate_article_job(user_id, log_id):
             internal_links_context=recent_posts_for_links
         )
         
-        if not article.get('title') or not article.get('content') or len(article.get('content', '').split()) < 50:
-            raise Exception("Generated article is empty or too short.")
-            
+        allowed_link_urls = article.get('allowed_link_urls')
+        ok, gate_errors, gate_warnings = check_article(
+            article,
+            focus_keyword=article.get('focus_keyword'),
+            allowed_link_urls=allowed_link_urls
+        )
+        for warning in gate_warnings:
+            logger.warning(f"Quality gate warning (regenerate log {log_id}): {warning}")
+        if not ok:
+            raise Exception("Quality gate rejected the regenerated article: " + "; ".join(gate_errors))
+
+        if allowed_link_urls:
+            article['content'] = strip_invalid_internal_links(article['content'], allowed_link_urls)
+
         success, result = publisher.update_post_content(
             post_id,
             article.get('title', title),
@@ -332,9 +344,10 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         publisher = WordPressPublisher(
             site_config['wordpress_url'],
             site_config['wordpress_username'],
-            site_config['wordpress_password']
+            site_config['wordpress_password'],
+            site_name=site_config.get('site_name')
         )
-        
+
         try:
             recent_posts_for_links = publisher.get_recent_posts(limit=30)
             logger.info(f"Fetched {len(recent_posts_for_links)} recent posts for internal linking.")
@@ -515,10 +528,24 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 internal_links_context=recent_posts_for_links
             )
         
-        # Validate generated article is not empty
-        if not article.get('title') or not article.get('content') or len(article.get('content', '').split()) < 50:
-            raise Exception(f"Generated article is empty or too short (title='{article.get('title', '')[:50]}', words={len(article.get('content', '').split())})")
-        
+        # Quality gate. Blocks publishing of truncated, too-short, template-leaking or
+        # fabricated-credential output instead of pushing it live and burning a credit.
+        allowed_link_urls = article.get('allowed_link_urls')
+        ok, gate_errors, gate_warnings = check_article(
+            article,
+            focus_keyword=article.get('focus_keyword'),
+            allowed_link_urls=allowed_link_urls
+        )
+        for warning in gate_warnings:
+            logger.warning(f"Quality gate warning (site {site_id}): {warning}")
+        if not ok:
+            raise Exception("Quality gate rejected the article: " + "; ".join(gate_errors))
+
+        # Drop any internal link the model invented, keeping the anchor text.
+        if allowed_link_urls:
+            article['content'] = strip_invalid_internal_links(article['content'], allowed_link_urls)
+
+
         image_failed = False
         featured_image_id = None
         image_data = None
