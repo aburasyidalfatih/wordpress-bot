@@ -17,11 +17,16 @@ from collections import Counter
 logger = logging.getLogger(__name__)
 
 # A Search Console sync stores up to 5000 rows per period, so a site can hold
-# ~10000 metric rows. Only rows with real impressions can ever become an
-# opportunity (build_search_opportunities discards impressions < 20), so loading
-# the whole table into memory on every page view and every article generation was
-# pure waste. These bounds keep the working set small.
-MIN_USEFUL_IMPRESSIONS = 20
+# ~10000 metric rows. Loading all of them on every page view and every article
+# generation was pure waste, so the working set is bounded.
+#
+# The bound is the row limit, NOT an impression threshold. An early-stage site can
+# have a handful of impressions in total: familybudgethub.com's best query had 10,
+# so a threshold of 20 silently discarded every row and GSC contributed nothing.
+# A query with one impression still proves Google associates it with the site,
+# which is exactly the evidence the research scorer needs. Opportunity ranking
+# applies its own stricter gate in build_search_opportunities.
+MIN_USEFUL_IMPRESSIONS = 1
 MAX_METRIC_ROWS_PER_PERIOD = 500
 
 
