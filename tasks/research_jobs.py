@@ -10,10 +10,15 @@ from core_extensions import db, trending, logger, send_telegram_notification
 
 MIN_RESEARCH_QUALITY_SCORE = 35
 
-# Search Console evidence is capped so a site with lots of impressions cannot pass
-# on that alone, but it is weighted enough to keep a category viable when Google
-# Trends and DuckDuckGo block the server IP.
-GSC_MAX_BONUS = 20
+# Search Console is the ninth provider in the quality model; evaluate_quality
+# covers the other eight and totals 85, leaving this 15.
+#
+# It is worth a full weight because it is first-party: queries that genuinely
+# reached this site, from an authenticated API rather than scraping. A couple of
+# matching queries is strong validation, so the scale reaches full weight quickly
+# instead of requiring the volume an established site would have.
+GSC_MAX_WEIGHT = 15
+GSC_POINTS_PER_MATCH = 5
 
 
 def _load_search_console_queries(user_id, site_id):
@@ -162,9 +167,10 @@ def deep_research_job(user_id, force=True, site_id=None, category=None):
 
                     # Related queries are direct category evidence and add a small,
                     # bounded bonus to the research evidence score.
+                    gsc_score = min(GSC_MAX_WEIGHT, len(gsc_matches) * GSC_POINTS_PER_MATCH)
                     quality_score = min(100, int(quality.get('score', 0))
                                         + min(10, related_count)
-                                        + min(GSC_MAX_BONUS, len(gsc_matches) * 2))
+                                        + gsc_score)
                     real_provider_count = (int(quality.get('real_provider_count', 0))
                                            + (1 if related_count else 0)
                                            + (1 if gsc_matches else 0))

@@ -556,15 +556,25 @@ class SEOResearch:
     def evaluate_quality(source_status, competitor_count=0, transcript_count=0,
                          suggestion_count=0, question_count=0):
         """Score evidence quality, not popularity. Returns 0..100 and a label."""
+        # Weighted by how much each source actually contributes to writing the
+        # article, not merely by whether it responded.
+        #
+        # Google Trends previously carried 25 — the largest share — but it returns a
+        # popularity score, not material you can write from. Autocomplete and related
+        # questions return the actual phrasing people search and the questions they
+        # ask, which become keywords and section headings, so they now carry more.
+        #
+        # These total 85. The remaining 15 is Search Console, added by the caller,
+        # because it is first-party evidence the research module cannot see.
         weights = {
-            'google_trends': 25,
-            'google_autocomplete': 15,
-            'related_questions': 10,
+            'google_autocomplete': 20,
             'competitors': 20,
-            'social': 10,
-            'youtube': 10,
-            'news': 5,
-            'wikipedia': 5,
+            'related_questions': 15,
+            'google_trends': 10,
+            'social': 8,
+            'youtube': 5,
+            'news': 4,
+            'wikipedia': 3,
         }
         score = 0.0
         real_providers = 0
