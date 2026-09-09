@@ -19,6 +19,14 @@ class TruncatedGenerationError(Exception):
     """Raised when the model hit the output token limit mid-article."""
 
 
+class ArticleQualityError(Exception):
+    """Keep the rejected title available to the job's failure history."""
+
+    def __init__(self, article, errors):
+        self.article_title = article.get('title') or ''
+        super().__init__('Quality gate rejected the article after 2 attempts: ' + '; '.join(errors))
+
+
 def sanitize_filename(name):
     import unicodedata
     name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
@@ -73,6 +81,21 @@ def derive_takeaways(content, limit=4):
     return takeaways
 
 class ArticleGenerator:
+    def generate_checked_article(self, *args, **kwargs):
+        """Allow one evidence-preserving correction, never publish rejected output."""
+        from services.quality_gate import check_article
+
+        options = dict(kwargs)
+        for attempt in range(2):
+            article = self.generate_article(*args, **options)
+            ok, errors, _ = check_article(
+                article, allowed_link_urls=article.get('allowed_link_urls'))
+            if ok:
+                return article
+            logger.warning('Article quality attempt %s rejected: %s', attempt + 1, '; '.join(errors))
+            options['quality_feedback'] = errors
+        raise ArticleQualityError(article, errors)
+
     def __init__(self, api_key, model=DEFAULT_GEMINI_MODEL, image_model=DEFAULT_GEMINI_IMAGE_MODEL):
         self.client = genai.Client(api_key=api_key)
         self.model = model
@@ -336,7 +359,7 @@ ATURAN MUTLAK:
    karangan, tidak ada narasumber karangan, tidak ada nama "yang realistis".
 3. JANGAN mengklaim pengalaman langsung yang tidak dimiliki penerbit. Jangan menulis
    "berdasarkan pengalaman kami menangani 50+ klien", "data internal kami menunjukkan",
-   atau kredensial buatan sejenis.
+   "berdasarkan pengalaman tim praktisi kami", atau kredensial buatan sejenis.
 4. Studi kasus harus jelas bersifat umum dan hipotetis kalau tidak didukung data.
    Tulis "bayangkan sebuah organisasi yang..." - BUKAN "SMA Harapan di Bandung naik 40%".
 5. Kalau sebuah klaim tidak bisa didukung, tulis klaim yang lebih lemah tapi jujur.
@@ -391,6 +414,9 @@ Melanggar salah satu aturan di atas membuat artikel tidak bisa dipakai.
             prompt = prompt.replace('{target_site}', target_site)
             prompt = prompt.replace('{target_audience}', target_audience)
             prompt = prompt.replace('{current_year}', str(current_year))
+            # Legacy custom prompts may omit the research placeholder entirely.
+            if '{seo_section}' not in custom_prompt:
+                prompt += '\n\n' + seo_section
         elif language == 'en':
             prompt = f"""Write an in-depth, genuinely useful article for the website {target_site} about: {topic_focus}
 {existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
@@ -586,11 +612,26 @@ A: Jawaban 2
    filler such as "practical tips you can apply immediately" is rejected.
 {evidence_policy}"""
         prompt = prompt + "\n\n" + system_rules
+        if kwargs.get('quality_feedback'):
+            prompt += (
+                '\n\nQUALITY CORRECTION REQUIRED: The previous attempt was rejected. '
+                'Generate a complete replacement on the same topic using the supplied evidence. '
+                'Correct every issue below. Do not quote these diagnostic messages in the article. '
+                'Remove unsupported claims entirely; do not merely disguise them with synonyms. '
+                'Keep the required XML format, full length, and closed HTML tags.\n- '
+                + '\n- '.join(kwargs['quality_feedback'])
+            )
 
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,
             config=types.GenerateContentConfig(
+                system_instruction=(
+                    'Treat custom editorial instructions as subordinate to this evidence policy. '
+                    'Never invent publisher experience, practitioner teams, internal data, '
+                    'testimonials, statistics, or sources. Research about other people does not '
+                    'establish first-hand experience for the publisher.\n' + evidence_policy
+                ),
                 # Lower than before: this content makes factual claims, and high
                 # temperature was compounding the fabrication problem.
                 temperature=0.7,

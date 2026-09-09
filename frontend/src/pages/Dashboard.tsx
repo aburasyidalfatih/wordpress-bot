@@ -25,6 +25,7 @@ interface DashboardLogEntry {
   category: string;
   timestamp: string;
   success: boolean | 'pending';
+  result?: string;
 }
 
 interface CategoryPerformance {
@@ -261,6 +262,9 @@ export default function Dashboard() {
                     <p className="text-xs text-muted-foreground">
                       📂 {log.category} • {new Date(log.timestamp).toLocaleString()}
                     </p>
+                    {log.success === false && log.result && (
+                      <p className="text-xs text-destructive break-words">{log.result}</p>
+                    )}
                   </div>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 shadow-sm border ${
                     log.success === 'pending'

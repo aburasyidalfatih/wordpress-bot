@@ -277,7 +277,7 @@ def regenerate_article_job(user_id, log_id):
         except Exception:
             pass
             
-        article = generator.generate_article(
+        article = generator.generate_checked_article(
             category_name, 
             [], 
             keyword, 
@@ -555,7 +555,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 category_desc = cat.get('description', '')
                 break
                 
-        article = generator.generate_article(
+        article = generator.generate_checked_article(
             category['name'], 
             existing_titles, 
             custom_topic, 
@@ -611,7 +611,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         
         if is_dup:
             logger.warning(f"Similar title detected ({reason}): '{article.get('title')}' ~ '{similar_to}'. Regenerating...")
-            article = generator.generate_article(
+            article = generator.generate_checked_article(
                 category['name'], 
                 existing_titles, 
                 custom_topic, 
@@ -771,7 +771,12 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         # Determine category values for logging even if it failed early
         log_category_id = category['id'] if 'category' in locals() and category else None
         log_category_name = category['name'] if 'category' in locals() and category else "Unknown Category"
-        log_title = custom_topic if 'custom_topic' in locals() and custom_topic else "Unknown Title"
+        log_title = (
+            getattr(e, 'article_title', None)
+            or (article.get('title') if 'article' in locals() and article else None)
+            or (custom_topic if 'custom_topic' in locals() else None)
+            or f"Artikel kategori {log_category_name}"
+        )
         
         # Add to history so user sees the failure
         try:
