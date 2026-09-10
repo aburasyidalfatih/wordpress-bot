@@ -519,12 +519,16 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                     
                     if research:
                         seo_data = {
-                            'keywords': research.keywords if hasattr(research, 'keywords') else [],
-                            'questions': research.questions if hasattr(research, 'questions') else [],
-                            'long_tail': research.long_tail_keywords if hasattr(research, 'long_tail_keywords') else [],
-                            'competitor_outlines': research.competitor_outlines if hasattr(research, 'competitor_outlines') else [],
-                            'social_insights': research.social_insights if hasattr(research, 'social_insights') else [],
-                            'youtube_insights': research.youtube_insights if hasattr(research, 'youtube_insights') else [],
+                            # hasattr is always true for a mapped column, so it never
+                            # guarded anything: a NULL column produced None, and the
+                            # len() in the log line below then raised inside the
+                            # session, rolling it back and discarding the research.
+                            'keywords': research.keywords or [],
+                            'questions': research.questions or [],
+                            'long_tail': research.long_tail_keywords or [],
+                            'competitor_outlines': research.competitor_outlines or [],
+                            'social_insights': research.social_insights or [],
+                            'youtube_insights': research.youtube_insights or [],
                             'semantic_context': research.semantic_context or '',
                             'news_insights': research.news_insights or []
                         }
