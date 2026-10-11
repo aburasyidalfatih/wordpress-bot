@@ -1,12 +1,12 @@
-from flask import Flask, request, send_from_directory
+from flask import Flask, request, send_from_directory, jsonify
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import os
 import signal
 import atexit
-import jwt
 
 from config import Config
-from core_extensions import db, logger
+from core_extensions import db, logger, load_system_settings, refresh_system_settings_if_changed, decode_access_token
 
 # ---- Rate Limiting ----
 from flask_limiter import Limiter
@@ -22,7 +22,7 @@ def _rate_limit_key():
             request.headers.get('Authorization', '').removeprefix('Bearer ')
         )
         if token:
-            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+            payload = decode_access_token(token)
             user_id = payload.get('user_id')
             if user_id:
                 return f"user:{user_id}"
@@ -53,29 +53,10 @@ from routes.search_console import search_console_bp
 
 load_dotenv()
 
-# Load system settings from database and override Config values on startup
+# Load system settings from database and override Config values on startup.
+# Later admin edits are picked up per worker by refresh_system_settings_if_changed().
 try:
-    system_settings = db.get_system_settings()
-    for k, v in system_settings.items():
-        if k.startswith('__'):
-            continue  # internal bookkeeping (e.g. __schema_version__), not app config
-        if v is not None:
-            if k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
-                setattr(Config, k, v.lower() == 'true')
-            elif k == 'SMTP_PORT':
-                try:
-                    setattr(Config, k, int(v))
-                except ValueError:
-                    pass
-            elif k == 'PAYMENT_USD_RATE':
-                try:
-                    setattr(Config, k, float(v))
-                except ValueError:
-                    pass
-            else:
-                setattr(Config, k, v)
-            os.environ[k] = v
-    logger.info(f"Loaded {len(system_settings)} system settings from database.")
+    load_system_settings()
 except Exception as e:
     logger.error(f"Failed to load system settings from database: {e}")
 
@@ -111,6 +92,21 @@ except Exception as e:
 
 app = Flask(__name__)
 app.config.from_object(Config)
+
+# Traefik sits in front of gunicorn. Trust exactly that many hops of X-Forwarded-*
+# so request.remote_addr (rate limiting) and the scheme/host are the client's.
+try:
+    _trusted_proxy_count = max(0, int(os.getenv('TRUSTED_PROXY_COUNT', '1')))
+except ValueError:
+    _trusted_proxy_count = 1
+if _trusted_proxy_count:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=_trusted_proxy_count,
+        x_proto=_trusted_proxy_count,
+        x_host=_trusted_proxy_count,
+    )
+
 limiter.init_app(app)
 
 from security import generate_csrf_token
@@ -128,6 +124,23 @@ app.register_blueprint(prompts_bp)
 app.register_blueprint(payments_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(search_console_bp)
+
+# Tripay callbacks all come from Tripay's own IPs and are HMAC-verified; the
+# per-IP default limits would otherwise start rejecting real payment callbacks.
+from routes.payments import tripay_webhook
+limiter.exempt(tripay_webhook)
+
+
+@app.before_request
+def refresh_settings_from_other_workers():
+    """Re-apply system settings saved by another gunicorn worker (throttled)."""
+    refresh_system_settings_if_changed()
+
+
+@app.errorhandler(413)
+def request_too_large(e):
+    limit_mb = (app.config.get('MAX_CONTENT_LENGTH') or 0) // (1024 * 1024)
+    return jsonify({'success': False, 'error': f'Request is too large (max {limit_mb} MB).'}), 413
 
 # Background tasks & workers retained in app namespace for RQ compatibility
 
@@ -159,6 +172,10 @@ def serve_frontend(path):
         return send_from_directory(frontend_dir, 'index.html')
 
 
+# Uploaded receipts that may be displayed inline; anything else is forced to download.
+UPLOAD_INLINE_MIMETYPES = {'image/jpeg', 'image/png', 'image/webp'}
+
+
 @app.after_request
 def add_security_headers(response):
     """Add security headers to all responses."""
@@ -167,6 +184,14 @@ def add_security_headers(response):
     response.headers.setdefault('X-XSS-Protection', '1; mode=block')
     response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    if request.path.startswith('/static/uploads/'):
+        # User-uploaded files: never let them execute script on the app origin.
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Content-Security-Policy'] = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
+        mimetype = response.mimetype or ''
+        if mimetype not in UPLOAD_INLINE_MIMETYPES:
+            response.headers['Content-Disposition'] = 'attachment'
+        return response
     # CSP: allow self, google APIs (fonts/auth), and inline styles for dynamic content
     if 'Content-Type' in response.headers and 'text/html' in response.headers['Content-Type']:
         response.headers.setdefault(

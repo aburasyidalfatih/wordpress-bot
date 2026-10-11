@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -29,6 +29,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+
+const JOB_POLL_INTERVAL_MS = 2000;
+// Safety net so the UI never spins forever. Normal ends (finished, failed,
+// timed out, missing job) are reported by /api/job-status; the backend allows
+// 180 s per category and the job may also wait behind others in the queue.
+const JOB_MAX_DURATION_MS = 3 * 60 * 60 * 1000;
+const JOB_FAILED_STATUSES = new Set(['failed', 'stopped', 'canceled', 'cancelled']);
 
 export interface ResearchDataResponse {
   categories: CategoryType[];
@@ -127,6 +134,24 @@ export default function Research() {
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkCounts, setBulkCounts] = useState<Record<string, number>>({});
   const navigate = useNavigate();
+  const selectedSiteIdRef = useRef(selectedSiteId);
+  const reloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { selectedSiteIdRef.current = selectedSiteId; }, [selectedSiteId]);
+  useEffect(() => () => {
+    if (reloadTimeoutRef.current) clearTimeout(reloadTimeoutRef.current);
+  }, []);
+
+  // A research job belongs to the site it was started for: when the selected
+  // site changes, stop tracking it (this also stops the polling effect below).
+  const [jobSiteId, setJobSiteId] = useState(selectedSiteId);
+  if (jobSiteId !== selectedSiteId) {
+    setJobSiteId(selectedSiteId);
+    setJobId(null);
+    setResearching(false);
+    setResearchingCategory(null);
+    setProgress(0);
+    setMessage('');
+  }
 
   const loadData = useCallback((signal?: AbortSignal) => {
     if (!selectedSiteId) {
@@ -168,37 +193,61 @@ export default function Research() {
     if (!jobId) return;
 
     const controller = new AbortController();
+    const startedAt = Date.now();
+    let stopped = false;
+
+    const stopPolling = (errorMessage?: string) => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(interval);
+      controller.abort();
+      setResearching(false);
+      setResearchingCategory(null);
+      setJobId(null);
+      if (errorMessage) {
+        setMessage(errorMessage);
+        toast.error(errorMessage);
+      }
+    };
+
     const interval = setInterval(async () => {
+      if (stopped) return;
+      if (Date.now() - startedAt > JOB_MAX_DURATION_MS) {
+        stopPolling('Riset terlalu lama dan pemantauan dihentikan. Muat ulang halaman untuk melihat hasil terbaru.');
+        return;
+      }
       try {
         const res = await apiFetch(`/api/job-status/${jobId}`, { signal: controller.signal });
-        const result = await res.json();
-        
-        if (result.success) {
-          setProgress(result.progress);
-          setMessage(`${result.progress}% - ${result.message}`);
-          
-          if (result.status === 'finished') {
-            clearInterval(interval);
-            setResearching(false);
-            setResearchingCategory(null);
-            setJobId(null);
-            setMessage('Analysis complete! Reloading data...');
-            setTimeout(() => loadData(), 1000);
-          } else if (result.status === 'failed') {
-            clearInterval(interval);
-            setResearching(false);
-            setResearchingCategory(null);
-            setJobId(null);
-            setMessage('Research job failed.');
-          }
+        const result = await res.json().catch(() => ({}));
+        if (stopped) return;
+
+        if (res.status === 404 || !result.success) {
+          stopPolling(result.error ? `Research job error: ${result.error}` : `Research job tidak ditemukan (${res.status}).`);
+          return;
+        }
+
+        setProgress(result.progress);
+        setMessage(`${result.progress}% - ${result.message}`);
+
+        if (result.status === 'finished') {
+          stopPolling();
+          setMessage('Analysis complete! Reloading data...');
+          if (reloadTimeoutRef.current) clearTimeout(reloadTimeoutRef.current);
+          reloadTimeoutRef.current = setTimeout(() => {
+            reloadTimeoutRef.current = null;
+            loadData();
+          }, 1000);
+        } else if (JOB_FAILED_STATUSES.has(result.status)) {
+          stopPolling(result.status === 'failed' ? 'Research job failed.' : `Research job ${result.status}.`);
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
         if (import.meta.env.DEV) console.error("Polling error", e);
       }
-    }, 2000);
+    }, JOB_POLL_INTERVAL_MS);
 
     return () => {
+      stopped = true;
       clearInterval(interval);
       controller.abort();
     };
@@ -230,6 +279,7 @@ export default function Research() {
 
   const handleManualResearch = async (categoryName?: string) => {
     if (!selectedSiteId) return;
+    const siteId = selectedSiteId;
     setResearching(true);
     setResearchingCategory(categoryName || 'all');
     setProgress(0);
@@ -241,8 +291,10 @@ export default function Research() {
       const res = await apiFetch(url, { method: 'POST' });
       const result = await res.json();
       if (result.success && result.job_id) {
-        setJobId(result.job_id);
         window.dispatchEvent(new Event('refresh-profile'));
+        // The user switched sites while the job was starting; don't track it here.
+        if (selectedSiteIdRef.current !== siteId) return;
+        setJobId(result.job_id);
       } else {
         setMessage(result.error || 'Research failed to start.');
         setResearching(false);

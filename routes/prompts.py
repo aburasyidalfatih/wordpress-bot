@@ -1,8 +1,61 @@
 from flask import Blueprint, request, jsonify
-from core_extensions import db, load_config, require_jwt
+from core_extensions import db, redis_conn, logger, load_config, require_jwt
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 prompts_bp = Blueprint('prompts', __name__)
+
+MAX_OPTIMIZE_PROMPT_CHARS = 12000  # default article prompt is ~5000 chars
+# Free AI helpers (prompt optimizer, title generator) do not charge credits and
+# may run on the admin's Gemini key, so cap how often one user can call them.
+AI_HELPER_RATE_LIMIT = 20
+AI_HELPER_RATE_WINDOW_SECONDS = 3600
+
+
+def check_ai_helper_quota(user_id, bucket='ai_helper', limit=None):
+    """Gate uncharged Gemini helper calls.
+
+    Returns None when the call may proceed, otherwise a (response, status)
+    tuple to return from the route. Users with their own Gemini key pay for
+    the calls themselves and are not limited.
+    """
+    try:
+        own_key = (db.get_config(user_id) or {}).get('gemini_api_key')
+    except Exception as exc:
+        logger.error(f'Could not load config for AI helper quota (user {user_id}): {exc}')
+        own_key = None
+    if not own_key:
+        # Without their own key the call is paid by the admin key; only users
+        # with credits may use it.
+        from models import User
+        with db.get_session() as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            credits = (user.credits or 0) if user else 0
+        if credits <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'Kredit tidak mencukupi. Isi kredit atau atur API Key Gemini Anda sendiri di Settings.'
+            }), 402
+    else:
+        return None
+
+    if redis_conn is None:
+        return None
+    limit = limit or AI_HELPER_RATE_LIMIT
+    key = f'ratelimit:{bucket}:{user_id}'
+    try:
+        count = redis_conn.incr(key)
+        if count == 1 or redis_conn.ttl(key) < 0:
+            redis_conn.expire(key, AI_HELPER_RATE_WINDOW_SECONDS)
+        if count > limit:
+            retry_sec = max(redis_conn.ttl(key), 1)
+            return jsonify({
+                'success': False,
+                'error': f'Terlalu banyak permintaan AI. Coba lagi dalam {retry_sec // 60 + 1} menit.'
+            }), 429
+    except Exception as exc:
+        # Redis trouble must not take the feature offline.
+        logger.error(f'AI helper rate limit check failed: {exc}')
+    return None
 
 @prompts_bp.route('/api/prompts')
 @require_jwt
@@ -156,14 +209,25 @@ def save_prompts(user_id):
 @prompts_bp.route('/api/optimize-prompt', methods=['POST'])
 @require_jwt
 def api_optimize_prompt(user_id):
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     prompt_type = data.get('prompt_type', 'article')
     current_prompt = data.get('current_prompt')
-    
-    if not site_id or not current_prompt:
+
+    if not site_id or not current_prompt or not isinstance(current_prompt, str):
         return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
-        
+    if len(current_prompt) > MAX_OPTIMIZE_PROMPT_CHARS:
+        return jsonify({'success': False, 'error': f'Prompt terlalu panjang (maksimal {MAX_OPTIMIZE_PROMPT_CHARS} karakter).'}), 400
+
+    with db.get_session() as session:
+        from models import WordPressSite
+        if not session.query(WordPressSite.id).filter_by(id=site_id, user_id=user_id).first():
+            return jsonify({'success': False, 'error': 'Site not found'}), 404
+
+    quota_error = check_ai_helper_quota(user_id)
+    if quota_error:
+        return quota_error
+
     xml_format_part = ""
     if "FORMAT OUTPUT (Gunakan XML-Tags berikut):" in current_prompt:
         parts = current_prompt.split("FORMAT OUTPUT (Gunakan XML-Tags berikut):")
@@ -269,11 +333,12 @@ Instruksi Revisi (SANGAT PENTING):
             
             return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
     except Exception as e:
-        from core_extensions import logger
         logger.error(f"Optimize prompt error: {e}")
         error_msg = str(e)
         if "503" in error_msg or "Unavailable" in error_msg or "high demand" in error_msg.lower():
             error_msg = "Server AI Google Gemini sedang mengalami beban tinggi (Kapasitas Penuh). Silakan tunggu sebentar dan coba klik lagi."
         elif "API Key" in error_msg or "403" in error_msg:
             error_msg = "API Key Gemini tidak valid atau tidak memiliki izin akses."
+        else:
+            error_msg = "Gagal mengoptimasi prompt. Silakan coba lagi."
         return jsonify({'success': False, 'error': error_msg}), 400

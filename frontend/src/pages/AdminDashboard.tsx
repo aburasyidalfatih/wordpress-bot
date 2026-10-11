@@ -558,6 +558,8 @@ export default function AdminDashboard() {
                   <Input 
                     id="PAYMENT_USD_RATE"
                     type="number"
+                    min="0.01"
+                    step="any"
                     value={config.PAYMENT_USD_RATE || 16000}
                     onChange={(e) => setConfig({ ...config, PAYMENT_USD_RATE: parseFloat(e.target.value) || 0 })}
                     placeholder="e.g. 16000"

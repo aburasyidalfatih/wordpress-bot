@@ -19,6 +19,17 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { WordPressSite } from '@/contexts/SiteContext';
 
+const READ_ONLY_SITE_FIELDS = new Set([
+  'id',
+  'article_prompt',
+  'image_prompt',
+  'gsc_connected',
+  'gsc_permission_level',
+  'gsc_connected_at',
+  'gsc_last_synced_at',
+  'gsc_last_error',
+]);
+
 export default function Sites() {
   const { sites, fetchSites, setSelectedSiteId, selectedSiteId } = useSiteContext();
   const [isEditing, setIsEditing] = useState(false);
@@ -91,10 +102,19 @@ export default function Sites() {
       const url = currentSite.id ? `/api/sites/${currentSite.id}` : '/api/sites';
       const method = currentSite.id ? 'PUT' : 'POST';
 
+      // Prompts are owned by the Prompts page (/api/save-prompts); never send the
+      // cached copy here or it would overwrite newer prompts. Also strip derived
+      // read-only fields (has_* flags, GSC connection status).
+      const payload: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(currentSite)) {
+        if (READ_ONLY_SITE_FIELDS.has(key) || key.startsWith('has_')) continue;
+        payload[key] = value;
+      }
+
       const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(currentSite)
+        body: JSON.stringify(payload)
       });
       
       const data = await res.json();
@@ -125,10 +145,8 @@ export default function Sites() {
       const res = await apiFetch(`/api/sites/${id}`, { method: 'DELETE' });
       if (res.ok) {
         toast.success('Website deleted successfully.');
+        // fetchSites() re-selects another site when the selected one no longer exists.
         await fetchSites();
-        if (selectedSiteId === id) {
-            setSelectedSiteId(null);
-        }
         setIsEditing(false);
       } else {
         const data = await res.json();

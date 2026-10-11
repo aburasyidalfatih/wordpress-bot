@@ -112,16 +112,23 @@ INTENT_GUIDANCE = {
         'en': 'The reader wants to understand. Lead with clear definitions, staged explanation and examples.',
     },
     'navigational': {
-        'id': 'Pembaca mencari sesuatu yang spesifik. Jawab langsung di awal, jangan bertele-tele.',
-        'en': 'The reader is looking for something specific. Answer directly up front.',
+        # Must not ask for brevity: the article contract is 2000+ words, and the
+        # old "jangan bertele-tele" wording contradicted it.
+        'id': 'Pembaca mencari sesuatu yang spesifik. Berikan jawaban langsung di bagian awal, lalu lanjutkan dengan pembahasan lengkap.',
+        'en': 'The reader is looking for something specific. Answer directly up front, then continue with the full coverage.',
     },
 }
 
 
-def classify_intent(query):
-    """Classify a search query into transactional / commercial / informational / navigational.
+def classify_intent(query, allow_navigational=False):
+    """Classify text into transactional / commercial / informational / navigational.
 
     Checked most-specific first: "harga tiket terbaik" is transactional, not commercial.
+
+    The "short text means navigational" heuristic only makes sense for real search
+    queries (a brand or page name), so it is opt-in. Category names and article
+    topics are usually one or two words ("Keuangan", "Parenting") and used to be
+    labelled navigational, which told the model to keep a 2000-word article short.
     """
     if not query:
         return 'informational'
@@ -132,7 +139,9 @@ def classify_intent(query):
                 return intent
     # Short queries with no question or comparison signal usually target a
     # specific page or brand.
-    return 'navigational' if len(text.split()) <= 2 else 'informational'
+    if allow_navigational and len(text.split()) <= 2:
+        return 'navigational'
+    return 'informational'
 
 
 def intent_guidance(intent, language='id'):
@@ -145,7 +154,7 @@ def plan_from_opportunities(opportunities, limit=10):
     planned = []
     for opp in opportunities or []:
         action = ACTION_BY_OPPORTUNITY.get(opp.get('type'), ACTION_NEW_ARTICLE)
-        intent = classify_intent(opp.get('query'))
+        intent = classify_intent(opp.get('query'), allow_navigational=True)
         planned.append({
             **opp,
             'action': action,
@@ -216,7 +225,7 @@ def annotate_keywords_with_demand(keywords, demand_map):
             'keyword': text,
             'impressions': round(impressions) if impressions is not None else None,
             'has_demand_data': impressions is not None,
-            'intent': classify_intent(text),
+            'intent': classify_intent(text, allow_navigational=True),
         })
     # Keywords with measured demand first, ordered by that demand.
     annotated.sort(key=lambda k: (k['has_demand_data'], k['impressions'] or 0), reverse=True)

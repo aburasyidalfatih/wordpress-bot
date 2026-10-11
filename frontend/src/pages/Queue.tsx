@@ -60,7 +60,12 @@ export default function Queue() {
   const pollingDelayRef = useRef(3000);
   const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post' | 'clear' | 'delete_history', id?: number} | null>(null);
 
-  // Refs removed in favor of using dependencies directly
+  // Track the currently selected site and the in-flight queue request so a late
+  // response for a previously selected site never overwrites the current view.
+  const selectedSiteIdRef = useRef(selectedSiteId);
+  const loadControllerRef = useRef<AbortController | null>(null);
+  useEffect(() => { selectedSiteIdRef.current = selectedSiteId; }, [selectedSiteId]);
+  useEffect(() => () => loadControllerRef.current?.abort(), []);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -74,46 +79,59 @@ export default function Queue() {
     if (!over) return;
     
     if (active.id !== over.id) {
-      setItems((items) => {
-        const oldIndex = items.findIndex((i) => i.id === active.id);
-        const newIndex = items.findIndex((i) => i.id === over.id);
-        const newItems = arrayMove(items, oldIndex, newIndex);
-        
-        // Save the new order to the backend
-        apiFetch('/api/queue/reorder', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: newItems.map((i) => i.id) })
-        })
-        .then(async (res) => {
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.error || 'Server error');
-          }
-        })
-        .catch(err => {
-          if (import.meta.env.DEV) console.error('Failed to save order:', err);
-          toast.error('Gagal menyimpan urutan antrean');
-          setItems(items); // Revert to old items
-        });
-        
-        return newItems;
+      // Compute the new order outside the state updater so the request is sent
+      // exactly once (updaters may run twice in StrictMode).
+      const previousItems = items;
+      const oldIndex = previousItems.findIndex((i) => i.id === active.id);
+      const newIndex = previousItems.findIndex((i) => i.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const newItems = arrayMove(previousItems, oldIndex, newIndex);
+      const siteId = selectedSiteId;
+      setItems(newItems);
+
+      // Save the new order to the backend
+      apiFetch('/api/queue/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: newItems.map((i) => i.id) })
+      })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Server error');
+        }
+      })
+      .catch(err => {
+        if (import.meta.env.DEV) console.error('Failed to save order:', err);
+        toast.error('Gagal menyimpan urutan antrean');
+        if (selectedSiteIdRef.current === siteId) {
+          setItems(previousItems); // Revert to old items
+        }
       });
     }
   };
 
   const loadQueue = useCallback((silent = false) => {
+    // A newer load always supersedes the previous one (polling or manual).
+    loadControllerRef.current?.abort();
     if (!selectedSiteId) {
+      loadControllerRef.current = null;
       setLoading(false);
       return;
     }
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+    const siteId = selectedSiteId;
+    const isStale = () => controller.signal.aborted || selectedSiteIdRef.current !== siteId;
+
     if (!silent) setLoading(true);
-    apiFetch(`/api/queue?site_id=${selectedSiteId}&t=${Date.now()}`)
+    apiFetch(`/api/queue?site_id=${siteId}&t=${Date.now()}`, { signal: controller.signal })
       .then(res => {
         if (!res.ok) throw new Error('API Error');
         return res.json();
       })
       .then(d => {
+        if (isStale()) return;
         if (d.success) {
           setItems(d.queue || []);
           setHistoryItems(d.history || []);
@@ -122,10 +140,16 @@ export default function Queue() {
         }
       })
       .catch(e => {
+        if (e?.name === 'AbortError' || isStale()) return;
         if (import.meta.env.DEV) console.error('Failed to load queue/history:', e);
       })
       .finally(() => {
-        if (!silent) setLoading(false);
+        // Only the latest request may clear the spinner; a superseded request
+        // leaves it to the one that replaced it.
+        if (loadControllerRef.current === controller) {
+          loadControllerRef.current = null;
+          setLoading(false);
+        }
       });
   }, [selectedSiteId]);
 
@@ -151,12 +175,15 @@ export default function Queue() {
 
   useEffect(() => {
     loadQueue();
-    // Default category to the first one available
-    const activeSite = sites.find(s => s.id === selectedSiteId);
-    if (activeSite?.categories?.length && !newCategory) {
-      setNewCategory(activeSite.categories[0].name);
-    }
-  }, [selectedSiteId, sites, loadQueue]);
+  }, [loadQueue]);
+
+  // Keep the chosen category valid for the current site: when switching sites
+  // (or when the site's categories change) and the previous choice isn't among
+  // them, fall back to the first available category.
+  const siteCategories = sites.find(s => s.id === selectedSiteId)?.categories || [];
+  const selectedCategory = siteCategories.some(c => c.name === newCategory)
+    ? newCategory
+    : (siteCategories[0]?.name ?? '');
 
   const handleDelete = (id: number) => {
     setConfirmAction({ type: 'delete', id });
@@ -164,14 +191,23 @@ export default function Queue() {
 
   const executeDelete = async (id: number) => {
     try {
-      await apiFetch('/api/queue', {
+      const res = await apiFetch('/api/queue', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409) {
+          toast.error(data.error || 'Artikel sedang diposting dan tidak dapat dihapus.');
+        } else {
+          toast.error('Gagal menghapus: ' + (data.error || 'Server error'));
+        }
+      }
       loadQueue();
     } catch (e) {
       if (import.meta.env.DEV) console.error(e);
+      toast.error('Network error');
     } finally {
       setConfirmAction(null);
     }
@@ -238,7 +274,11 @@ export default function Queue() {
       if (!data.success) {
         toast.error('Failed: ' + (data.error || 'Server error'));
       } else {
-        toast.success('Deleted successfully');
+        if (data.wp_deleted === false && data.message?.includes('not deleted')) {
+          toast.warning(data.message);
+        } else {
+          toast.success(data.message || 'Deleted successfully');
+        }
         loadQueue();
       }
     } catch (e) {
@@ -251,7 +291,7 @@ export default function Queue() {
 
   const handleManualAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle || !newCategory) return;
+    if (!newTitle || !selectedCategory) return;
     setAdding(true);
     try {
       const res = await apiFetch('/api/queue', {
@@ -260,7 +300,7 @@ export default function Queue() {
         body: JSON.stringify({
           site_id: selectedSiteId,
           title: newTitle,
-          category: newCategory,
+          category: selectedCategory,
           target_keywords: ''
         })
       });
@@ -341,9 +381,14 @@ export default function Queue() {
 
     try {
       const res = await apiFetch(`/api/queue/post/${id}`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        toast.error(data.error || 'Artikel ini sedang diposting.');
+        loadQueue(true);
+      } else if (data.success) {
         toast.success('Artikel sedang diproses!');
+        // Posting reserves a credit; refresh the credit badge in the layout.
+        window.dispatchEvent(new Event('refresh-profile'));
         loadQueue(true);
       } else {
         toast.error('Failed to post item: ' + (data.error || 'Server error'));
@@ -370,7 +415,12 @@ export default function Queue() {
       const res = await apiFetch(`/api/queue/edit/${editingItem.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: editTitle, target_keywords: editKeywords })
+        // Only send target_keywords when we actually know the current value (or the
+        // user typed one) so an older payload without the field can't wipe it.
+        body: JSON.stringify({
+          title: editTitle,
+          ...(editingItem.target_keywords !== undefined || editKeywords ? { target_keywords: editKeywords } : {})
+        })
       });
       const data = await res.json();
       if (data.success) {
@@ -416,7 +466,7 @@ export default function Queue() {
             <label htmlFor="category-select" className="sr-only">Category</label>
             <select
               id="category-select"
-              value={newCategory}
+              value={selectedCategory}
               onChange={e => setNewCategory(e.target.value)}
               className="flex h-10 w-[300px] items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -434,7 +484,7 @@ export default function Queue() {
               onChange={e => setNewTitle(e.target.value)} 
               className="flex-1 h-10 text-base"
             />
-            <Button type="submit" disabled={adding || !newTitle || !newCategory} className="h-10 px-5 text-sm">
+            <Button type="submit" disabled={adding || !newTitle || !selectedCategory} className="h-10 px-5 text-sm">
               <Plus className="h-4 w-4 mr-2" />
               Add to Queue
             </Button>
@@ -598,7 +648,7 @@ export default function Queue() {
                 : confirmAction?.type === 'clear'
                 ? 'Peringatan: Semua artikel di antrean untuk situs ini akan dihapus secara permanen. Apakah Anda yakin?'
                 : confirmAction?.type === 'delete_history'
-                ? 'Are you sure you want to delete this log? This will also attempt to delete the article from WordPress.'
+                ? 'Are you sure you want to delete this log? This will also attempt to move the article to the WordPress trash.'
                 : 'This will immediately process and post this item right now.'}
             </AlertDialogDescription>
           </AlertDialogHeader>

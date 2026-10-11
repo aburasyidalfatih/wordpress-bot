@@ -1,5 +1,9 @@
-from flask import Blueprint, request, jsonify
-from core_extensions import db, load_config, save_config, require_jwt, require_admin
+import os
+from flask import Blueprint, request, jsonify, make_response
+from core_extensions import (
+    db, load_config, save_config, require_jwt, require_admin,
+    issue_access_token, revoke_user_tokens,
+)
 from config import DEFAULT_GEMINI_MODEL
 
 settings_bp = Blueprint('settings', __name__)
@@ -76,9 +80,18 @@ def api_profile(user_id):
             return jsonify({'success': False, 'error': 'Email cannot be changed from profile settings'}), 400
             
         if password:
-            if len(password) < 8:
+            if not isinstance(password, str) or len(password) < 8:
                 return jsonify({'success': False, 'error': 'Password must be at least 8 characters'}), 400
             user.password_hash = generate_password_hash(password)
-            
+
         session.commit()
+
+    if not password:
         return jsonify({'success': True, 'message': 'Profile updated successfully'})
+
+    # Password changed: log out every other session, keep this one with a fresh token.
+    revoke_user_tokens(user_id)
+    token = issue_access_token(user_id)
+    resp = make_response(jsonify({'success': True, 'message': 'Profile updated successfully', 'token': token}))
+    resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=os.environ.get('FLASK_ENV') != 'development', max_age=7*24*60*60)
+    return resp

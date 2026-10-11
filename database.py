@@ -17,7 +17,7 @@ MIGRATION_LOCK_ID = 4207311001
 
 # Bump this whenever a new migration step is added to _run_migrations_locked so
 # that already-migrated databases re-run the set exactly once.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCHEMA_VERSION_KEY = '__schema_version__'
 
 # Research older than this is not used to drive new articles. Shared by the
@@ -95,8 +95,17 @@ class Database:
                 logger.info(f"Schema already at version {SCHEMA_VERSION}; skipping migrations.")
                 return
 
-            self._run_migrations_locked()
-            self._record_schema_version(conn)
+            # The version is only recorded when every step succeeded. Recording it
+            # after a failed step used to mark the schema current, so the failed
+            # step was never retried on later startups.
+            if self._run_migrations_locked():
+                self._record_schema_version(conn)
+                return True
+            logger.error(
+                f"One or more migrations failed; schema version {SCHEMA_VERSION} not "
+                "recorded so they are retried on the next startup."
+            )
+            return False
         finally:
             if acquired:
                 try:
@@ -142,46 +151,37 @@ class Database:
             logger.warning(f"Could not record schema version: {e}")
 
     def _run_migrations_locked(self):
-        try:
-            self.migrate_plain_configs()
-        except Exception as em:
-            logger.warning(f"Database plain config migration warning: {em}")
+        """Run every migration step. Returns True only if all of them succeeded.
 
-        try:
-            self.migrate_add_timezone_column()
-        except Exception as em:
-            logger.warning(f"Database timezone migration warning: {em}")
-        
-        try:
-            self.migrate_add_language_column()
-        except Exception as em:
-            logger.warning(f"Database language migration warning: {em}")
-        
-        try:
-            self.migrate_add_posting_started_at_column()
-        except Exception as em:
-            logger.warning(f"Database posting_started_at migration warning: {em}")
+        Each step is idempotent, so a partially applied set is safe to re-run. A
+        failure in one step does not stop the independent steps after it. Steps
+        let their errors propagate (they no longer swallow them) so a failure is
+        recorded here instead of being mistaken for success.
+        """
+        steps = [
+            ('plain config', self.migrate_plain_configs),
+            ('timezone', self.migrate_add_timezone_column),
+            ('language', self.migrate_add_language_column),
+            ('posting_started_at', self.migrate_add_posting_started_at_column),
+            ('queue job ownership', self.migrate_add_queue_job_columns),
+            ('research quality', self.migrate_research_quality_columns),
+            ('Search Console', self.migrate_search_console_foundation),
+            ('credit system', self.migrate_credit_system_tables),
+            ('foreign keys', self.migrate_add_foreign_keys),
+        ]
+        failed = []
+        for name, step in steps:
+            try:
+                step()
+            except Exception as em:
+                failed.append(name)
+                logger.error(f"Database {name} migration failed: {em}", exc_info=True)
 
-        try:
-            self.migrate_research_quality_columns()
-        except Exception as em:
-            logger.warning(f"Database research quality migration warning: {em}")
-
-        try:
-            self.migrate_search_console_foundation()
-        except Exception as em:
-            logger.warning(f"Database Search Console migration warning: {em}")
-
-        try:
-            self.migrate_credit_system_tables()
-        except Exception as em:
-            logger.warning(f"Database credit system migration warning: {em}")
-            
-        try:
-            self.migrate_add_foreign_keys()
-        except Exception as em:
-            logger.warning(f"Database foreign keys migration warning: {em}")
+        if failed:
+            logger.error(f"Database migrations finished with failures: {', '.join(failed)}")
+            return False
         logger.info("Database migrations completed successfully")
+        return True
     
     @contextmanager
     def get_session(self):
@@ -239,57 +239,61 @@ class Database:
 
     def migrate_add_timezone_column(self):
         from sqlalchemy import text
+        # Migration steps let errors propagate so _run_migrations_locked records
+        # the failure and the schema version is not bumped past it.
         with self.get_session() as session:
-            try:
-                res = session.execute(text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name='wordpress_sites' AND column_name='timezone'"
-                )).fetchone()
-                if not res:
-                    session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN timezone VARCHAR(100) DEFAULT 'Asia/Jakarta'"))
-                    session.commit()
-                    logger.info("Added column 'timezone' to 'wordpress_sites' table")
-            except Exception as e:
-                logger.warning(f"Timezone migration warning: {e}")
+            res = session.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='wordpress_sites' AND column_name='timezone'"
+            )).fetchone()
+            if not res:
+                session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN IF NOT EXISTS timezone VARCHAR(100) DEFAULT 'Asia/Jakarta'"))
+                session.commit()
+                logger.info("Added column 'timezone' to 'wordpress_sites' table")
 
     def migrate_add_language_column(self):
         from sqlalchemy import text
         with self.get_session() as session:
-            try:
-                res = session.execute(text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name='wordpress_sites' AND column_name='language'"
-                )).fetchone()
-                if not res:
-                    session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN language VARCHAR(50) DEFAULT 'id'"))
-                    session.commit()
-                    logger.info("Added column 'language' to 'wordpress_sites' table")
-            except Exception as e:
-                logger.warning(f"Language migration warning: {e}")
+            res = session.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='wordpress_sites' AND column_name='language'"
+            )).fetchone()
+            if not res:
+                session.execute(text("ALTER TABLE wordpress_sites ADD COLUMN IF NOT EXISTS language VARCHAR(50) DEFAULT 'id'"))
+                session.commit()
+                logger.info("Added column 'language' to 'wordpress_sites' table")
 
     def migrate_add_posting_started_at_column(self):
         """Track when a queue item entered 'posting' so stuck items can be recovered."""
         from sqlalchemy import text
         with self.get_session() as session:
-            try:
-                res = session.execute(text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name='content_queue' AND column_name='posting_started_at'"
-                )).fetchone()
-                if not res:
-                    session.execute(text(
-                        "ALTER TABLE content_queue ADD COLUMN posting_started_at TIMESTAMP NULL"
-                    ))
-                    # Backfill existing in-flight rows so the reaper has a baseline and
-                    # does not treat them as abandoned forever.
-                    session.execute(text(
-                        "UPDATE content_queue SET posting_started_at = created_at "
-                        "WHERE status = 'posting'"
-                    ))
-                    session.commit()
-                    logger.info("Added column 'posting_started_at' to 'content_queue' table")
-            except Exception as e:
-                logger.warning(f"posting_started_at migration warning: {e}")
+            res = session.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='content_queue' AND column_name='posting_started_at'"
+            )).fetchone()
+            if not res:
+                session.execute(text(
+                    "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS posting_started_at TIMESTAMP NULL"
+                ))
+                # Backfill existing in-flight rows so the reaper has a baseline and
+                # does not treat them as abandoned forever.
+                session.execute(text(
+                    "UPDATE content_queue SET posting_started_at = created_at "
+                    "WHERE status = 'posting' AND posting_started_at IS NULL"
+                ))
+                session.commit()
+                logger.info("Added column 'posting_started_at' to 'content_queue' table")
+
+    def migrate_add_queue_job_columns(self):
+        """Record which RQ job owns a 'posting' item and whether it holds a credit."""
+        from sqlalchemy import text
+        with self.get_session() as session:
+            session.execute(text(
+                "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS job_id VARCHAR(100) NULL"
+            ))
+            session.execute(text(
+                "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS credit_held BOOLEAN DEFAULT FALSE"
+            ))
 
     def migrate_research_quality_columns(self):
         """Add auditable research metadata without invalidating legacy rows."""
@@ -335,61 +339,55 @@ class Database:
     def migrate_credit_system_tables(self):
         from sqlalchemy import text
         with self.get_session() as session:
-            try:
-                for col, col_type, default_val in [
-                    ('role', 'VARCHAR(50)', "'user'"),
-                    ('tier', 'VARCHAR(50)', "'free'"),
-                    ('credits', 'INTEGER', "5"),
-                    ('google_id', 'VARCHAR(255)', "NULL")
-                ]:
-                    res = session.execute(text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='users' AND column_name=:col"
-                    ), {'col': col}).fetchone()
-                    if not res:
-                        # col, col_type, default_val are from a hardcoded whitelist above, not user input
-                        session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type} DEFAULT {default_val}"))
-                        session.commit()
-                        logger.info(f"Added column '{col}' to 'users' table")
-
-                res_config = session.execute(text(
+            for col, col_type, default_val in [
+                ('role', 'VARCHAR(50)', "'user'"),
+                ('tier', 'VARCHAR(50)', "'free'"),
+                ('credits', 'INTEGER', "5"),
+                ('google_id', 'VARCHAR(255)', "NULL")
+            ]:
+                res = session.execute(text(
                     "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name='config' AND column_name='gemini_image_model'"
-                )).fetchone()
-                if not res_config:
-                    session.execute(text("ALTER TABLE config ADD COLUMN gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
+                    "WHERE table_name='users' AND column_name=:col"
+                ), {'col': col}).fetchone()
+                if not res:
+                    # col, col_type, default_val are from a hardcoded whitelist above, not user input
+                    session.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {col_type} DEFAULT {default_val}"))
                     session.commit()
-                    logger.info("Added column 'gemini_image_model' to 'config' table")
+                    logger.info(f"Added column '{col}' to 'users' table")
 
-                # Auto-migrate old imagen models to gemini-3.1-flash-image
-                session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
-                session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
+            res_config = session.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='config' AND column_name='gemini_image_model'"
+            )).fetchone()
+            if not res_config:
+                session.execute(text("ALTER TABLE config ADD COLUMN IF NOT EXISTS gemini_image_model VARCHAR(100) DEFAULT 'gemini-3.1-flash-image'"))
                 session.commit()
-            except Exception as e:
-                logger.warning(f"Credit system user/config migration warning: {e}")
-                
+                logger.info("Added column 'gemini_image_model' to 'config' table")
+
+            # Auto-migrate old imagen models to gemini-3.1-flash-image
+            session.execute(text("UPDATE config SET gemini_image_model = 'gemini-3.1-flash-image' WHERE gemini_image_model LIKE 'imagen-%'"))
+            session.execute(text("UPDATE system_settings SET value = 'gemini-3.1-flash-image' WHERE key = 'gemini_image_model' AND value LIKE 'imagen-%'"))
+            session.commit()
+
     def migrate_add_foreign_keys(self):
         from sqlalchemy import text
         with self.get_session() as session:
-            try:
-                tables = ['transactions', 'config', 'wordpress_sites', 'post_logs', 'research_data', 'content_queue']
-                for table in tables:
-                    # Check if foreign key exists
-                    res = session.execute(text(f"""
-                        SELECT constraint_name 
-                        FROM information_schema.table_constraints 
-                        WHERE table_name='{table}' AND constraint_type='FOREIGN KEY' AND constraint_name='fk_{table}_user_id'
-                    """)).fetchone()
-                    
-                    if not res:
-                        # Clean up orphans before adding constraint
-                        session.execute(text(f"DELETE FROM {table} WHERE user_id NOT IN (SELECT id FROM users)"))
-                        # Add constraint
-                        session.execute(text(f"ALTER TABLE {table} ADD CONSTRAINT fk_{table}_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"))
-                        session.commit()
-                        logger.info(f"Added foreign key constraint fk_{table}_user_id to {table}")
-            except Exception as e:
-                logger.warning(f"Foreign keys migration warning: {e}")
+            tables = ['transactions', 'config', 'wordpress_sites', 'post_logs', 'research_data', 'content_queue']
+            for table in tables:
+                # Check if foreign key exists
+                res = session.execute(text(f"""
+                    SELECT constraint_name
+                    FROM information_schema.table_constraints
+                    WHERE table_name='{table}' AND constraint_type='FOREIGN KEY' AND constraint_name='fk_{table}_user_id'
+                """)).fetchone()
+
+                if not res:
+                    # Clean up orphans before adding constraint
+                    session.execute(text(f"DELETE FROM {table} WHERE user_id NOT IN (SELECT id FROM users)"))
+                    # Add constraint
+                    session.execute(text(f"ALTER TABLE {table} ADD CONSTRAINT fk_{table}_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"))
+                    session.commit()
+                    logger.info(f"Added foreign key constraint fk_{table}_user_id to {table}")
     
     def get_config(self, user_id):
         with self.get_session() as session:
@@ -663,33 +661,35 @@ class Database:
         """
         cutoff = datetime.now() - timedelta(days=MAX_RESEARCH_AGE_DAYS)
         with self.get_session() as session:
-            research = session.query(ResearchData).filter(
+            # Newest first, locked so two concurrent jobs cannot pop the same topic.
+            # A row with no usable topics left is marked used and skipped; it used
+            # to be returned as "nothing available" and so hid every older row.
+            candidates = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
                 ResearchData.category == category,
                 ResearchData.used.is_(False),
                 ResearchData.confidence_level.in_(USABLE_CONFIDENCE_LEVELS),
                 ResearchData.researched_at >= cutoff
-            ).order_by(ResearchData.created_at.desc()).first()
+            ).order_by(ResearchData.created_at.desc()).with_for_update().all()
 
-            if not research:
-                logger.info(
-                    f"No fresh, confident research topic for category '{category}' "
-                    f"(site_id={site_id}); falling back to category rotation."
-                )
-                return None
+            for research in candidates:
+                topics_list = list(research.suggested_topics or [])
+                topic_text = None
+                while topics_list and not topic_text:
+                    topic = topics_list.pop(0)
+                    value = topic.get('topic') if isinstance(topic, dict) else topic
+                    topic_text = str(value).strip() if value else None
+                research.suggested_topics = topics_list
+                if not topics_list:
+                    research.used = True
+                if topic_text:
+                    return topic_text
 
-
-            if research and research.suggested_topics:
-                topics_list = list(research.suggested_topics) if research.suggested_topics else []
-                topic = topics_list[0] if topics_list else None
-                if topic:
-                    topics_list.pop(0)
-                    research.suggested_topics = topics_list
-                    if not research.suggested_topics:
-                        research.used = True
-                    session.commit()
-                    return topic.get('topic') if isinstance(topic, dict) else topic
+            logger.info(
+                f"No fresh, confident research topic for category '{category}' "
+                f"(site_id={site_id}); falling back to category rotation."
+            )
             return None
     
     def get_latest_research(self, user_id, site_id, category):

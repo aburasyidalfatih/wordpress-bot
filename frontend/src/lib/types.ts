@@ -72,6 +72,7 @@ export interface QueueItem {
   created_at: string;
   site_id?: number;
   position?: number;
+  target_keywords?: string;
 }
 
 export interface ResearchCategory {

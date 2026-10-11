@@ -6,6 +6,7 @@ from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import SQLAlchemyError
 
 from core_extensions import db, q, trending, logger, load_config, require_jwt
+from routes.prompts import check_ai_helper_quota
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 from database import MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS
 from services.search_console import build_search_opportunities
@@ -22,6 +23,7 @@ research_bp = Blueprint('research', __name__)
 # rate-limited provider stretches that further.
 RESEARCH_SECONDS_PER_CATEGORY = 180
 RESEARCH_MIN_TIMEOUT_SECONDS = 600
+MAX_TITLE_CATEGORY_CHARS = 200
 
 @research_bp.route('/api/research_data')
 @require_jwt
@@ -234,8 +236,10 @@ def get_trending(user_id, category):
 def suggest_topics(user_id):
     """API endpoint to suggest article topics"""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         category = data.get('category')
+        if not isinstance(category, str) or not category.strip() or len(category) > 200:
+            return jsonify({'success': False, 'error': 'category is required'}), 400
         try:
             count = min(max(int(data.get('count', 5)), 1), 20)
         except (TypeError, ValueError):
@@ -256,10 +260,12 @@ def suggest_topics(user_id):
         suggestions = trending.suggest_article_topics(category, count, language=language)
         return jsonify({'suggestions': suggestions})
     except Exception as e:
-        logger.error(f"Trending API error: {e}")
+        logger.error(f"Suggest topics error: {e}")
         error_msg = str(e)
         if '503' in error_msg or 'high demand' in error_msg.lower():
             error_msg = 'Server Google AI sedang sibuk karena lonjakan permintaan. Silakan coba lagi beberapa saat.'
+        else:
+            error_msg = 'Gagal mengambil saran topik. Silakan coba lagi.'
         return jsonify({'error': error_msg}), 500
 
 @research_bp.route('/manual-research', methods=['POST'])
@@ -268,7 +274,7 @@ def manual_research(user_id):
     site_id = request.args.get('site_id')
     category = request.args.get('category')
     if not site_id and request.is_json:
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         site_id = data.get('site_id')
         category = data.get('category')
         
@@ -294,18 +300,22 @@ def manual_research(user_id):
             if not user:
                 return jsonify({'success': False, 'error': 'User tidak ditemukan.'}), 404
                 
-            selected_categories = site.selected_categories or []
-            if not selected_categories:
+            # The research job researches each category name once, so charge per
+            # unique name; duplicate entries must not be billed twice.
+            selected_category_names = list(dict.fromkeys(
+                cat.get('name') for cat in (site.selected_categories or [])
+                if isinstance(cat, dict) and isinstance(cat.get('name'), str) and cat.get('name')
+            ))
+            if not selected_category_names:
                 return jsonify({'success': False, 'error': 'Silakan pilih kategori target terlebih dahulu di Pengaturan Website.'}), 400
-                
+
             if category:
                 # verify category is selected
-                match = [cat for cat in selected_categories if cat['name'] == category]
-                if not match:
+                if not isinstance(category, str) or category not in selected_category_names:
                     return jsonify({'success': False, 'error': f'Kategori "{category}" tidak terpilih untuk website ini.'}), 400
                 required_credits = 1
             else:
-                required_credits = len(selected_categories)
+                required_credits = len(selected_category_names)
                 
             user_credits = user.credits if user.credits is not None else 0
             if user_credits < required_credits:
@@ -333,7 +343,8 @@ def manual_research(user_id):
         try:
             job = q.enqueue(
                 'tasks.research_jobs.deep_research_job',
-                user_id, True, site_id, category,
+                user_id, True, site_id_int, category,
+                charged_credits=required_credits,
                 job_timeout=timeout_seconds
             )
         except Exception as enqueue_error:
@@ -350,21 +361,22 @@ def manual_research(user_id):
         })
     except Exception as e:
         logger.error(f"Manual research error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Terjadi kesalahan saat memulai riset.'}), 500
 
 @research_bp.route('/api/generate-titles/<category>', methods=['POST'])
 @require_jwt
 def generate_titles(user_id, category):
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     try:
         count = min(max(int(data.get('count', 5)), 1), 20)
     except (TypeError, ValueError):
         count = 5
     site_id = data.get('site_id') or request.args.get('site_id', type=int)
-    config = load_config(user_id)
     
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
+    if not category.strip() or len(category) > MAX_TITLE_CATEGORY_CHARS:
+        return jsonify({'success': False, 'error': 'Kategori tidak valid.', 'code': 400}), 400
     
     try:
         # Get keywords from research data
@@ -401,9 +413,18 @@ def generate_titles(user_id, category):
 
             category_desc = ""
             for cat in (site.categories or []):
-                if cat.get('name') == category:
-                    category_desc = cat.get('description', '')
+                if isinstance(cat, dict) and cat.get('name') == category:
+                    category_desc = str(cat.get('description') or '')[:1000]
                     break
+
+        # Only gate (and count) the uncharged Gemini call once the request is
+        # otherwise valid.
+        # Bulk generation sends one request per category, so titles get their
+        # own, larger bucket instead of sharing the prompt optimizer's.
+        quota_error = check_ai_helper_quota(user_id, bucket='ai_titles', limit=200)
+        if quota_error:
+            return quota_error
+        config = load_config(user_id)
         
         # Search Console queries are the strongest topic signal available: real
         # searches that already produced impressions for this exact site. Feed the
@@ -568,6 +589,8 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
         error_msg = str(e)
         if '503' in error_msg or 'high demand' in error_msg.lower():
             error_msg = 'Server Google AI sedang sibuk karena lonjakan permintaan. Silakan coba lagi beberapa saat.'
+        else:
+            error_msg = 'terjadi kesalahan, silakan coba lagi.'
         return jsonify({'success': False, 'error': f'Gagal men-generate judul: {error_msg}'}), 500
 
 @research_bp.route('/api/clear-research', methods=['POST'])

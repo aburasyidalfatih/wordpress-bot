@@ -6,7 +6,7 @@ import jwt
 from flask import Blueprint, jsonify, redirect, request
 
 from config import Config
-from core_extensions import db, q, logger, require_jwt
+from core_extensions import db, q, redis_conn, logger, require_jwt
 from models import SearchConsoleMetric, WordPressSite
 from services.search_console import (
     SearchConsoleClient,
@@ -19,6 +19,32 @@ from services.search_console import (
 
 
 search_console_bp = Blueprint('search_console', __name__)
+
+OAUTH_STATE_TTL_SECONDS = 600
+OAUTH_STATE_KEY_PREFIX = 'gsc_oauth_state:'
+
+
+def _store_oauth_nonce(nonce, user_id, site_id):
+    redis_conn.set(f'{OAUTH_STATE_KEY_PREFIX}{nonce}', f'{user_id}:{site_id}', ex=OAUTH_STATE_TTL_SECONDS)
+
+
+def _consume_oauth_nonce(nonce):
+    """Atomically fetch and delete a stored nonce (one-time use)."""
+    key = f'{OAUTH_STATE_KEY_PREFIX}{nonce}'
+    pipe = redis_conn.pipeline()
+    pipe.get(key)
+    pipe.delete(key)
+    value, _ = pipe.execute()
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return value
+
+
+def _clear_search_console_metrics(session, user_id, site_id):
+    """Drop synced metrics so data from an old account/property is not reused."""
+    session.query(SearchConsoleMetric).filter_by(
+        user_id=user_id, site_id=site_id
+    ).delete(synchronize_session=False)
 
 
 def _google_credentials(site=None):
@@ -68,13 +94,19 @@ def authorize_search_console(user_id, site_id):
             return jsonify({'success': False, 'error': 'Isi Google OAuth Client ID dan Client Secret, lalu simpan website terlebih dahulu.'}), 400
 
     now = datetime.now(timezone.utc)
+    nonce = secrets.token_urlsafe(24)
+    try:
+        _store_oauth_nonce(nonce, user_id, site_id)
+    except Exception as exc:
+        logger.error(f'Could not store Search Console OAuth state: {exc}')
+        return jsonify({'success': False, 'error': 'Gagal memulai otorisasi Google. Coba lagi.'}), 500
     state = jwt.encode({
         'purpose': 'gsc_oauth',
         'user_id': user_id,
         'site_id': site_id,
-        'nonce': secrets.token_urlsafe(24),
+        'nonce': nonce,
         'iat': now,
-        'exp': now + timedelta(minutes=10),
+        'exp': now + timedelta(seconds=OAUTH_STATE_TTL_SECONDS),
     }, Config.SECRET_KEY, algorithm='HS256')
     return jsonify({
         'success': True,
@@ -97,6 +129,11 @@ def search_console_callback():
             raise ValueError('Invalid OAuth state purpose')
         user_id = int(payload['user_id'])
         site_id = int(payload['site_id'])
+        nonce = payload.get('nonce')
+        # The nonce must have been issued by /authorize and is single use, so
+        # a captured callback URL cannot be replayed.
+        if not nonce or _consume_oauth_nonce(nonce) != f'{user_id}:{site_id}':
+            return _frontend_redirect('error', 'Sesi otorisasi Google tidak valid atau kedaluwarsa. Silakan hubungkan ulang.')
         with db.get_session() as session:
             site = _site_for_user(session, user_id, site_id)
             if not site:
@@ -127,6 +164,9 @@ def search_console_callback():
                 return _frontend_redirect('error', 'Website tidak ditemukan.')
             site.gsc_refresh_token = refresh_token
             if match:
+                if match['site_url'] != site.gsc_property_url:
+                    _clear_search_console_metrics(session, user_id, site_id)
+                    site.gsc_last_synced_at = None
                 site.gsc_property_url = match['site_url']
                 site.gsc_permission_level = match.get('permission_level')
             site.gsc_connected_at = datetime.now()
@@ -134,7 +174,8 @@ def search_console_callback():
         return _frontend_redirect('connected')
     except Exception as exc:
         logger.error(f'Search Console OAuth callback failed: {exc}')
-        return _frontend_redirect('error', str(exc))
+        message = str(exc) if isinstance(exc, SearchConsoleError) else 'Gagal menghubungkan Search Console.'
+        return _frontend_redirect('error', message)
 
 
 @search_console_bp.route('/api/search-console/sites/<int:site_id>/properties', methods=['GET'])
@@ -155,7 +196,8 @@ def list_search_console_properties(user_id, site_id):
 @search_console_bp.route('/api/search-console/sites/<int:site_id>/property', methods=['PUT'])
 @require_jwt
 def select_search_console_property(user_id, site_id):
-    property_url = (request.get_json(silent=True) or {}).get('property_url', '').strip()
+    property_url = (request.get_json(silent=True) or {}).get('property_url')
+    property_url = property_url.strip() if isinstance(property_url, str) else ''
     if not property_url:
         return jsonify({'success': False, 'error': 'Property Search Console wajib dipilih.'}), 400
     try:
@@ -167,6 +209,9 @@ def select_search_console_property(user_id, site_id):
             selected = next((item for item in properties if item['site_url'] == property_url), None)
             if not selected:
                 return jsonify({'success': False, 'error': 'Property tidak tersedia untuk akun Google ini.'}), 403
+            if property_url != site.gsc_property_url:
+                _clear_search_console_metrics(session, user_id, site_id)
+                site.gsc_last_synced_at = None
             site.gsc_property_url = property_url
             site.gsc_permission_level = selected.get('permission_level')
             site.gsc_last_error = None
@@ -200,6 +245,8 @@ def disconnect_search_console(user_id, site_id):
         site.gsc_permission_level = None
         site.gsc_connected_at = None
         site.gsc_last_error = None
+        site.gsc_last_synced_at = None
+        _clear_search_console_metrics(session, user_id, site_id)
     return jsonify({'success': True})
 
 

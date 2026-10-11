@@ -2,14 +2,136 @@ import requests
 from flask import Blueprint, request, jsonify
 from core_extensions import db, logger, require_jwt, send_telegram_notification
 from services.wp_publisher import WordPressPublisher
+from services.url_safety import validate_public_http_url
 
 sites_bp = Blueprint('sites', __name__)
+
+MAX_SELECTED_CATEGORIES = 500
+MAX_CATEGORIES = 500
 
 def _secret_status(value):
     return bool(value)
 
 def _should_update_secret(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+class _InvalidField(ValueError):
+    pass
+
+
+def _clean_str(data, key, max_len, allow_empty=True):
+    """Return a stripped string (or None when blank) for data[key]."""
+    value = data.get(key)
+    if value is None:
+        if not allow_empty:
+            raise _InvalidField(f'{key} wajib diisi.')
+        return None
+    if not isinstance(value, str):
+        raise _InvalidField(f'{key} harus berupa teks.')
+    value = value.strip()
+    if not value and not allow_empty:
+        raise _InvalidField(f'{key} wajib diisi.')
+    if len(value) > max_len:
+        raise _InvalidField(f'{key} maksimal {max_len} karakter.')
+    return value or None
+
+
+def _clean_bool(data, key):
+    value = data.get(key)
+    if not isinstance(value, bool):
+        raise _InvalidField(f'{key} harus bernilai true/false.')
+    return value
+
+
+def _clean_wordpress_url(value):
+    ok, result = validate_public_http_url(value)
+    if not ok:
+        raise _InvalidField(f'URL WordPress tidak valid: {result}')
+    return result
+
+
+DEFAULT_SCHEDULE_HOURS = '0,6,12,18'
+
+
+def _clean_schedule_hours(value):
+    """Accept "0, 6, 12" or [0, 6, 12]; store the canonical "0,6,12" string.
+
+    A blank string falls back to the default schedule (what the dispatcher
+    used to do), and "07:00"-style tokens are read as the hour.
+    """
+    if isinstance(value, str):
+        tokens = [t.strip() for t in value.split(',') if t.strip()]
+        if not tokens:
+            return DEFAULT_SCHEDULE_HOURS
+        try:
+            hours = [int(t[:-3] if t.endswith(':00') else t) for t in tokens]
+        except ValueError:
+            raise _InvalidField('Jadwal posting harus berupa jam 0-23 dipisahkan koma.')
+    elif isinstance(value, list):
+        if not all(isinstance(h, int) and not isinstance(h, bool) for h in value):
+            raise _InvalidField('Jadwal posting harus berupa daftar jam 0-23.')
+        hours = value
+    else:
+        raise _InvalidField('Jadwal posting harus berupa jam 0-23 dipisahkan koma.')
+    if not hours or any(h < 0 or h > 23 for h in hours):
+        raise _InvalidField('Jadwal posting harus berisi jam 0-23.')
+    return ','.join(str(h) for h in sorted(set(hours)))
+
+
+def _clean_timezone(value):
+    from zoneinfo import ZoneInfo
+    if not isinstance(value, str) or not value.strip() or len(value) > 100:
+        raise _InvalidField('Timezone tidak valid.')
+    try:
+        ZoneInfo(value.strip())
+    except Exception:
+        raise _InvalidField('Timezone tidak valid.')
+    return value.strip()
+
+
+def _clean_language(value):
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 10:
+        raise _InvalidField('Bahasa tidak valid.')
+    return value.strip()
+
+
+def _clean_category_list(value, max_items, field):
+    """Validate a list of WordPress categories, deduplicated by id.
+
+    WordPress only requires names to be unique per parent, so two categories may
+    share a name; the id is the real identity.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _InvalidField(f'{field} harus berupa daftar.')
+    cleaned = []
+    seen_ids = set()
+    for cat in value:
+        if not isinstance(cat, dict):
+            raise _InvalidField(f'{field} berisi data kategori yang tidak valid.')
+        cat_id = cat.get('id')
+        name = cat.get('name')
+        if not isinstance(cat_id, int) or isinstance(cat_id, bool):
+            raise _InvalidField(f'{field}: id kategori harus berupa angka.')
+        if not isinstance(name, str) or not name.strip():
+            raise _InvalidField(f'{field}: nama kategori wajib diisi.')
+        name = name.strip()[:200]
+        if cat_id in seen_ids:
+            continue
+        seen_ids.add(cat_id)
+        description = cat.get('description')
+        count = cat.get('count')
+        cleaned.append({
+            'id': cat_id,
+            'name': name,
+            'description': description[:2000] if isinstance(description, str) else '',
+            'count': count if isinstance(count, int) and not isinstance(count, bool) else 0,
+        })
+    if len(cleaned) > max_items:
+        raise _InvalidField(f'{field} maksimal {max_items} kategori.')
+    return cleaned
 
 @sites_bp.route('/api/sites', methods=['GET'])
 @require_jwt
@@ -84,22 +206,35 @@ def create_site(user_id):
     if not data or not data.get('wordpress_url'):
         return jsonify({'success': False, 'error': 'WordPress URL is required'}), 400
         
+    try:
+        wordpress_url = _clean_wordpress_url(data.get('wordpress_url'))
+        site_name = _clean_str(data, 'site_name', 200) or 'New Website'
+        wordpress_username = _clean_str(data, 'wordpress_username', 200) or ''
+        wordpress_password = data['wordpress_password'] if _should_update_secret(data.get('wordpress_password')) else ''
+        schedule_hours = _clean_schedule_hours(data['schedule_hours']) if data.get('schedule_hours') is not None else DEFAULT_SCHEDULE_HOURS
+        timezone_name = _clean_timezone(data['timezone']) if data.get('timezone') else 'Asia/Jakarta'
+        language = _clean_language(data['language']) if data.get('language') else 'id'
+        auto_post = _clean_bool(data, 'auto_post') if data.get('auto_post') is not None else False
+        gsc_client_id = _clean_str(data, 'gsc_client_id', 500)
+    except _InvalidField as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
     with db.get_session() as session:
         from models import WordPressSite
         site = WordPressSite(
             user_id=user_id,
-            site_name=data.get('site_name', 'New Website'),
-            wordpress_url=data.get('wordpress_url'),
-            wordpress_username=data.get('wordpress_username', ''),
-            wordpress_password=data.get('wordpress_password', ''), # Virtual setter
+            site_name=site_name,
+            wordpress_url=wordpress_url,
+            wordpress_username=wordpress_username,
+            wordpress_password=wordpress_password, # Virtual setter
 
-            schedule_hours=data.get('schedule_hours', '0,6,12,18'),
-            timezone=data.get('timezone', 'Asia/Jakarta'),
-            language=data.get('language', 'id'),
-            auto_post=data.get('auto_post', False)
+            schedule_hours=schedule_hours,
+            timezone=timezone_name,
+            language=language,
+            auto_post=auto_post
         )
-        if data.get('gsc_client_id'):
-            site.gsc_client_id = data['gsc_client_id'].strip()
+        if gsc_client_id:
+            site.gsc_client_id = gsc_client_id
         if _should_update_secret(data.get('gsc_client_secret')):
             site.gsc_client_secret = data['gsc_client_secret']
         session.add(site)
@@ -110,35 +245,72 @@ def create_site(user_id):
 @require_jwt
 def update_site(user_id, site_id):
     data = request.get_json(silent=True) or {}
+    # Validate and normalize every typed field before touching the row, so a
+    # malformed request cannot store data that later crashes the scheduler or
+    # the article jobs.
+    # The Sites page sends the whole site object back, so a null value for a
+    # typed field means "unchanged" rather than "invalid".
+    def present(key):
+        return key in data and data[key] is not None
+
+    clean = {}
+    try:
+        if 'site_name' in data: clean['site_name'] = _clean_str(data, 'site_name', 200, allow_empty=False)
+        if 'wordpress_username' in data: clean['wordpress_username'] = _clean_str(data, 'wordpress_username', 200) or ''
+        if present('schedule_hours'): clean['schedule_hours'] = _clean_schedule_hours(data['schedule_hours'])
+        if present('timezone'): clean['timezone'] = _clean_timezone(data['timezone'])
+        if present('language'): clean['language'] = _clean_language(data['language'])
+        if present('categories'): clean['categories'] = _clean_category_list(data['categories'], MAX_CATEGORIES, 'categories')
+        if present('selected_categories'):
+            clean['selected_categories'] = _clean_category_list(data['selected_categories'], MAX_SELECTED_CATEGORIES, 'selected_categories')
+        if 'gsc_client_id' in data: clean['gsc_client_id'] = _clean_str(data, 'gsc_client_id', 500)
+        for key in ('article_prompt', 'image_prompt'):
+            if key in data: clean[key] = _clean_str(data, key, 50000)
+        for key in ('telegram_chat_id', 'telegram_channel_id', 'facebook_page_id', 'pinterest_board_id', 'threads_user_id'):
+            if key in data: clean[key] = _clean_str(data, key, 200)
+        for key in ('auto_post', 'telegram_enabled', 'telegram_post_to_channel', 'facebook_enabled',
+                    'pinterest_enabled', 'twitter_enabled', 'threads_enabled', 'is_active'):
+            if present(key): clean[key] = _clean_bool(data, key)
+    except _InvalidField as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
     with db.get_session() as session:
-        from models import WordPressSite
+        from models import WordPressSite, SearchConsoleMetric
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
+        if 'wordpress_url' in data and data['wordpress_url'] != site.wordpress_url:
+            # Only a changed URL is resolved here, so a transient DNS failure
+            # does not block unrelated edits; server-side fetches re-validate.
+            try:
+                clean['wordpress_url'] = _clean_wordpress_url(data['wordpress_url'])
+            except _InvalidField as exc:
+                return jsonify({'success': False, 'error': str(exc)}), 400
+
         # Update basic info
-        if 'site_name' in data: site.site_name = data['site_name']
-        if 'wordpress_url' in data: site.wordpress_url = data['wordpress_url']
-        if 'wordpress_username' in data: site.wordpress_username = data['wordpress_username']
-        if 'wordpress_password' in data and _should_update_secret(data['wordpress_password']): 
+        if 'site_name' in clean: site.site_name = clean['site_name']
+        if 'wordpress_url' in clean: site.wordpress_url = clean['wordpress_url']
+        if 'wordpress_username' in clean: site.wordpress_username = clean['wordpress_username']
+        if 'wordpress_password' in data and _should_update_secret(data['wordpress_password']):
             site.wordpress_password = data['wordpress_password']
-            
+
         # Update schedule
 
-        if 'schedule_hours' in data: site.schedule_hours = data['schedule_hours']
-        if 'timezone' in data: site.timezone = data['timezone']
-        if 'language' in data: site.language = data['language']
-        if 'auto_post' in data: site.auto_post = data['auto_post']
-        
+        if 'schedule_hours' in clean: site.schedule_hours = clean['schedule_hours']
+        if 'timezone' in clean: site.timezone = clean['timezone']
+        if 'language' in clean: site.language = clean['language']
+        if 'auto_post' in clean: site.auto_post = clean['auto_post']
+
         # Update categories
-        if 'categories' in data: site.categories = data['categories']
-        if 'selected_categories' in data: site.selected_categories = data['selected_categories']
+        if 'categories' in clean: site.categories = clean['categories']
+        if 'selected_categories' in clean: site.selected_categories = clean['selected_categories']
 
         # Per-website Search Console OAuth credentials. Blank secret means keep
         # the encrypted value already stored.
         gsc_credentials_changed = False
-        if 'gsc_client_id' in data:
-            new_client_id = (data['gsc_client_id'] or '').strip() or None
+        if 'gsc_client_id' in clean:
+            new_client_id = clean['gsc_client_id']
             if new_client_id != site.gsc_client_id:
                 site.gsc_client_id = new_client_id
                 gsc_credentials_changed = True
@@ -154,38 +326,44 @@ def update_site(user_id, site_id):
             site.gsc_permission_level = None
             site.gsc_connected_at = None
             site.gsc_last_error = None
-        
+            # Metrics synced through the old OAuth client may belong to another
+            # Google account/property; do not keep serving them.
+            session.query(SearchConsoleMetric).filter_by(
+                user_id=user_id, site_id=site_id
+            ).delete(synchronize_session=False)
+            site.gsc_last_synced_at = None
+
         # Prompts
-        if 'article_prompt' in data: site.article_prompt = data['article_prompt'] or None
-        if 'image_prompt' in data: site.image_prompt = data['image_prompt'] or None
-        
+        if 'article_prompt' in clean: site.article_prompt = clean['article_prompt']
+        if 'image_prompt' in clean: site.image_prompt = clean['image_prompt']
+
         # Update social
         if 'telegram_bot_token' in data and _should_update_secret(data['telegram_bot_token']): site.telegram_bot_token = data['telegram_bot_token']
-        if 'telegram_chat_id' in data: site.telegram_chat_id = data['telegram_chat_id']
-        if 'telegram_channel_id' in data: site.telegram_channel_id = data['telegram_channel_id']
-        if 'telegram_enabled' in data: site.telegram_enabled = data['telegram_enabled']
-        if 'telegram_post_to_channel' in data: site.telegram_post_to_channel = data['telegram_post_to_channel']
-        
-        if 'facebook_page_id' in data: site.facebook_page_id = data['facebook_page_id']
+        if 'telegram_chat_id' in clean: site.telegram_chat_id = clean['telegram_chat_id']
+        if 'telegram_channel_id' in clean: site.telegram_channel_id = clean['telegram_channel_id']
+        if 'telegram_enabled' in clean: site.telegram_enabled = clean['telegram_enabled']
+        if 'telegram_post_to_channel' in clean: site.telegram_post_to_channel = clean['telegram_post_to_channel']
+
+        if 'facebook_page_id' in clean: site.facebook_page_id = clean['facebook_page_id']
         if 'facebook_access_token' in data and _should_update_secret(data['facebook_access_token']): site.facebook_access_token = data['facebook_access_token']
-        if 'facebook_enabled' in data: site.facebook_enabled = data['facebook_enabled']
-        
-        if 'pinterest_board_id' in data: site.pinterest_board_id = data['pinterest_board_id']
+        if 'facebook_enabled' in clean: site.facebook_enabled = clean['facebook_enabled']
+
+        if 'pinterest_board_id' in clean: site.pinterest_board_id = clean['pinterest_board_id']
         if 'pinterest_access_token' in data and _should_update_secret(data['pinterest_access_token']): site.pinterest_access_token = data['pinterest_access_token']
-        if 'pinterest_enabled' in data: site.pinterest_enabled = data['pinterest_enabled']
+        if 'pinterest_enabled' in clean: site.pinterest_enabled = clean['pinterest_enabled']
         
         if 'twitter_api_key' in data and _should_update_secret(data['twitter_api_key']): site.twitter_api_key = data['twitter_api_key']
         if 'twitter_api_secret' in data and _should_update_secret(data['twitter_api_secret']): site.twitter_api_secret = data['twitter_api_secret']
         if 'twitter_access_token' in data and _should_update_secret(data['twitter_access_token']): site.twitter_access_token = data['twitter_access_token']
         if 'twitter_access_secret' in data and _should_update_secret(data['twitter_access_secret']): site.twitter_access_secret = data['twitter_access_secret']
-        if 'twitter_enabled' in data: site.twitter_enabled = data['twitter_enabled']
-        
-        if 'threads_user_id' in data: site.threads_user_id = data['threads_user_id']
-        if 'threads_access_token' in data and _should_update_secret(data['threads_access_token']): site.threads_access_token = data['threads_access_token']
-        if 'threads_enabled' in data: site.threads_enabled = data['threads_enabled']
-        
+        if 'twitter_enabled' in clean: site.twitter_enabled = clean['twitter_enabled']
 
-        if 'is_active' in data: site.is_active = data['is_active']
+        if 'threads_user_id' in clean: site.threads_user_id = clean['threads_user_id']
+        if 'threads_access_token' in data and _should_update_secret(data['threads_access_token']): site.threads_access_token = data['threads_access_token']
+        if 'threads_enabled' in clean: site.threads_enabled = clean['threads_enabled']
+
+
+        if 'is_active' in clean: site.is_active = clean['is_active']
         
         session.commit()
         return jsonify({'success': True, 'message': 'Site updated successfully'})
@@ -215,9 +393,15 @@ def fetch_categories(user_id, site_id):
         if not site.wordpress_url or not site.wordpress_username or not site.wordpress_password:
             return jsonify({'success': False, 'error': 'Mohon isi kredensial WordPress terlebih dahulu.'}), 400
         
+        # Re-validate the stored URL: it may predate URL validation, and DNS
+        # can change after it was saved.
+        url_ok, url_or_error = validate_public_http_url(site.wordpress_url)
+        if not url_ok:
+            return jsonify({'success': False, 'error': f'URL WordPress tidak valid: {url_or_error}'}), 400
+
         try:
             publisher = WordPressPublisher(
-                site.wordpress_url,
+                url_or_error,
                 site.wordpress_username,
                 site.wordpress_password
             )
@@ -230,7 +414,7 @@ def fetch_categories(user_id, site_id):
                 selected_cats = site.selected_categories or []
                 updated_selected = []
                 for sel_cat in selected_cats:
-                    matching = next((c for c in categories if c['id'] == sel_cat['id']), None)
+                    matching = next((c for c in categories if c['id'] == sel_cat.get('id')), None)
                     if matching:
                         updated_selected.append({
                             'id': matching['id'],
@@ -248,7 +432,7 @@ def fetch_categories(user_id, site_id):
                 return jsonify({'success': False, 'error': 'Tidak dapat mengambil kategori. Periksa kredensial.'}), 400
         except Exception as e:
             logger.error(f"Fetch categories error: {e}")
-            return jsonify({'success': False, 'error': f'Error: {str(e)}'}), 500
+            return jsonify({'success': False, 'error': 'Terjadi kesalahan saat mengambil kategori.'}), 500
 
 @sites_bp.route("/api/sites/<int:site_id>/test-telegram", methods=["POST"])
 @require_jwt
@@ -373,7 +557,9 @@ def save_prompts(user_id, site_id):
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
             
-        site.article_prompt = data.get('article_prompt', '').strip() or None
-        site.image_prompt = data.get('image_prompt', '').strip() or None
+        article_prompt = data.get('article_prompt')
+        image_prompt = data.get('image_prompt')
+        site.article_prompt = (article_prompt.strip() or None) if isinstance(article_prompt, str) else None
+        site.image_prompt = (image_prompt.strip() or None) if isinstance(image_prompt, str) else None
         session.commit()
         return jsonify({'success': True, 'message': 'Prompts saved!'})

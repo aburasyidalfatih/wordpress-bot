@@ -2,8 +2,14 @@ from flask import Blueprint, jsonify, request
 
 from core_extensions import db, optimizer, require_jwt, get_cached_stats
 from services.wp_publisher import WordPressPublisher
+from services.url_safety import validate_public_http_url
 
 dashboard_bp = Blueprint('dashboard', __name__)
+
+# One sync request must not tie up a web worker for minutes: each post costs up
+# to two WordPress requests with a 10s timeout.
+SYNC_ENGAGEMENT_MAX_POSTS = 20
+SYNC_ENGAGEMENT_MAX_SECONDS = 25
 
 @dashboard_bp.route('/api/dashboard')
 @require_jwt
@@ -94,7 +100,8 @@ def api_dashboard(user_id):
 @require_jwt
 def sync_engagement(user_id):
     """Sync engagement metrics from WordPress"""
-    site_id = request.json.get('site_id')
+    import time
+    site_id = (request.get_json(silent=True) or {}).get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
@@ -104,17 +111,27 @@ def sync_engagement(user_id):
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
-                
+            if not site.wordpress_url or not site.wordpress_username or not site.wordpress_password:
+                return jsonify({'success': False, 'error': 'Mohon isi kredensial WordPress terlebih dahulu.'}), 400
+
+            # Re-validate the stored URL before the server fetches it.
+            url_ok, url_or_error = validate_public_http_url(site.wordpress_url)
+            if not url_ok:
+                return jsonify({'success': False, 'error': f'URL WordPress tidak valid: {url_or_error}'}), 400
+
             publisher = WordPressPublisher(
-                site.wordpress_url,
+                url_or_error,
                 site.wordpress_username,
                 site.wordpress_password
             )
             
-        logs = db.get_logs(user_id, site_id=site_id, limit=50)
+        logs = db.get_logs(user_id, site_id=site_id, limit=SYNC_ENGAGEMENT_MAX_POSTS)
         synced = 0
+        deadline = time.monotonic() + SYNC_ENGAGEMENT_MAX_SECONDS
         
         for log in logs:
+            if time.monotonic() >= deadline:
+                break
             if log.get('post_id'):
                 stats = publisher.get_post_stats(log['post_id'])
                 if stats:
@@ -141,7 +158,7 @@ def sync_engagement(user_id):
 @require_jwt
 def optimize_categories(user_id):
     """Auto-optimize category order based on performance"""
-    site_id = request.json.get('site_id')
+    site_id = (request.get_json(silent=True) or {}).get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
         
@@ -152,7 +169,7 @@ def optimize_categories(user_id):
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
                 
-            optimized = optimizer.optimize_category_order(site.selected_categories, user_id)
+            optimized = optimizer.optimize_category_order(site.selected_categories or [], user_id, site_id=site.id)
             site.selected_categories = optimized
             session.commit()
         

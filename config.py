@@ -70,6 +70,8 @@ DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image'
 class Config:
     # Flask
     DEBUG = False
+    # Upper bound for any request body (receipt uploads are capped lower in routes/payments.py).
+    MAX_CONTENT_LENGTH = int(os.getenv('MAX_CONTENT_LENGTH', str(10 * 1024 * 1024)))
 
     # Gemini (mirrors the module-level constants above)
     GEMINI_MODEL = DEFAULT_GEMINI_MODEL

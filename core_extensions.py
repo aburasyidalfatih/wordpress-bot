@@ -1,7 +1,12 @@
 import html as html_module
+import os
+import secrets
 import sys
 import logging
+import threading
+import uuid
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from functools import wraps
 from time import time
@@ -78,6 +83,10 @@ def load_config(user_id=None):
     """Load configuration for the specific user.
     Falls back to the admin account if user_id is not provided.
     """
+    # RQ workers never run app.py's startup loader; this also picks up admin
+    # setting changes made in another process (throttled, cheap).
+    refresh_system_settings_if_changed()
+
     target_id = user_id
     if target_id is None:
         target_id = _get_admin_user_id()
@@ -117,36 +126,264 @@ def get_cached_stats(user_id, site_id=None):
     return stats
 
 def save_config(user_id, config_data):
-    # If the user is saving, check if they are the admin, but this save_config is used on db. 
+    # If the user is saving, check if they are the admin, but this save_config is used on db.
     # The route handler will enforce the admin check.
     db.save_config(user_id, config_data)
     _config_cache.clear()
+
+
+# ---- System settings (admin-editable, shared by every process) ----
+# Admin saves land in the system_settings table. Each gunicorn worker / RQ worker
+# keeps its own copy in Config + os.environ, so a version row is bumped on save and
+# every process re-applies the table when it sees a new version.
+SETTINGS_VERSION_KEY = '__settings_version__'
+SETTINGS_REFRESH_INTERVAL_SECONDS = 5
+_BOOL_SYSTEM_SETTINGS = ('PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED')
+_NOT_LOADED = object()
+_settings_state = {'version': _NOT_LOADED, 'checked_at': 0.0}
+_settings_lock = threading.Lock()
+
+
+def apply_system_settings(system_settings):
+    """Copy system_settings rows onto Config and os.environ."""
+    applied = 0
+    for k, v in system_settings.items():
+        if k.startswith('__'):
+            continue  # internal bookkeeping (e.g. __schema_version__), not app config
+        if v is None:
+            continue
+        if k in _BOOL_SYSTEM_SETTINGS:
+            setattr(Config, k, str(v).lower() == 'true')
+        elif k == 'SMTP_PORT':
+            try:
+                setattr(Config, k, int(v))
+            except ValueError:
+                continue
+        elif k == 'PAYMENT_USD_RATE':
+            try:
+                rate = float(v)
+            except ValueError:
+                continue
+            if rate <= 0:
+                continue
+            setattr(Config, k, rate)
+        else:
+            setattr(Config, k, v)
+        os.environ[k] = str(v)
+        applied += 1
+    return applied
+
+
+def load_system_settings():
+    """Load every system setting into Config. Returns the settings version seen."""
+    system_settings = db.get_system_settings()
+    applied = apply_system_settings(system_settings)
+    version = system_settings.get(SETTINGS_VERSION_KEY)
+    _settings_state['version'] = version
+    _settings_state['checked_at'] = time()
+    logger.info(f"Loaded {applied} system settings from database.")
+    return version
+
+
+def _read_settings_version():
+    from sqlalchemy import text
+    with db.get_session() as session:
+        return session.execute(
+            text("SELECT value FROM system_settings WHERE key = :k"),
+            {'k': SETTINGS_VERSION_KEY}
+        ).scalar()
+
+
+def bump_settings_version():
+    """Signal every process that system settings changed."""
+    db.save_system_settings({SETTINGS_VERSION_KEY: uuid.uuid4().hex})
+
+
+def refresh_system_settings_if_changed(force=False):
+    """Cheap, throttled check for settings saved by another process."""
+    now = time()
+    if not force and now - _settings_state['checked_at'] < SETTINGS_REFRESH_INTERVAL_SECONDS:
+        return False
+    if not _settings_lock.acquire(blocking=False):
+        return False  # another thread of this worker is already checking
+    try:
+        if not force and time() - _settings_state['checked_at'] < SETTINGS_REFRESH_INTERVAL_SECONDS:
+            return False
+        _settings_state['checked_at'] = time()
+        try:
+            version = _read_settings_version()
+        except Exception as e:
+            logger.warning(f"Could not read system settings version: {e}")
+            return False
+        if version == _settings_state['version']:
+            return False
+        load_system_settings()
+        _config_cache.clear()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to refresh system settings: {e}")
+        return False
+    finally:
+        _settings_lock.release()
+
+
+# ---- Access tokens ----
+ACCESS_TOKEN_TYPE = 'access'
+ACCESS_TOKEN_TTL = timedelta(days=7)
+USER_AUTH_CACHE_TTL_SECONDS = 5
+_user_auth_cache = OrderedDict()
+
+
+def _tokens_valid_after_key(user_id):
+    return f"user:{user_id}:tokens_valid_after"
+
+
+def issue_access_token(user_id):
+    """Create a login token. 'iat' lets logout / password change revoke it."""
+    now = datetime.now(timezone.utc)
+    return jwt.encode({
+        'user_id': user_id,
+        'typ': ACCESS_TOKEN_TYPE,
+        'iat': now,
+        'exp': now + ACCESS_TOKEN_TTL,
+        'jti': secrets.token_urlsafe(16),
+    }, Config.SECRET_KEY, algorithm='HS256')
+
+
+def _revoked_jti_key(jti):
+    return f"revoked_jti:{jti}"
+
+
+def revoke_token(payload):
+    """Invalidate one token (this device only), e.g. on logout.
+
+    Tokens issued before 'jti' existed cannot be singled out, so those fall back
+    to revoking every token of the user.
+    """
+    jti = payload.get('jti')
+    if not jti:
+        revoke_user_tokens(payload['user_id'])
+        return
+    ttl = int(payload.get('exp') or 0) - int(time())
+    if ttl <= 0:
+        return
+    try:
+        redis_conn.set(_revoked_jti_key(jti), 1, ex=ttl)
+    except Exception as e:
+        logger.error(f"Could not revoke token for user {payload.get('user_id')}: {e}")
+
+
+def revoke_user_tokens(user_id):
+    """Invalidate every token issued to user_id up to now."""
+    try:
+        redis_conn.set(
+            _tokens_valid_after_key(user_id),
+            int(time()),
+            ex=int(ACCESS_TOKEN_TTL.total_seconds()) + 86400
+        )
+    except Exception as e:
+        logger.error(f"Could not revoke tokens for user {user_id}: {e}")
+    _user_auth_cache.pop(user_id, None)
+
+
+def decode_access_token(token):
+    """Decode a login token. Rejects tokens minted for another purpose (e.g. OAuth state)."""
+    payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+    if 'purpose' in payload:
+        raise jwt.InvalidTokenError('Token is not a login token')
+    # Tokens issued before 'typ' existed have no typ claim and are still accepted.
+    if payload.get('typ', ACCESS_TOKEN_TYPE) != ACCESS_TOKEN_TYPE:
+        raise jwt.InvalidTokenError('Token is not a login token')
+    user_id = payload.get('user_id')
+    if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
+        raise jwt.InvalidTokenError('Invalid user_id in token')
+    return payload
+
+
+def _user_auth_state(user_id):
+    """Return {'is_active', 'role', 'valid_after'} or None if the user is gone.
+
+    Cached per worker for a few seconds so this costs at most one query per user
+    per USER_AUTH_CACHE_TTL_SECONDS.
+    """
+    entry = _user_auth_cache.get(user_id)
+    if entry and time() - entry['timestamp'] < USER_AUTH_CACHE_TTL_SECONDS:
+        return entry['data']
+
+    from models import User
+    with db.get_session() as session:
+        row = session.query(User.is_active, User.role).filter(User.id == user_id).first()
+    state = None
+    if row is not None:
+        valid_after = 0
+        try:
+            raw = redis_conn.get(_tokens_valid_after_key(user_id))
+            if raw:
+                valid_after = int(raw)
+        except Exception as e:
+            # Fail open on a Redis outage rather than locking every user out.
+            logger.warning(f"Could not read token revocation state for user {user_id}: {e}")
+        state = {'is_active': bool(row.is_active), 'role': row.role, 'valid_after': valid_after}
+
+    _user_auth_cache[user_id] = {'data': state, 'timestamp': time()}
+    _user_auth_cache.move_to_end(user_id)
+    while len(_user_auth_cache) > CACHE_MAX_ENTRIES:
+        _user_auth_cache.popitem(last=False)
+    return state
+
+
+def authenticate_token(token):
+    """Return the user_id for a valid, unrevoked login token of an active user, else None."""
+    try:
+        payload = decode_access_token(token)
+    except Exception as e:
+        logger.warning(f'JWT decode failed: {e}')
+        return None
+    user_id = payload['user_id']
+    state = _user_auth_state(user_id)
+    if not state or not state['is_active']:
+        return None
+    if state['valid_after'] and int(payload.get('iat') or 0) < state['valid_after']:
+        return None
+    jti = payload.get('jti')
+    if jti:
+        try:
+            if redis_conn.exists(_revoked_jti_key(jti)):
+                return None
+        except Exception as e:
+            # Fail open on a Redis outage, like the per-user revocation check.
+            logger.warning(f"Could not read token revocation state: {e}")
+    return user_id
+
+
+def get_request_token():
+    token = request.cookies.get('auth_token')
+    auth_header = request.headers.get('Authorization')
+    if not token and auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ', 1)[1]
+    return token
+
 
 # JWT decorator
 def require_jwt(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        token = request.cookies.get('auth_token')
-        auth_header = request.headers.get('Authorization')
-        
-        if not token and auth_header and auth_header.startswith('Bearer '):
-            token = auth_header.split(' ')[1]
-            
+        token = get_request_token()
+
         logger.debug(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
         if not token:
             return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
 
         try:
-            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
-            user_id = payload.get('user_id')
-            if not user_id:
-                raise ValueError('Invalid user_id in token')
+            user_id = authenticate_token(token)
         except Exception as e:
-            logger.warning(f'JWT decode failed: {e}')
+            logger.error(f'JWT user lookup failed: {e}')
+            return jsonify({'success': False, 'error': 'Authentication temporarily unavailable'}), 503
+        if not user_id:
             return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
-            
+
         return f(user_id, *args, **kwargs)
-            
+
     return decorated_function
 
 # Admin decorator

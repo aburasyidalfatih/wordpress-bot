@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Bot, Info } from 'lucide-react';
+import { useSiteContext } from '@/contexts/SiteContext';
 
 declare global {
   interface Window {
@@ -19,6 +20,7 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
   const [googleClientId, setGoogleClientId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+  const { fetchSites } = useSiteContext();
   const googleBtnRef = useRef<HTMLDivElement>(null);
   const [simEmail, setSimEmail] = useState('demo-user@autowp.web.id');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -166,6 +168,8 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
       const data = await res.json();
       if (data.success) {
         localStorage.setItem('token', data.token);
+        // Load the user's sites before entering the app (no page reload happens).
+        await fetchSites();
         setIsAuthenticated(true);
         if (data.user && data.user.role) {
           setUserRole(data.user.role);
@@ -236,6 +240,8 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
       const data = await res.json();
       if (data.success) {
         localStorage.setItem('token', data.token);
+        // Load the user's sites before entering the app (no page reload happens).
+        await fetchSites();
         setIsAuthenticated(true);
         if (data.user && data.user.role) {
           setUserRole(data.user.role);
@@ -261,6 +267,8 @@ export default function Login({ setIsAuthenticated, setUserRole }: { setIsAuthen
       const data = await res.json();
       if (data.success) {
         localStorage.setItem('token', data.token);
+        // Load the user's sites before entering the app (no page reload happens).
+        await fetchSites();
         setIsAuthenticated(true);
         if (data.user && data.user.role) {
           setUserRole(data.user.role);

@@ -43,10 +43,16 @@ export default function Settings() {
       const res = await apiFetch('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile)
+        // Email can't be changed here (the backend rejects it), so never send it.
+        body: JSON.stringify({
+          name: profile.name,
+          ...(profile.password ? { password: profile.password } : {})
+        })
       });
       const data = await res.json();
       if (data.success) {
+        // A password change revokes every older token and returns a fresh one.
+        if (data.token) localStorage.setItem('token', data.token);
         toast.success(data.message || 'Profile updated successfully!');
         setProfile(prev => ({ ...prev, password: '' })); // clear password field
       } else {
@@ -101,8 +107,10 @@ export default function Settings() {
                   name="email" 
                   type="email"
                   value={profile.email} 
-                  onChange={handleProfileChange} 
+                  disabled
+                  readOnly
                 />
+                <p className="text-xs text-muted-foreground">Email cannot be changed.</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">New Password</Label>

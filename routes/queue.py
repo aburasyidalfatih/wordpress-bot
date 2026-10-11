@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 
-from core_extensions import db, q, redis_conn, logger, load_config, require_jwt
+from core_extensions import db, q, redis_conn, logger, load_config, require_jwt, require_admin
 from services.article_generator import ArticleGenerator
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
@@ -28,7 +28,14 @@ def api_queue(user_id):
             ContentQueue.site_id == site_id,
             ContentQueue.status.in_(['pending', 'posting'])
         ).order_by(ContentQueue.created_at.asc()).all()
-        queue_data = [{'id': q.id, 'title': q.title, 'category': q.category, 'status': q.status, 'created_at': q.created_at.isoformat() + ('Z' if q.created_at.tzinfo is None else '')} for q in queue]
+        queue_data = [{
+            'id': q.id,
+            'title': q.title,
+            'category': q.category,
+            'target_keywords': q.target_keywords or '',
+            'status': q.status,
+            'created_at': q.created_at.isoformat() + ('Z' if q.created_at.tzinfo is None else '')
+        } for q in queue]
         categories = site.selected_categories or []
     
     history_data = db.get_logs(user_id, site_id=site_id, limit=50)
@@ -117,6 +124,9 @@ def delete_queue_api(user_id):
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if not item:
             return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
+        if item.status == 'posting':
+            # A worker already reserved credit and is generating this item.
+            return jsonify({'success': False, 'error': 'Item sedang diposting dan tidak dapat dihapus.', 'code': 409}), 409
         session.delete(item)
         session.commit()
     return jsonify({'success': True})
@@ -141,7 +151,7 @@ def clear_queue_api(user_id):
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Clear queue error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Gagal mengosongkan antrean.'}), 500
 
 @queue_bp.route('/api/queue/edit/<int:item_id>', methods=['POST'])
 @require_jwt
@@ -149,15 +159,21 @@ def edit_queue_api(user_id, item_id):
     from models import ContentQueue
     data = request.get_json(silent=True) or {}
     title = data.get('title')
-    target_keywords = data.get('target_keywords', '')
+    if 'title' in data and (not isinstance(title, str) or not title.strip()):
+        return jsonify({'success': False, 'error': 'Title must be a non-empty string', 'code': 400}), 400
+    if 'target_keywords' in data and data['target_keywords'] is not None and not isinstance(data['target_keywords'], str):
+        return jsonify({'success': False, 'error': 'target_keywords must be a string', 'code': 400}), 400
     
     with db.get_session() as session:
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if not item:
             return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
-        if title:
-            item.title = title
-        item.target_keywords = target_keywords
+        if title is not None:
+            item.title = title.strip()
+        # Only touch keywords when the client sent them; a title-only edit must
+        # not wipe the researched keywords.
+        if 'target_keywords' in data:
+            item.target_keywords = (data['target_keywords'] or '').strip()
         session.commit()
     return jsonify({'success': True})
 
@@ -170,6 +186,9 @@ def reorder_queue_api(user_id):
     
     if not ids:
         return jsonify({'success': True})
+    if (not isinstance(ids, list) or len(ids) > 1000
+            or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        return jsonify({'success': False, 'error': 'ids must be a list of integers', 'code': 400}), 400
         
     import datetime
     
@@ -194,34 +213,71 @@ def reorder_queue_api(user_id):
 @queue_bp.route('/api/queue/post/<int:item_id>', methods=['POST'])
 @require_jwt
 def post_queue_api(user_id, item_id):
-    from models import ContentQueue, User
-    with db.get_session() as session:
-        user = session.query(User).filter_by(id=user_id).first()
-        item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
-        if not item:
-            return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
-        if item.status == 'posting':
-            return jsonify({'success': True, 'message': 'Item is already being processed'})
-        if item.status == 'posted':
-            return jsonify({'success': False, 'error': 'Item has already been posted', 'code': 400}), 400
+    import uuid
+    from sqlalchemy import text
+    from models import ContentQueue
 
-        # Atomic credit reservation to prevent race conditions
-        if not db.reserve_user_credits(user_id, 1):
+    job_id = f"queue-post-{item_id}-{uuid.uuid4().hex}"
+
+    # Claim the item and reserve the credit in ONE transaction, recording the
+    # reservation on the row (credit_held + the job id we are about to enqueue).
+    # The job recognizes its own job_id and takes the reservation over; if the
+    # job never runs, the dispatcher's stuck-item sweep refunds it because
+    # credit_held is set. A conditional UPDATE stops two concurrent clicks from
+    # both claiming the item.
+    with db.get_session() as session:
+        claimed = session.query(ContentQueue).filter(
+            ContentQueue.id == item_id,
+            ContentQueue.user_id == user_id,
+            ContentQueue.status == 'pending'
+        ).update({
+            'status': 'posting',
+            'posting_started_at': datetime.now(),
+            'job_id': job_id,
+            'credit_held': True,
+        }, synchronize_session=False)
+        if claimed != 1:
+            item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
+            if not item:
+                return jsonify({'success': False, 'error': 'Item not found', 'code': 404}), 404
+            if item.status == 'posted':
+                return jsonify({'success': False, 'error': 'Item has already been posted', 'code': 400}), 400
+            return jsonify({'success': False, 'error': 'Item is already being posted', 'code': 409}), 409
+        reserved = session.execute(
+            text(
+                "UPDATE users SET credits = COALESCE(credits, 0) - 1 "
+                "WHERE id = :user_id AND COALESCE(credits, 0) >= 1"
+            ),
+            {'user_id': user_id}
+        ).rowcount == 1
+        if not reserved:
+            session.rollback()
             return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
-        item.status = 'posting'
-        item.posting_started_at = datetime.now()
-        session.commit()
-
     try:
-        q.enqueue('tasks.article_jobs.generate_and_post', user_id, item_id, None, True, job_timeout='10m')
+        q.enqueue(
+            'tasks.article_jobs.generate_and_post', user_id,
+            item_id=item_id, credit_pre_reserved=True, job_timeout='25m', job_id=job_id
+        )
     except Exception as e:
-        # Refund credit on enqueue failure
-        db.refund_user_credits(user_id, 1)
+        # Refund the credit and release the item, unless something else has
+        # already settled it (only while it is still ours and still held).
         with db.get_session() as session:
-            item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
-            if item:
-                item.status = 'pending'
+            released = session.query(ContentQueue).filter(
+                ContentQueue.id == item_id,
+                ContentQueue.user_id == user_id,
+                ContentQueue.status == 'posting',
+                ContentQueue.job_id == job_id,
+                ContentQueue.credit_held.is_(True)
+            ).update({
+                'status': 'pending', 'posting_started_at': None,
+                'job_id': None, 'credit_held': False,
+            }, synchronize_session=False)
+            if released == 1:
+                session.execute(
+                    text("UPDATE users SET credits = COALESCE(credits, 0) + 1 WHERE id = :user_id"),
+                    {'user_id': user_id}
+                )
         logger.error(f"Queue post enqueue failed for item {item_id}: {e}")
         return jsonify({'success': False, 'error': 'Failed to enqueue posting job'}), 500
     return jsonify({'success': True})
@@ -265,7 +321,7 @@ def regenerate_article_api(user_id, log_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi'}), 402
 
     try:
-        q.enqueue('tasks.article_jobs.regenerate_article_job', user_id, log_id, job_timeout='10m')
+        q.enqueue('tasks.article_jobs.regenerate_article_job', user_id, log_id, job_timeout='25m')
     except Exception as e:
         db.refund_user_credits(user_id, 1)
         logger.error(f"Regenerate article enqueue failed: {e}")
@@ -286,26 +342,49 @@ def delete_history_log(user_id, log_id):
             
         post_id = log.post_id
         site_id = log.site_id
-        
+        wp_deleted = False
+        wp_error = None
+
+        # Best effort, as the UI promises ("will also attempt to delete the
+        # article"): the post goes to the WordPress trash (recoverable), and a
+        # WordPress failure never blocks removing the log.
         if post_id and site_id:
-            try:
-                from models import WordPressSite
-                site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-                if site:
-                    wp_url = site.wp_url
-                    wp_user = site.wp_username
-                    wp_app_pass = site.wp_app_password
-                    
-                    if wp_url and wp_user and wp_app_pass:
-                        delete_url = f"{wp_url.rstrip('/')}/wp-json/wp/v2/posts/{post_id}?force=true"
-                        requests.delete(delete_url, auth=HTTPBasicAuth(wp_user, wp_app_pass), timeout=10)
-            except Exception as e:
-                logger.error(f"Failed to delete post from WP for log {log_id}: {e}")
-                
+            from models import WordPressSite
+            from services.url_safety import validate_public_http_url
+            site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+            if site and site.wordpress_url and site.wordpress_username and site.wordpress_password:
+                ok, url_or_error = validate_public_http_url(site.wordpress_url)
+                if not ok:
+                    wp_error = f'URL WordPress tidak valid: {url_or_error}'
+                else:
+                    try:
+                        resp = requests.delete(
+                            f"{url_or_error}/wp-json/wp/v2/posts/{post_id}",
+                            auth=HTTPBasicAuth(site.wordpress_username, site.wordpress_password),
+                            timeout=10,
+                            allow_redirects=False
+                        )
+                        # 404/410 means the post is already gone, which is the goal.
+                        if resp.status_code in (404, 410) or 200 <= resp.status_code < 300:
+                            wp_deleted = True
+                        else:
+                            wp_error = f'WordPress menolak penghapusan artikel (HTTP {resp.status_code})'
+                    except Exception as e:
+                        logger.error(f"Failed to delete post from WP for log {log_id}: {e}")
+                        wp_error = 'Tidak dapat terhubung ke WordPress'
+                if wp_error:
+                    logger.warning(f"WP delete for log {log_id} skipped/failed: {wp_error}")
+
         session.delete(log)
         session.commit()
         
-    return jsonify({'success': True, 'message': 'Log and article deleted successfully'})
+    if wp_deleted:
+        message = 'Log deleted and article moved to WordPress trash'
+    elif wp_error:
+        message = f'Log deleted, but the WordPress article was not deleted: {wp_error}'
+    else:
+        message = 'Log deleted successfully'
+    return jsonify({'success': True, 'message': message, 'wp_deleted': wp_deleted})
 
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
@@ -327,7 +406,10 @@ def manual_post(user_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
     try:
-        job = q.enqueue('tasks.article_jobs.generate_and_post', user_id, None, site_id, True, job_timeout='10m')
+        job = q.enqueue(
+            'tasks.article_jobs.generate_and_post', user_id,
+            site_id=site_id, credit_pre_reserved=True, manual=True, job_timeout='25m'
+        )
         return jsonify({'success': True, 'message': 'Artikel dijadwalkan untuk diposting'})
     except Exception as e:
         db.refund_user_credits(user_id, 1)
@@ -365,8 +447,10 @@ def job_status(user_id, job_id):
         return jsonify({'success': False, 'error': 'Job not found', 'code': 404}), 404
 
 @queue_bp.route('/test-generate', methods=['POST'])
-@require_jwt
+@require_admin
 def test_generate(user_id):
+    # Admin-only debugging aid: it calls Gemini (possibly with the admin key
+    # fallback) without charging credits, so it must not be open to all users.
     config = load_config(user_id)
     data = request.get_json(silent=True) or {}
     category_name = data.get('category', '')
@@ -393,4 +477,4 @@ def test_generate(user_id):
             return jsonify({'success': True, 'article': article})
         except Exception as e:
             logger.error(f"Test generate error: {e}")
-            return jsonify({'success': False, 'error': str(e), 'code': 500}), 500
+            return jsonify({'success': False, 'error': 'Test generate failed', 'code': 500}), 500

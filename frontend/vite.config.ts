@@ -12,10 +12,13 @@ export default defineConfig({
     },
   },
   server: {
+    // Only backend-only paths are proxied. SPA routes such as /login must be
+    // served by Vite, otherwise a full-page load gets Flask's stale dist index.
+    // /logout is a real Flask JSON endpoint (fetched by Layout), not an SPA route.
     proxy: {
       '/api': 'http://127.0.0.1:5005',
-      '/login': 'http://127.0.0.1:5005',
       '/logout': 'http://127.0.0.1:5005',
+      '/download-logs': 'http://127.0.0.1:5005',
       '/save-config': 'http://127.0.0.1:5005',
       '/save-prompts': 'http://127.0.0.1:5005',
       '/manual-post': 'http://127.0.0.1:5005',

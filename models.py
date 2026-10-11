@@ -335,6 +335,15 @@ class ContentQueue(Base):
     # Set when the item transitions to 'posting' so the dispatcher can detect and
     # recover items abandoned by a dead worker.
     posting_started_at = Column(DateTime, nullable=True)
+    # RQ job id of the generate_and_post job that owns this item while it is
+    # 'posting'. Lets a duplicate job back off and lets the dispatcher tell a
+    # live job from one killed by the OS.
+    job_id = Column(String(100), nullable=True)
+    # True while the owning job holds an unsettled 1-credit reservation for this
+    # item. Settled (refunded or consumed) under a row lock, together with the
+    # status change, so the job and the dispatcher's stuck-item sweep can never
+    # both refund the same credit.
+    credit_held = Column(Boolean, default=False, nullable=True)
 
     __table_args__ = (
         Index('idx_content_queue_user_site_status', 'user_id', 'site_id', 'status'),

@@ -1,33 +1,63 @@
 import os
-import datetime
-import jwt
 from flask import Blueprint, request, jsonify, make_response
 from flask import session
 from werkzeug.security import check_password_hash
 import requests
 
-from core_extensions import db, logger, require_jwt, send_email_notification, send_whatsapp_notification, redis_conn
+from core_extensions import (
+    db, logger, require_jwt, send_email_notification, send_whatsapp_notification, redis_conn,
+    issue_access_token, revoke_token, decode_access_token, get_request_token,
+)
 from config import Config
 
 auth_bp = Blueprint('auth', __name__)
 
-def _check_rate_limit(key_prefix, max_attempts, window_seconds):
-    """Simple Redis-based rate limiter. Returns (is_allowed, remaining_seconds)."""
-    import time
+LOGIN_MAX_FAILURES_PER_ACCOUNT = 5
+LOGIN_MAX_FAILURES_PER_IP = 30
+LOGIN_FAILURE_WINDOW_SECONDS = 300
+
+def _login_rate_limit_keys(email):
+    """Failed-login counters: one per IP+email (lockout) and a looser one per IP (spraying)."""
+    client_ip = request.remote_addr or '127.0.0.1'
+    normalized_email = (email or '').strip().lower()
+    return (
+        (f"ratelimit:login:{client_ip}:{normalized_email}", LOGIN_MAX_FAILURES_PER_ACCOUNT),
+        (f"ratelimit:login-ip:{client_ip}", LOGIN_MAX_FAILURES_PER_IP),
+    )
+
+def _check_rate_limit(email):
+    """Returns (is_allowed, retry_after_seconds). Only failed attempts are counted."""
     if redis_conn is None:
         return True, 0
-    client_ip = request.remote_addr or '127.0.0.1'
-    key = f"ratelimit:{key_prefix}:{client_ip}"
-    current = redis_conn.get(key)
-    now = int(time.time())
-    if current and int(current) >= max_attempts:
-        ttl = redis_conn.ttl(key)
-        return False, max(ttl, 1)
-    pipe = redis_conn.pipeline()
-    pipe.incr(key)
-    pipe.expire(key, window_seconds)
-    pipe.execute()
+    try:
+        for key, max_failures in _login_rate_limit_keys(email):
+            current = redis_conn.get(key)
+            if current and int(current) >= max_failures:
+                ttl = redis_conn.ttl(key)
+                return False, max(ttl, 1)
+    except Exception as e:
+        logger.warning(f"Login rate limit check failed: {e}")
     return True, 0
+
+def _record_failed_login(email):
+    if redis_conn is None:
+        return
+    try:
+        pipe = redis_conn.pipeline()
+        for key, _ in _login_rate_limit_keys(email):
+            pipe.incr(key)
+            pipe.expire(key, LOGIN_FAILURE_WINDOW_SECONDS)
+        pipe.execute()
+    except Exception as e:
+        logger.warning(f"Could not record failed login: {e}")
+
+def _clear_failed_logins(email):
+    if redis_conn is None:
+        return
+    try:
+        redis_conn.delete(_login_rate_limit_keys(email)[0][0])
+    except Exception as e:
+        logger.warning(f"Could not clear failed login counter: {e}")
 
 def is_configured_admin_email(email):
     return (email or '').strip().lower() in Config.ADMIN_EMAILS
@@ -42,14 +72,24 @@ def configured_google_client_id():
         logger.error(f"Error reading Google client ID from system settings: {e}")
     return client_id or ''
 
+GOOGLE_ISSUERS = ('accounts.google.com', 'https://accounts.google.com')
+
 def verify_google_token(token):
+    client_id = configured_google_client_id()
+    if not client_id:
+        # Without an expected audience any Google ID token (minted for any app)
+        # would be accepted, so refuse rather than skip the check.
+        logger.error("Rejected Google login: GOOGLE_CLIENT_ID is not configured")
+        return None
     try:
-        resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={token}", timeout=10)
+        resp = requests.get("https://oauth2.googleapis.com/tokeninfo", params={'id_token': token}, timeout=10)
         if resp.status_code == 200:
             token_info = resp.json()
-            client_id = configured_google_client_id()
-            if client_id and token_info.get('aud') != client_id:
+            if token_info.get('aud') != client_id:
                 logger.warning("Rejected Google token with invalid audience")
+                return None
+            if token_info.get('iss') not in GOOGLE_ISSUERS:
+                logger.warning("Rejected Google token with invalid issuer")
                 return None
             if str(token_info.get('email_verified', '')).lower() != 'true':
                 logger.warning("Rejected Google token with unverified email")
@@ -69,7 +109,9 @@ def api_auth_google():
     id_token = data.get('id_token')
     if not id_token:
         return jsonify({'success': False, 'error': 'id_token is required'}), 400
-        
+    if not configured_google_client_id():
+        return jsonify({'success': False, 'error': 'Google login is not configured. Contact the administrator.'}), 503
+
     token_info = verify_google_token(id_token)
     if not token_info:
         return jsonify({'success': False, 'error': 'Invalid Google token'}), 400
@@ -143,10 +185,7 @@ def api_auth_google():
         if not user.is_active:
             return jsonify({'success': False, 'error': 'Account is suspended'}), 403
             
-        token = jwt.encode({
-            'user_id': user.id,
-            'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
-        }, Config.SECRET_KEY, algorithm='HS256')
+        token = issue_access_token(user.id)
         
         resp = make_response(jsonify({
             'success': True,
@@ -164,24 +203,24 @@ def api_auth_google():
 
 @auth_bp.route('/api/login', methods=['POST'])
 def api_auth_login():
-    allowed, retry_sec = _check_rate_limit('login', max_attempts=5, window_seconds=300)
-    if not allowed:
-        return jsonify({'success': False, 'error': f'Too many login attempts. Try again in {retry_sec} seconds.'}), 429
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     email = data.get('email', '')
     password = data.get('password', '')
+    if not isinstance(email, str) or not isinstance(password, str):
+        return jsonify({'success': False, 'error': 'Invalid email or password', 'code': 401}), 401
+    allowed, retry_sec = _check_rate_limit(email)
+    if not allowed:
+        return jsonify({'success': False, 'error': f'Too many login attempts. Try again in {retry_sec} seconds.'}), 429
     logger.info(f"Login attempt for email: {email}")
     with db.get_session() as session:
         from models import User
         user = session.query(User).filter_by(email=email).first()
         if user and user.password_hash and check_password_hash(user.password_hash, password):
+            _clear_failed_logins(email)
             if not user.is_active:
                 return jsonify({'success': False, 'error': 'Account is suspended'}), 403
                 
-            token = jwt.encode({
-                'user_id': user.id,
-                'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
-            }, Config.SECRET_KEY, algorithm='HS256')
+            token = issue_access_token(user.id)
             
             resp = make_response(jsonify({
                 'success': True,
@@ -196,6 +235,7 @@ def api_auth_login():
             }))
             resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=os.environ.get('FLASK_ENV') != 'development', max_age=7*24*60*60)
             return resp
+    _record_failed_login(email)
     return jsonify({'success': False, 'error': 'Invalid email or password', 'code': 401}), 401
 
 @auth_bp.route('/api/auth/status', methods=['GET'])
@@ -257,8 +297,16 @@ def api_auth_config():
         'mock_payments_enabled': mock_payments_enabled
     })
 
-@auth_bp.route('/logout', methods=['GET', 'POST'])
+@auth_bp.route('/logout', methods=['POST'])
 def logout():
+    # Revoke this device's token so a copied/stolen copy stops working. POST
+    # only, so a link on another site cannot log the user out.
+    token = get_request_token()
+    if token:
+        try:
+            revoke_token(decode_access_token(token))
+        except Exception:
+            pass  # expired/invalid token: nothing to revoke
     session.clear()
     resp = make_response(jsonify({'success': True}))
     resp.delete_cookie('auth_token')

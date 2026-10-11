@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import type { PromptsData } from '../lib/types';
 
 export default function Prompts() {
-  const { selectedSiteId } = useSiteContext();
+  const { selectedSiteId, fetchSites } = useSiteContext();
   const [data, setData] = useState<PromptsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -71,6 +71,8 @@ export default function Prompts() {
       const result = await res.json();
       if (result.success) {
         toast.success('Prompts saved successfully!');
+        // Keep the cached site list in sync so other pages see the new prompts.
+        fetchSites();
       } else {
         toast.error('Failed to save prompts.');
       }

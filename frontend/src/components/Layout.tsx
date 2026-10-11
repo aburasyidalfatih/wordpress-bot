@@ -94,7 +94,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const handleLogout = async () => {
     try {
-      await apiFetch('/logout');
+      await apiFetch('/logout', { method: 'POST' });
     } catch (e) {
       // Logout endpoint may not exist, ignore
     }
@@ -206,9 +206,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <div className="flex items-center gap-2">
                 <select
                   value={selectedSiteId || ''}
-                  onChange={(e) => setSelectedSiteId(parseInt(e.target.value, 10))}
+                  onChange={(e) => setSelectedSiteId(e.target.value ? parseInt(e.target.value, 10) : null)}
                   className="h-9 w-64 rounded-lg border border-input bg-card/80 backdrop-blur-sm px-3 py-1 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent cursor-pointer font-medium text-foreground/90"
                 >
+                  {sites.length > 0 && !selectedSiteId && <option disabled value="">Pilih website...</option>}
                   {sites.map(site => (
                     <option key={site.id} value={site.id} className="bg-background text-foreground">
                       🌐 {site.site_name}
@@ -352,10 +353,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     <select
                       value={selectedSiteId || ''}
                       onChange={(e) => {
-                        setSelectedSiteId(parseInt(e.target.value, 10));
+                        setSelectedSiteId(e.target.value ? parseInt(e.target.value, 10) : null);
                       }}
                       className="h-10 w-full rounded-lg border border-input bg-card/80 px-3 py-2 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent"
                     >
+                      {sites.length > 0 && !selectedSiteId && <option disabled value="">Pilih website...</option>}
                       {sites.map(site => (
                         <option key={site.id} value={site.id} className="bg-background text-foreground">
                           {site.site_name}

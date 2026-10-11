@@ -86,23 +86,34 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const selectedSiteIdRef = useRef(selectedSiteId);
   useEffect(() => { selectedSiteIdRef.current = selectedSiteId; }, [selectedSiteId]);
 
+  // Only the most recent fetchSites call may update state, so a stale request
+  // (e.g. the unauthenticated mount fetch) can't overwrite a post-login result.
+  const requestIdRef = useRef(0);
+
   const fetchSites = useCallback(async (signal?: AbortSignal) => {
+    const requestId = ++requestIdRef.current;
     try {
+      // Users may be authenticated via the localStorage token or only via the
+      // httpOnly auth_token cookie, so always try; the token header is optional.
+      // Plain fetch (not apiFetch) is used on purpose: a 401 here (e.g. on public
+      // pages) must not trigger apiFetch's redirect to /login.
       const token = localStorage.getItem('token');
-      if (!token) {
-        setLoading(false);
-        return;
-      }
-      
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const response = await fetch('/api/sites', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         credentials: 'include',
         signal
       });
+      if (requestId !== requestIdRef.current) return;
+      if (response.status === 401) {
+        setSites([]);
+        return;
+      }
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
+      if (requestId !== requestIdRef.current) return;
       if (data.success && data.sites) {
         setSites(data.sites);
         
@@ -118,7 +129,7 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (error instanceof DOMException && error.name === 'AbortError') return;
       if (import.meta.env.DEV) console.error('Failed to fetch sites:', error);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, []);
 

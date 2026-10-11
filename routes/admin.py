@@ -1,11 +1,13 @@
+import math
 import os
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
 
-from core_extensions import db, q, logger, require_admin, send_email_notification
+from core_extensions import db, q, logger, require_admin, send_email_notification, revoke_user_tokens, bump_settings_version
 from database import Config as DBConfig
 from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from routes.payments import fulfill_transaction
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -97,24 +99,28 @@ def approve_payment(user_id, transaction_id):
             
         if tx.status != 'awaiting_approval':
             return jsonify({'success': False, 'error': f'Transaction status is {tx.status}, cannot approve'}), 400
-            
-        tx.status = 'success'
+
+        invoice_id = tx.invoice_id
+        # Atomic: a double-clicked approve (or two admins) can only credit once.
+        credits = fulfill_transaction(session, tx.id, ('awaiting_approval',))
+        if credits is None:
+            session.rollback()
+            return jsonify({'success': False, 'error': 'Transaction was already processed'}), 409
+        session.commit()
+
         user = session.query(User).filter_by(id=tx.user_id).first()
         if user:
-            user.credits = (user.credits or 0) + tx.credits_purchased
-            user.tier = 'pro'
-            logger.info(f"Admin {user_id} approved payment for {tx.invoice_id}. Added {tx.credits_purchased} credits to User {user.email}")
-            
+            logger.info(f"Admin {user_id} approved payment for {invoice_id}. Added {credits} credits to User {user.email}")
+
             # Notify user
             try:
                 import threading
-                subject = f"AutoWP Top-Up Approved - {tx.invoice_id}"
-                body = f"Hello {user.name or 'User'},\n\nGood news! Your top-up order of {tx.credits_purchased} credits (invoice: {tx.invoice_id}) has been approved.\nYour credit balance is now: {user.credits}.\n\nThank you for using AutoWP!"
+                subject = f"AutoWP Top-Up Approved - {invoice_id}"
+                body = f"Hello {user.name or 'User'},\n\nGood news! Your top-up order of {credits} credits (invoice: {invoice_id}) has been approved.\nYour credit balance is now: {user.credits}.\n\nThank you for using AutoWP!"
                 threading.Thread(target=send_email_notification, args=(user.email, subject, body)).start()
             except Exception as e:
                 logger.error(f"Error launching payment approval email thread: {e}")
-                
-        session.commit()
+
         return jsonify({'success': True, 'message': 'Payment approved successfully'})
 
 @admin_bp.route('/api/admin/payments/<int:transaction_id>/reject', methods=['POST'])
@@ -127,10 +133,16 @@ def reject_payment(user_id, transaction_id):
             
         if tx.status != 'awaiting_approval':
             return jsonify({'success': False, 'error': f'Transaction status is {tx.status}, cannot reject'}), 400
-            
-        tx.status = 'failed'
-        logger.info(f"Admin {user_id} rejected payment for {tx.invoice_id}")
+
+        updated = session.query(Transaction).filter(
+            Transaction.id == tx.id,
+            Transaction.status == 'awaiting_approval',
+        ).update({Transaction.status: 'failed'}, synchronize_session=False)
+        if updated != 1:
+            session.rollback()
+            return jsonify({'success': False, 'error': 'Transaction was already processed'}), 409
         session.commit()
+        logger.info(f"Admin {user_id} rejected payment for {tx.invoice_id}")
         return jsonify({'success': True, 'message': 'Payment rejected'})
 
 @admin_bp.route('/api/admin/users', methods=['GET'])
@@ -179,12 +191,17 @@ def update_user(user_id, target_user_id):
                 user.credits = max(0, int(data['credits']))
             except (TypeError, ValueError):
                 return jsonify({'success': False, 'error': 'Invalid credits value'}), 400
+        suspended = False
         if 'is_active' in data:
             if target_user_id == user_id and not data['is_active']:
                 return jsonify({'success': False, 'error': 'You cannot suspend yourself'}), 400
+            suspended = bool(user.is_active) and not bool(data['is_active'])
             user.is_active = bool(data['is_active'])
-            
+
         session.commit()
+        if suspended:
+            # Kill existing sessions; re-activation still requires a fresh login.
+            revoke_user_tokens(target_user_id)
         logger.info(f"Admin {user_id} updated User {target_user_id}")
         return jsonify({'success': True, 'message': 'User updated successfully'})
 
@@ -348,8 +365,18 @@ def get_admin_config(user_id):
 def update_admin_config(user_id):
     from config import Config
     from core_extensions import save_config
-    data = request.json or {}
-    
+    data = request.get_json(silent=True) or {}
+
+    # Validate before saving anything: every PayPal invoice divides by this rate.
+    usd_rate = None
+    if 'PAYMENT_USD_RATE' in data:
+        try:
+            usd_rate = float(str(data['PAYMENT_USD_RATE']).strip())
+        except (TypeError, ValueError):
+            usd_rate = None
+        if usd_rate is None or not math.isfinite(usd_rate) or usd_rate <= 0:
+            return jsonify({'success': False, 'error': 'PAYMENT_USD_RATE must be a number greater than 0'}), 400
+
     # Save Gemini DB configs
     gemini_data = {}
     if 'gemini_api_key' in data and str(data.get('gemini_api_key') or '').strip():
@@ -379,10 +406,7 @@ def update_admin_config(user_id):
             if k in SENSITIVE_ADMIN_KEYS and not str(val or '').strip():
                 continue
             if k == 'PAYMENT_USD_RATE':
-                try:
-                    val = float(str(val).strip())
-                except ValueError:
-                    val = 16000.0
+                val = usd_rate
             elif k == 'SMTP_PORT':
                 try:
                     val = int(str(val).strip())
@@ -397,6 +421,8 @@ def update_admin_config(user_id):
     # Save to PostgreSQL database system_settings table
     try:
         db.save_system_settings(updates)
+        # Other gunicorn workers / RQ workers re-apply settings when this changes.
+        bump_settings_version()
     except Exception as e:
         logger.error(f"Failed to save system settings to DB: {e}")
 

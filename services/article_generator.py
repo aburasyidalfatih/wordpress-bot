@@ -5,7 +5,7 @@ from datetime import datetime
 from io import BytesIO
 from PIL import Image
 import logging
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,46 @@ MAX_OUTPUT_TOKENS = 16384
 
 class TruncatedGenerationError(Exception):
     """Raised when the model hit the output token limit mid-article."""
+
+
+# Featured images are optional (a post publishes without one), so image
+# generation gets a hard time budget instead of nested retries: 5 tenacity
+# attempts x up to 4 prompts with 60s backoff could burn most of the job timeout.
+IMAGE_TIME_BUDGET_SECONDS = 150
+
+
+def _genai_status_code(exc):
+    code = getattr(exc, 'code', None)
+    if code is None:
+        code = getattr(exc, 'status_code', None)
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
+def is_retryable_genai_error(exc):
+    """Retry only failures that can succeed on a second try.
+
+    4xx errors (invalid key 400/401, permission 403, unknown model 404, bad
+    request) fail identically every time; retrying them only multiplied job time.
+    429 (rate limit / quota) and 5xx are transient.
+    """
+    if isinstance(exc, (ConnectionError, TimeoutError, TruncatedGenerationError)):
+        return True
+    if isinstance(exc, genai.errors.APIError):
+        code = _genai_status_code(exc)
+        if code is None:
+            return isinstance(exc, genai.errors.ServerError)
+        return code == 429 or code >= 500
+    # httpx transport errors raised by the SDK (connect/read timeouts).
+    try:
+        import httpx
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+            return True
+    except ImportError:  # pragma: no cover
+        pass
+    return False
 
 
 class ArticleQualityError(Exception):
@@ -104,10 +144,8 @@ class ArticleGenerator:
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type((
-            genai.errors.ServerError, genai.errors.APIError,
-            ConnectionError, TimeoutError, TruncatedGenerationError
-        ))
+        retry=retry_if_exception(is_retryable_genai_error),
+        reraise=True
     )
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False, custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
         # Resolve custom prompt from either parameter name
@@ -746,14 +784,35 @@ A: Jawaban 2
             "allowed_link_urls": allowed_link_urls
         }
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type(Exception)
-    )
     def generate_image(self, topic, title, article_content=None, custom_prompt=None, site_name=None, **kwargs):
-        """Generate landscape featured image for blog"""
+        """Generate landscape featured image for blog.
+
+        One pass over the fallback prompts, bounded by IMAGE_TIME_BUDGET_SECONDS.
+        There is no outer retry: the image is optional, and a wrapper retry around
+        the prompt loop multiplied attempts and backoff into many minutes.
+        """
+        import time as time_mod
         target_site = site_name if site_name else "website"
+        deadline = time_mod.monotonic() + IMAGE_TIME_BUDGET_SECONDS
+
+        def remaining_ms():
+            return int((deadline - time_mod.monotonic()) * 1000)
+
+        def out_of_time(attempt_name):
+            if remaining_ms() < 15000:
+                logger.warning(
+                    f"Image generation time budget ({IMAGE_TIME_BUDGET_SECONDS}s) exhausted; "
+                    f"skipping '{attempt_name}' and remaining prompts."
+                )
+                return True
+            return False
+
+        def is_fatal(err):
+            # Bad key, no permission or unknown model fails the same for every
+            # prompt, so do not spend the remaining attempts on it.
+            return (isinstance(err, genai.errors.APIError)
+                    and _genai_status_code(err) in (401, 403, 404))
+
         try:
             def to_webp(image_bytes):
                 img = Image.open(BytesIO(image_bytes))
@@ -874,12 +933,17 @@ Use simple shapes and digital icons on a bright professional background."""
                 # person_generation removed
 
                 for attempt_name, prompt in image_prompts:
+                    if out_of_time(attempt_name):
+                        break
                     try:
                         logger.info(f"Generating featured image with {self.image_model} using {attempt_name} prompt")
                         response = self.client.models.generate_images(
                             model=self.image_model,
                             prompt=prompt,
-                            config=types.GenerateImagesConfig(**imagen_config_kwargs)
+                            config=types.GenerateImagesConfig(
+                                **imagen_config_kwargs,
+                                http_options=types.HttpOptions(timeout=remaining_ms())
+                            )
                         )
 
                         for generated_image in getattr(response, 'generated_images', None) or []:
@@ -893,6 +957,8 @@ Use simple shapes and digital icons on a bright professional background."""
                     except Exception as attempt_err:
                         last_error = attempt_err
                         logger.warning(f"Imagen attempt '{attempt_name}' failed: {attempt_err}", exc_info=True)
+                        if is_fatal(attempt_err):
+                            break
                 if last_summary:
                     raise Exception(
                         "Image generation returned no image after fallback prompts. "
@@ -903,6 +969,8 @@ Use simple shapes and digital icons on a bright professional background."""
                 raise Exception("Image generation returned no image after fallback prompts.")
             else:
                 for attempt_name, prompt in image_prompts:
+                    if out_of_time(attempt_name):
+                        break
                     try:
                         logger.info(f"Generating featured image with {self.image_model} using {attempt_name} prompt")
                         response = self.client.models.generate_content(
@@ -910,7 +978,8 @@ Use simple shapes and digital icons on a bright professional background."""
                             contents=prompt,
                             config=types.GenerateContentConfig(
                                 response_modalities=['TEXT', 'IMAGE'],
-                                image_config=types.ImageConfig(**image_config_kwargs)
+                                image_config=types.ImageConfig(**image_config_kwargs),
+                                http_options=types.HttpOptions(timeout=remaining_ms())
                             )
                         )
 
@@ -923,6 +992,8 @@ Use simple shapes and digital icons on a bright professional background."""
                     except Exception as attempt_err:
                         last_error = attempt_err
                         logger.warning(f"Gemini image attempt '{attempt_name}' failed: {attempt_err}", exc_info=True)
+                        if is_fatal(attempt_err):
+                            break
 
                 if last_summary:
                     raise Exception(

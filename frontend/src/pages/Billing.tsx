@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { CreditCard, Wallet, CheckCircle2, Upload, Eye, MessageSquare } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,8 +10,10 @@ import { apiFetch } from '../lib/api';
 interface InvoiceData {
   invoice_id: string;
   payment_method: string;
+  is_mock?: boolean;
   amount?: number;
   amount_usd?: number;
+  checkout_url?: string | null;
   tripay_data?: {
     reference?: string;
     pay_code?: string;
@@ -21,6 +23,7 @@ interface InvoiceData {
     status?: string;
   };
   paypal_order_id?: string;
+  paypal_approve_url?: string | null;
   bank_details?: {
     bank_name: string;
     account_number: string;
@@ -64,6 +67,7 @@ export default function Billing() {
   const [tripayEnabled, setTripayEnabled] = useState<boolean>(true);
   const [paypalEnabled, setPaypalEnabled] = useState<boolean>(true);
   const [manualEnabled, setManualEnabled] = useState<boolean>(true);
+  const paypalReturnHandled = useRef(false);
 
   const fetchBillingInfo = async (signal?: AbortSignal) => {
     try {
@@ -154,32 +158,60 @@ export default function Billing() {
     }
   };
 
-  // Simulate PayPal Checkout
-  const handleSimulatePayPal = async () => {
-    if (!activeInvoice || !activeInvoice.paypal_order_id) return;
+  // Credits changed: refresh this page and the header credit badge (Layout listens for this).
+  const refreshAfterCreditChange = () => {
+    fetchBillingInfo();
+    window.dispatchEvent(new Event('refresh-profile'));
+  };
+
+  const capturePayPalOrder = async (orderId: string, invoiceId: string) => {
     setProcessing(true);
     try {
       const res = await apiFetch('/api/payments/paypal-capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          order_id: activeInvoice.paypal_order_id,
-          invoice_id: activeInvoice.invoice_id
+          order_id: orderId,
+          invoice_id: invoiceId
         })
       });
       const data = await res.json();
       if (data.success) {
         toast.success('Payment captured successfully! Credits added.');
         setActiveInvoice(null);
-        fetchBillingInfo();
+        refreshAfterCreditChange();
       } else {
         toast.error(data.error || 'Capture failed');
       }
-    } catch (e) {
+    } catch (_e) {
       toast.error('Error capturing payment');
     } finally {
       setProcessing(false);
     }
+  };
+
+  // PayPal redirects back to /billing?paypal_invoice=...&token=<order id>&PayerID=...
+  useEffect(() => {
+    if (paypalReturnHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const invoiceId = params.get('paypal_invoice');
+    if (!invoiceId) return;
+    paypalReturnHandled.current = true;
+    const orderId = params.get('token');
+    // Drop the query string so a reload doesn't try to capture again.
+    window.history.replaceState(null, '', window.location.pathname);
+    if (params.get('paypal_cancel') || !orderId) {
+      toast.info('PayPal payment was cancelled.');
+      return;
+    }
+    capturePayPalOrder(orderId, invoiceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Simulate PayPal Checkout (mock mode only)
+  const handleSimulatePayPal = async () => {
+    if (!activeInvoice || !activeInvoice.paypal_order_id) return;
+    await capturePayPalOrder(activeInvoice.paypal_order_id, activeInvoice.invoice_id);
   };
 
   // Simulate Tripay Paid Webhook (locally)
@@ -203,7 +235,7 @@ export default function Billing() {
       if (data.success) {
         toast.success('Tripay callback simulated! Credits added.');
         setActiveInvoice(null);
-        fetchBillingInfo();
+        refreshAfterCreditChange();
       } else {
         toast.error(data.message || 'Webhook failed');
       }
@@ -456,7 +488,7 @@ export default function Billing() {
                         <Input
                           id="receipt"
                           type="file"
-                          accept="image/*"
+                          accept="image/jpeg,image/png,image/webp,application/pdf"
                           onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
                           required
                         />
@@ -482,12 +514,28 @@ export default function Billing() {
                         <div className="flex justify-between"><span>Reference Code:</span> <span>{activeInvoice.tripay_data.reference}</span></div>
                       </div>
                       
-                      <div className="flex flex-col gap-2 pt-4">
-                        <p className="text-xs text-muted-foreground">Since this is sandbox/local testing, you can instantly simulate a PAID webhook below:</p>
-                        <Button type="button" onClick={handleSimulateTripayPaid} disabled={processing} className="w-full bg-emerald-600 hover:bg-emerald-500">
-                          Simulate Tripay Callback (PAID)
-                        </Button>
-                      </div>
+                      {activeInvoice.checkout_url && (
+                        <div className="pt-4">
+                          <a
+                            href={activeInvoice.checkout_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl shadow-md transition-all"
+                          >
+                            <CreditCard className="h-4 w-4" /> Open Tripay Checkout
+                          </a>
+                          <p className="text-xs text-muted-foreground mt-2">Credits are added automatically once Tripay confirms the payment. Refresh this page after paying.</p>
+                        </div>
+                      )}
+
+                      {activeInvoice.is_mock && (
+                        <div className="flex flex-col gap-2 pt-4">
+                          <p className="text-xs text-muted-foreground">Since this is sandbox/local testing, you can instantly simulate a PAID webhook below:</p>
+                          <Button type="button" onClick={handleSimulateTripayPaid} disabled={processing} className="w-full bg-emerald-600 hover:bg-emerald-500">
+                            Simulate Tripay Callback (PAID)
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -499,12 +547,28 @@ export default function Billing() {
                       <p className="text-sm">Paypal Order ID: <b>{activeInvoice.paypal_order_id}</b></p>
                       <p className="text-sm">Total to pay: <b>${activeInvoice.amount_usd} USD</b></p>
                       
-                      <div className="flex flex-col gap-2 pt-4">
-                        <p className="text-xs text-muted-foreground">Since this is sandbox/local testing, you can simulate a successful PayPal order capture below:</p>
-                        <Button type="button" onClick={handleSimulatePayPal} disabled={processing} className="w-full bg-blue-600 hover:bg-blue-500">
-                          Simulate PayPal Capture & Complete
-                        </Button>
-                      </div>
+                      {activeInvoice.is_mock ? (
+                        <div className="flex flex-col gap-2 pt-4">
+                          <p className="text-xs text-muted-foreground">Since this is sandbox/local testing, you can simulate a successful PayPal order capture below:</p>
+                          <Button type="button" onClick={handleSimulatePayPal} disabled={processing} className="w-full bg-blue-600 hover:bg-blue-500">
+                            Simulate PayPal Capture & Complete
+                          </Button>
+                        </div>
+                      ) : activeInvoice.paypal_approve_url ? (
+                        <div className="flex flex-col gap-2 pt-4">
+                          <Button
+                            type="button"
+                            onClick={() => { window.location.href = activeInvoice.paypal_approve_url as string; }}
+                            disabled={processing}
+                            className="w-full bg-blue-600 hover:bg-blue-500"
+                          >
+                            Pay with PayPal
+                          </Button>
+                          <p className="text-xs text-muted-foreground">You will be redirected to PayPal and brought back here to complete the payment.</p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-destructive pt-4">PayPal did not return a checkout link. Please create a new invoice.</p>
+                      )}
                     </div>
                   </div>
                 )}
