@@ -17,20 +17,20 @@ load_dotenv()
 
 def add_wordpress_category(wp_url, username, password, category_name, description=""):
     """Tambahkan kategori baru ke WordPress"""
-    
+
     # WordPress REST API endpoint
     api_url = f"{wp_url.rstrip('/')}/wp-json/wp/v2/categories"
-    
+
     # Data kategori
     data = {
         'name': category_name,
         'description': description,
         'slug': category_name.lower().replace(' ', '-')
     }
-    
+
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
+
     # Request dengan authentication
     response = requests.post(
         api_url,
@@ -39,7 +39,7 @@ def add_wordpress_category(wp_url, username, password, category_name, descriptio
         timeout=30,
         verify=False
     )
-    
+
     if response.status_code == 201:
         category = response.json()
         return {
@@ -63,11 +63,11 @@ def main():
     parser.add_argument("--name", required=True, help="Nama Kategori Baru")
     parser.add_argument("--description", default="", help="Deskripsi Kategori Baru")
     args = parser.parse_args()
-    
+
     wp_url = None
     username = None
     password = None
-    
+
     if args.url and args.username and args.password:
         wp_url = args.url
         username = args.username
@@ -82,12 +82,12 @@ def main():
                 wp_url = site.wordpress_url
                 username = site.wordpress_username
                 password = site.wordpress_password
-    
+
     if not wp_url or not username or not password:
         print("[ERROR] WordPress credentials belum diisi. Silakan isi lewat database atau oper lewat argument:")
         print("   python scripts/add_category.py --url <URL> --username <USER> --password <APP_PASSWORD> --name <NAME> --description <DESC>")
         return
-    
+
     print("="*60)
     print("MENAMBAHKAN KATEGORI BARU KE WORDPRESS")
     print("="*60)
@@ -95,18 +95,18 @@ def main():
     print(f"Deskripsi: {args.description}")
     print(f"WordPress: {wp_url}")
     print("\n[INFO] Menambahkan kategori...")
-    
+
     result = add_wordpress_category(wp_url, username, password, args.name, args.description)
-    
+
     if result['success']:
-        print(f"\n[SUCCESS] BERHASIL!")
+        print("\n[SUCCESS] BERHASIL!")
         print(f"   ID: {result['id']}")
         print(f"   Nama: {result['name']}")
         print(f"   Slug: {result['slug']}")
     else:
-        print(f"\n[ERROR] GAGAL!")
+        print("\n[ERROR] GAGAL!")
         print(f"   Error: {result['error']}")
-    
+
     print("\n" + "="*60)
 
 if __name__ == '__main__':

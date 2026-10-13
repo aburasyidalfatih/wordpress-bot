@@ -205,7 +205,7 @@ def create_site(user_id):
     data = request.get_json(silent=True) or {}
     if not data or not data.get('wordpress_url'):
         return jsonify({'success': False, 'error': 'WordPress URL is required'}), 400
-        
+
     try:
         wordpress_url = _clean_wordpress_url(data.get('wordpress_url'))
         site_name = _clean_str(data, 'site_name', 200) or 'New Website'
@@ -351,7 +351,7 @@ def update_site(user_id, site_id):
         if 'pinterest_board_id' in clean: site.pinterest_board_id = clean['pinterest_board_id']
         if 'pinterest_access_token' in data and _should_update_secret(data['pinterest_access_token']): site.pinterest_access_token = data['pinterest_access_token']
         if 'pinterest_enabled' in clean: site.pinterest_enabled = clean['pinterest_enabled']
-        
+
         if 'twitter_api_key' in data and _should_update_secret(data['twitter_api_key']): site.twitter_api_key = data['twitter_api_key']
         if 'twitter_api_secret' in data and _should_update_secret(data['twitter_api_secret']): site.twitter_api_secret = data['twitter_api_secret']
         if 'twitter_access_token' in data and _should_update_secret(data['twitter_access_token']): site.twitter_access_token = data['twitter_access_token']
@@ -364,7 +364,7 @@ def update_site(user_id, site_id):
 
 
         if 'is_active' in clean: site.is_active = clean['is_active']
-        
+
         session.commit()
         return jsonify({'success': True, 'message': 'Site updated successfully'})
 
@@ -376,7 +376,7 @@ def delete_site(user_id, site_id):
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
         session.delete(site)
         session.commit()
         return jsonify({'success': True, 'message': 'Site deleted successfully'})
@@ -389,10 +389,10 @@ def fetch_categories(user_id, site_id):
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
         if not site.wordpress_url or not site.wordpress_username or not site.wordpress_password:
             return jsonify({'success': False, 'error': 'Mohon isi kredensial WordPress terlebih dahulu.'}), 400
-        
+
         # Re-validate the stored URL: it may predate URL validation, and DNS
         # can change after it was saved.
         url_ok, url_or_error = validate_public_http_url(site.wordpress_url)
@@ -406,10 +406,10 @@ def fetch_categories(user_id, site_id):
                 site.wordpress_password
             )
             categories = publisher.get_categories()
-            
+
             if categories:
                 site.categories = categories
-                
+
                 # Sync descriptions and counts in selected_categories
                 selected_cats = site.selected_categories or []
                 updated_selected = []
@@ -424,7 +424,7 @@ def fetch_categories(user_id, site_id):
                         })
                     else:
                         updated_selected.append(sel_cat)
-                
+
                 site.selected_categories = updated_selected
                 session.commit()
                 return jsonify({'success': True, 'categories': categories})
@@ -442,19 +442,19 @@ def test_telegram(user_id, site_id):
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
         if not site.telegram_bot_token or not site.telegram_chat_id:
             return jsonify({'success': False, 'error': 'Bot Token atau Chat ID belum diisi!'}), 400
-        
+
         try:
             url = f"https://api.telegram.org/bot{site.telegram_bot_token}/getMe"
             response = requests.get(url, timeout=10)
-            
+
             if response.status_code != 200:
                 return jsonify({'success': False, 'error': 'Bot Token tidak valid!'}), 400
         except Exception as e:
             return jsonify({'success': False, 'error': f'Error koneksi: {str(e)}'}), 500
-        
+
         # Create a mock config dict for the legacy send_telegram_notification function
         mock_config = {
             'telegram_bot_token': site.telegram_bot_token,
@@ -463,12 +463,12 @@ def test_telegram(user_id, site_id):
             'telegram_post_to_channel': site.telegram_post_to_channel,
             'telegram_enabled': site.telegram_enabled
         }
-        
+
         success = send_telegram_notification(mock_config,
             f"🤖 <b>Test Notifikasi</b>\n\n"
             f"✅ Telegram berhasil terhubung untuk {site.site_name}!\n"
             f"📱 Bot siap mengirim notifikasi.")
-        
+
         if success:
             return jsonify({'success': True, 'message': 'Notifikasi test berhasil dikirim!'})
         else:
@@ -482,7 +482,7 @@ def next_category(user_id, site_id):
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
         if site.selected_categories and len(site.selected_categories) > 0:
             next_cat = site.selected_categories[0]
             return jsonify({
@@ -505,7 +505,7 @@ def get_prompts(user_id, site_id):
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
         default_article_prompt = """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {site_name} tentang: {topic}
 {existing_titles}{research_note}{seo_section}
 TARGET AUDIENCE: Pembaca website {site_name}
@@ -538,7 +538,7 @@ STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
    - Contoh konkret
 """
         default_image_prompt = "Fotografi profesional, pencahayaan dramatis, gaya korporat modern, fokus tajam."
-        
+
         return jsonify({
             'success': True,
             'article_prompt': site.article_prompt or default_article_prompt.replace('{site_name}', site.site_name),
@@ -556,7 +556,7 @@ def save_prompts(user_id, site_id):
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found'}), 404
-            
+
         article_prompt = data.get('article_prompt')
         image_prompt = data.get('image_prompt')
         site.article_prompt = (article_prompt.strip() or None) if isinstance(article_prompt, str) else None

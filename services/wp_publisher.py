@@ -120,7 +120,7 @@ class WordPressPublisher:
         credentials = f"{self.username}:{self.password}"
         token = base64.b64encode(credentials.encode()).decode()
         return {'Authorization': f'Basic {token}'}
-    
+
     def get_post_stats(self, post_id):
         """Get post statistics from WordPress"""
         try:
@@ -129,10 +129,10 @@ class WordPressPublisher:
                 headers=self._get_auth(),
                 timeout=10
             )
-            
+
             if response.status_code == 200:
                 post = response.json()
-                
+
                 # Get comments count
                 comments_response = self._request('GET',
                     f"{self.api_url}/comments",
@@ -140,7 +140,7 @@ class WordPressPublisher:
                     timeout=10
                 )
                 comments_count = len(comments_response.json()) if comments_response.status_code == 200 else 0
-                
+
                 return {
                     'views': post.get('meta', {}).get('views', 0),  # Requires view counter plugin
                     'comments': comments_count,
@@ -176,7 +176,7 @@ class WordPressPublisher:
         except Exception as e:
             logger.error(f"Error getting recent posts: {e}")
             return []
-    
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -184,7 +184,7 @@ class WordPressPublisher:
     )
     def upload_image(self, image_data, title):
         """Upload image via WordPress REST API.
-        
+
         Transient network errors (ConnectionError, Timeout) propagate to trigger retry.
         Non-transient errors (bad status, data issues) are caught and return None immediately."""
         if isinstance(image_data, BytesIO):
@@ -206,12 +206,12 @@ class WordPressPublisher:
             sanitized_title = sanitize_filename(title[:50])
             filename = f'{sanitized_title}.jpg'
             mime_type = 'image/jpeg'
-        
+
         # Upload via WordPress REST API — transient errors propagate for retry
         headers = self._get_auth()
         headers['Content-Disposition'] = f'attachment; filename="{filename}"'
         headers['Content-Type'] = mime_type
-        
+
         try:
             response = self._request('POST',
                 f"{self.api_url}/media",
@@ -224,12 +224,12 @@ class WordPressPublisher:
         except Exception as e:
             logger.error(f"Error uploading image (non-retryable): {e}")
             return None
-        
+
         if response.status_code == 201:
             media_data = response.json()
             media_id = media_data['id']
             logger.info(f"Image uploaded successfully via REST API: {media_id}")
-            
+
             # Update SEO metadata (Alt Text, Description, Title)
             try:
                 update_headers = self._get_auth()
@@ -248,12 +248,12 @@ class WordPressPublisher:
                 logger.info(f"Image SEO metadata updated for media ID: {media_id}")
             except Exception as meta_e:
                 logger.error(f"Failed to update image metadata: {meta_e}")
-                
+
             return media_id
         else:
             logger.error(f"Failed to upload image: {response.status_code} - {response.text}")
             return None
-    
+
     def _find_relevant_video(self, search_term):
         """Find a YouTube video whose title genuinely overlaps the search term.
 
@@ -316,7 +316,7 @@ class WordPressPublisher:
                 params={'per_page': 100},
                 timeout=30
             )
-            
+
             if response.status_code == 200:
                 categories = response.json()
                 return [{'id': cat['id'], 'name': cat['name'], 'description': cat.get('description', ''), 'count': cat.get('count', 0)} for cat in categories]
@@ -326,11 +326,9 @@ class WordPressPublisher:
         except Exception as e:
             logger.error(f"Error fetching categories: {e}")
             return []
-    
+
     def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
-        import urllib.parse
-        import json
-        
+
         # Remove placeholder patterns
         placeholders = [
             r'\[FLOWCHART:.*?\]',
@@ -343,33 +341,29 @@ class WordPressPublisher:
         ]
         for pattern in placeholders:
             content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-        
+
         # Remove ASCII art tables
         content = re.sub(r'<pre[^>]*>.*?[\u2500-\u257F].*?</pre>', '', content, flags=re.DOTALL)
         content = re.sub(r'[\u2500-\u257F]', '', content)
-        
+
         # Remove empty paragraphs
         content = re.sub(r'<p>\s*</p>', '', content)
         content = re.sub(r'<p>\s*\\n\s*</p>', '', content)
-        
+
         # Remove JSON artifacts at the beginning
         content = re.sub(r'^\s*\{\s*"[^"]*"\s*:', '', content)
         content = re.sub(r'"\s*\}\s*$', '', content)
-        
+
         content = content.strip()
-        
-        # HTML Sanitizer (Fix broken tags)
+
+        # Re-serialize through BeautifulSoup to close broken/unbalanced tags.
         try:
             from bs4 import BeautifulSoup
-            soup = BeautifulSoup(content, 'html.parser')
-            for a in soup.find_all('a'):
-                if not a.get('href') or a.get('href').startswith('http') == False:
-                    pass
-            content = str(soup)
+            content = str(BeautifulSoup(content, 'html.parser'))
         except Exception as e:
             from core_extensions import logger
             logger.warning(f"Failed to sanitize HTML: {e}")
-            
+
         # Inject Key Takeaways Box
         if key_takeaways and isinstance(key_takeaways, list):
             box = f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
@@ -379,7 +373,7 @@ class WordPressPublisher:
     </ul>
 </div>"""
             content = box + "\n" + content
-            
+
         # Structured data. FAQPage rich results are heavily restricted these days, so
         # its main value is as machine-readable Q&A for answer engines. BlogPosting is
         # what actually carries the authorship and freshness signals.
@@ -448,21 +442,21 @@ class WordPressPublisher:
                     content += iframe
 
         clean_slug = re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
-        
+
         post_data = {
             'title': title,
             'content': content,
             'status': 'publish',
             'slug': clean_slug
         }
-        
+
         if category_id:
             post_data['categories'] = [category_id]
         if featured_image_id:
             post_data['featured_media'] = featured_image_id
         if excerpt:
             post_data['excerpt'] = excerpt
-            
+
         meta_fields = {}
         if meta_description:
             meta_fields['_yoast_wpseo_metadesc'] = meta_description
@@ -470,10 +464,10 @@ class WordPressPublisher:
         if focus_keyword:
             meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
             meta_fields['rank_math_focus_keyword'] = focus_keyword
-            
+
         if meta_fields:
             post_data['meta'] = meta_fields
-            
+
         return post_data, meta_fields
 
     @staticmethod
@@ -614,9 +608,9 @@ class WordPressPublisher:
                 logger.info(f"Yoast meta update: {update_response.status_code}")
             except Exception as e:
                 logger.warning(f"Could not update Yoast meta: {e}")
-        
+
         return response.status_code == 201, response.json() if response.status_code == 201 else response.text
-        
+
     def update_post_content(self, post_id, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
         if not self._ensure_url_ok():
             return False, f"Refusing to contact WordPress site: {self.url_error}"
@@ -629,7 +623,7 @@ class WordPressPublisher:
             json=post_data,
             timeout=30
         )
-        
+
         # If post updated successfully, try to update Yoast meta separately
         if response.status_code == 200 and meta_fields:
             try:
@@ -643,9 +637,9 @@ class WordPressPublisher:
                 logger.info(f"Yoast meta update: {update_response.status_code}")
             except Exception as e:
                 logger.warning(f"Could not update Yoast meta: {e}")
-        
+
         return response.status_code == 200, response.json() if response.status_code == 200 else response.text
-        
+
 
     def get_posts(self, page=1, per_page=100, search=None, context=None):
         """List posts. Pass context='edit' to get title.raw/content.raw, which is
@@ -659,7 +653,7 @@ class WordPressPublisher:
             params['search'] = search
         if context:
             params['context'] = context
-        
+
         response = self._request('GET',
             f"{self.api_url}/posts",
             headers=headers,
@@ -670,13 +664,13 @@ class WordPressPublisher:
             total_pages = int(response.headers.get('X-WP-TotalPages', 1))
             return True, response.json(), total_pages
         return False, response.text, 0
-        
+
     def update_post(self, post_id, data):
         if not self._ensure_url_ok():
             return False, f"Refusing to contact WordPress site: {self.url_error}"
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
-        
+
         response = self._request('POST',
             f"{self.api_url}/posts/{post_id}",
             headers=headers,

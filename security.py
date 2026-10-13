@@ -62,12 +62,12 @@ def get_fernet():
         'fernet_key',
         lambda: Fernet.generate_key().decode()
     )
-            
+
     try:
         _fernet_instance = Fernet(key.encode())
     except Exception as e:
-        raise RuntimeError('Fernet encryption key is corrupt or invalid. Restore from backup. DO NOT auto-regenerate or all encrypted data will be lost.')
-        
+        raise RuntimeError('Fernet encryption key is corrupt or invalid. Restore from backup. DO NOT auto-regenerate or all encrypted data will be lost.') from e
+
     return _fernet_instance
 
 def encrypt_value(value: str) -> str:
@@ -96,24 +96,5 @@ def decrypt_value(value: str) -> str:
                           f"Restore from backup or re-enter the credential. Error: {e}")
             raise ValueError(f"Decryption failed for sensitive value: {e}")
         # Value is not fernet-encoded — assume plaintext from migration or legacy data
-        logger.warning(f"Value is not encrypted; storing plaintext is deprecated. Please re-save this configuration.")
+        logger.warning("Value is not encrypted; storing plaintext is deprecated. Please re-save this configuration.")
         return value
-
-import secrets
-from functools import wraps
-from flask import session, request, abort
-
-def generate_csrf_token():
-    if '_csrf_token' not in session:
-        session['_csrf_token'] = secrets.token_hex(32)
-    return session['_csrf_token']
-
-def csrf_protect(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if request.method == 'POST':
-            token = request.form.get('_csrf_token') or request.headers.get('X-CSRF-Token')
-            if not token or token != session.get('_csrf_token'):
-                abort(403)
-        return f(*args, **kwargs)
-    return decorated

@@ -1,6 +1,5 @@
 from flask import Flask, request, send_from_directory, jsonify
 from werkzeug.middleware.proxy_fix import ProxyFix
-from dotenv import load_dotenv
 import os
 import signal
 import atexit
@@ -11,6 +10,18 @@ from core_extensions import db, logger, load_system_settings, refresh_system_set
 # ---- Rate Limiting ----
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
+from routes.auth import auth_bp
+from routes.queue import queue_bp
+from routes.research import research_bp
+from routes.dashboard import dashboard_bp
+from routes.settings import settings_bp
+from routes.monitor import monitor_bp
+from routes.sites import sites_bp
+from routes.prompts import prompts_bp
+from routes.payments import payments_bp, tripay_webhook
+from routes.admin import admin_bp
+from routes.search_console import search_console_bp
 
 # RATELIMIT_STORAGE_URI can be set via env var to point to Redis
 _rate_limit_uri = os.getenv('RATELIMIT_STORAGE_URI', Config.REDIS_URL)
@@ -37,21 +48,6 @@ limiter = Limiter(
     strategy="fixed-window"
 )
 # ---- End Rate Limiting ----
-
-# Import blueprints
-from routes.auth import auth_bp
-from routes.queue import queue_bp
-from routes.research import research_bp
-from routes.dashboard import dashboard_bp
-from routes.settings import settings_bp
-from routes.monitor import monitor_bp
-from routes.sites import sites_bp
-from routes.prompts import prompts_bp
-from routes.payments import payments_bp
-from routes.admin import admin_bp
-from routes.search_console import search_console_bp
-
-load_dotenv()
 
 # Load system settings from database and override Config values on startup.
 # Later admin edits are picked up per worker by refresh_system_settings_if_changed().
@@ -109,9 +105,6 @@ if _trusted_proxy_count:
 
 limiter.init_app(app)
 
-from security import generate_csrf_token
-app.jinja_env.globals['csrf_token'] = generate_csrf_token
-
 # Register Blueprints
 app.register_blueprint(auth_bp)
 app.register_blueprint(queue_bp)
@@ -127,7 +120,6 @@ app.register_blueprint(search_console_bp)
 
 # Tripay callbacks all come from Tripay's own IPs and are HMAC-verified; the
 # per-IP default limits would otherwise start rejecting real payment callbacks.
-from routes.payments import tripay_webhook
 limiter.exempt(tripay_webhook)
 
 

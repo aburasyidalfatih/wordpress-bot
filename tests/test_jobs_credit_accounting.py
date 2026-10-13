@@ -7,7 +7,7 @@ import logging
 import sys
 import types
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine

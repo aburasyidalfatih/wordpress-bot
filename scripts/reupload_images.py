@@ -48,25 +48,25 @@ print("🔄 Re-uploading images for 2 articles...\n")
 for article in articles:
     print(f"📝 {article['title']}")
     print(f"   Post ID: {article['post_id']}")
-    
+
     # Generate image
     print("   📸 Generating image...")
     image_data = generator.generate_image("Pendidikan", article['title'], "")
-    
+
     if not image_data:
         print("   ❌ Failed to generate image\n")
         continue
-    
+
     # Upload image
     print("   ⬆️  Uploading image...")
     media_id = publisher.upload_image(image_data, article['title'])
-    
+
     if not media_id:
         print("   ❌ Failed to upload image\n")
         continue
-    
+
     print(f"   ✅ Image uploaded: ID {media_id}")
-    
+
     # Update post with featured image
     print("   🔗 Setting as featured image...")
     import requests
@@ -76,9 +76,9 @@ for article in articles:
         json={'featured_media': media_id},
         timeout=30
     )
-    
+
     if response.status_code == 200:
-        print(f"   ✅ Featured image set successfully!\n")
+        print("   ✅ Featured image set successfully!\n")
     else:
         print(f"   ❌ Failed to set featured image: {response.status_code}\n")
 

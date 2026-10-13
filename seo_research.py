@@ -2,16 +2,7 @@
 SEO Research Module - Advanced Enterprise Keyword & Competitor Research
 Uses open source libraries to perform deep topic analysis.
 """
-import urllib3
-import urllib3.util.retry
-
-# Monkey-patch urllib3 Retry to support old method_whitelist parameter used by pytrends
-original_init = urllib3.util.retry.Retry.__init__
-def patched_init(self, *args, **kwargs):
-    if 'method_whitelist' in kwargs:
-        kwargs['allowed_methods'] = kwargs.pop('method_whitelist')
-    original_init(self, *args, **kwargs)
-urllib3.util.retry.Retry.__init__ = patched_init
+import urllib3_compat  # noqa: F401  (must run before pytrends is imported)
 
 import os
 import re
@@ -54,7 +45,7 @@ DDG_CALL_SPACING_SECONDS = float(os.getenv('DDG_CALL_SPACING_SECONDS', '3'))
 
 class SEOResearch:
     """Advanced Research using DDGS, Pytrends, and YouTube Transcripts"""
-    
+
     def __init__(self):
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -143,7 +134,7 @@ class SEOResearch:
             seen.add(normalized)
             output.append(value)
         return output
-    
+
     def get_keyword_suggestions(self, keyword, limit=10, language='id'):
         """Get keyword suggestions from Google Autocomplete"""
         suggestions = []
@@ -159,12 +150,12 @@ class SEOResearch:
                     self._mark_source('google_autocomplete', 'real', count=len(suggestions))
         except Exception as e:
             logger.error(f"Error getting keyword suggestions: {e}")
-            
+
         if not suggestions:
             # Fallback if Google Autocomplete fails or yields nothing
             if language == 'en':
                 suggestions = [
-                    f"best {keyword}", f"{keyword} tips", f"{keyword} tutorial", 
+                    f"best {keyword}", f"{keyword} tips", f"{keyword} tutorial",
                     f"how to start with {keyword}", f"{keyword} for beginners"
                 ]
             else:
@@ -182,7 +173,7 @@ class SEOResearch:
             modifiers = ["how to", "what is", "why does", "can you"]
         else:
             modifiers = ["bagaimana cara", "apa itu", "kenapa", "apakah"]
-            
+
         try:
             url = "https://suggestqueries.google.com/complete/search"
             hl = 'en' if language == 'en' else 'id'
@@ -195,7 +186,7 @@ class SEOResearch:
                     if len(data) > 1:
                         # Add valid questions that aren't too short
                         questions.extend([q for q in data[1] if len(q.split()) > 3])
-            
+
             # Remove duplicates while preserving order
             seen = set()
             unique_questions = []
@@ -203,13 +194,13 @@ class SEOResearch:
                 if q not in seen:
                     seen.add(q)
                     unique_questions.append(q)
-                    
+
             if unique_questions:
                 self._mark_source('related_questions', 'real', count=len(unique_questions[:limit]))
                 return unique_questions[:limit]
         except Exception as e:
             logger.error(f"Error getting dynamic related questions: {e}")
-            
+
         # Fallback to standard hardcoded patterns if API fails or returns nothing
         if language == 'en':
             patterns = [
@@ -278,7 +269,7 @@ class SEOResearch:
             self._mark_source('google_trends', 'unavailable', reason='pytrends_not_installed')
             return {'score': None, 'current': None, 'average': None, 'growth': None,
                     'volatility': None, 'status': 'unavailable'}
-            
+
         try:
             hl = 'en-US' if language == 'en' else 'id-ID'
             geo = 'US' if language == 'en' else 'ID'
@@ -476,7 +467,7 @@ class SEOResearch:
             logger.error(f"DDGS social insights error: {e}")
             self._mark_source('social', 'unavailable', count=0, reason=type(e).__name__)
             return []
-            
+
         insights = self._deduplicate(insights, key=lambda item: item.get('text'))[:5]
         self._mark_source('social', 'real' if insights else 'unavailable', count=len(insights))
         return insights
@@ -497,7 +488,7 @@ class SEOResearch:
             query = f"site:youtube.com {keyword}"
             region = 'us-en' if language == 'en' else 'id-id'
             results = list(ddgs.text(query, region=region, max_results=2))
-            
+
             for res in results:
                 url = res.get('href', '')
                 import re
@@ -658,19 +649,19 @@ class SEOResearch:
         """Deep Research a category including competitors, social, and youtube"""
         logger.info(f"Advanced Researching category: {category_name} with language={language}")
         self.source_status = {}
-        
+
         try:
             from rq import get_current_job
             job = get_current_job()
         except ImportError:
             job = None
-            
+
         def update_progress(prog, msg):
             if job:
                 job.meta['progress'] = prog
                 job.meta['message'] = msg
                 job.save_meta()
-                
+
         update_progress(30, f'Gathering evidence for {category_name}...')
         collected = self._run_providers(
             independent={
@@ -717,7 +708,7 @@ class SEOResearch:
             suggestion_count=len(suggestions),
             question_count=len(questions),
         )
-        
+
         result = {
             'category': category_name,
             'suggestions': suggestions,
@@ -737,9 +728,9 @@ class SEOResearch:
             'quality': quality,
             'timestamp': datetime.now(timezone.utc).isoformat(),
         }
-        
+
         logger.info(f"Category research complete: Trend={trend_score}, Competitors={len(competitor_outlines)}")
-        
+
         return result
 
 if __name__ == "__main__":

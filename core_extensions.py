@@ -404,13 +404,13 @@ def send_telegram_notification(config, message):
     """Send notification to Telegram"""
     if not config.get('telegram_enabled'):
         return False
-    
+
     bot_token = config.get('telegram_bot_token')
     chat_id = config.get('telegram_chat_id')
-    
+
     if not bot_token or not chat_id:
         return False
-    
+
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         data = {
@@ -428,18 +428,18 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
     """Post article to Telegram channel"""
     if not config.get('telegram_post_to_channel'):
         return False
-    
+
     bot_token = config.get('telegram_bot_token')
     channel_id = config.get('telegram_channel_id')
-    
+
     if not bot_token or not channel_id:
         logger.warning("Telegram channel: Missing bot_token or channel_id")
         return False
-    
+
     # Ensure channel_id has @ prefix if it's a username
     if not channel_id.startswith('@') and not channel_id.startswith('-'):
         channel_id = f"@{channel_id}"
-    
+
     try:
         import re
         title = html_module.escape(article.get('title', ''))
@@ -447,16 +447,16 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
         excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:400]
         language = config.get('language', 'id')
         read_more_text = "Read the full article:" if language == 'en' else "Baca artikel lengkap"
-        
+
         keyword = article.get('focus_keyword', '').replace(' ', '').title()
         hashtags = f"#{keyword}" if keyword else ""
-        
+
         message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">{read_more_text}</a>\n\n{hashtags}"""
-        
+
         # M9: Truncate caption to Telegram's 1024-char limit for photo captions
         if len(message) > 1024:
             message = message[:1021] + '...'
-        
+
         if image_data:
             url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
             files = {'photo': ('image.jpg', image_data.getvalue(), 'image/jpeg')}
@@ -475,7 +475,7 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
                 'disable_web_page_preview': False
             }
             response = requests.post(url, data=data, timeout=10)
-        
+
         if response.status_code == 200:
             logger.info(f"Telegram channel post successful to {channel_id}")
             return True
@@ -491,44 +491,44 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
     if not config.get('facebook_enabled'):
         logger.info("Facebook posting disabled")
         return False
-    
+
     page_id = config.get('facebook_page_id')
     access_token = config.get('facebook_access_token')
-    
+
     if not page_id or not access_token:
         logger.warning("Facebook Page ID or Access Token not configured")
         return False
-    
+
     try:
         import re
         import html
-        
+
         # Get content - handle both dict and string
         content = article.get('content', '')
         if isinstance(content, dict):
             content = content.get('rendered', '')
-        
+
         # Remove HTML tags
         content_clean = re.sub('<[^<]+?>', '', content)
         # Decode HTML entities (&#8216; -> ')
         content_clean = html.unescape(content_clean)
         # Remove extra whitespace
         content_clean = re.sub(r'\s+', ' ', content_clean).strip()
-        
+
         # Split by sentence to get proper paragraphs
         sentences = re.split(r'(?<=[.!?])\s+', content_clean)
-        
+
         # Build 3 paragraphs (3-4 sentences each)
         paragraphs = []
         current_para = []
         sentence_count = 0
-        
+
         for sentence in sentences:
             if len(sentence.strip()) < 20:  # Skip very short sentences
                 continue
             current_para.append(sentence.strip())
             sentence_count += 1
-            
+
             # Complete paragraph after 3-4 sentences
             if sentence_count >= 3:
                 para_text = ' '.join(current_para)
@@ -536,28 +536,28 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
                     paragraphs.append(para_text)
                     current_para = []
                     sentence_count = 0
-                    
+
                 if len(paragraphs) >= 3:  # Stop after 3 paragraphs
                     break
-        
+
         # If we have remaining sentences, add as last paragraph
         if current_para and len(paragraphs) < 3:
             paragraphs.append(' '.join(current_para))
-        
+
         # Take only first 3 paragraphs
         first_3_paragraphs = '\n\n'.join(paragraphs[:3])
-        
+
         # If no paragraphs found, use excerpt
         if not first_3_paragraphs:
             excerpt = article.get('excerpt', '')
             first_3_paragraphs = html.unescape(re.sub('<[^<]+?>', '', excerpt).strip()[:500])
-            
+
         keyword = article.get('focus_keyword', '').replace(' ', '').title()
         hashtags = f"#{keyword}" if keyword else ""
-        
+
         # Build message: Just 3 paragraphs + hashtags (NO title, NO link)
         message = f"{first_3_paragraphs.strip()}\n\n{hashtags}"
-        
+
         # Get image URL from WordPress post
         image_url = None
         if post_url:
@@ -568,7 +568,7 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
                     image_url = img_match.group(1)
             except Exception:
                 pass
-        
+
         # Post with photo
         post_id = None
         if image_url:
@@ -587,11 +587,11 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
                 'message': message
             }
             response = requests.post(url, data=data, timeout=10)
-        
+
         if response.status_code == 200:
             post_id = response.json().get('id')
             logger.info(f"Facebook post successful to Page ID: {page_id}, Post ID: {post_id}")
-            
+
             # Post link as comment
             if post_id and post_url:
                 try:
@@ -604,12 +604,12 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
                     }
                     comment_response = requests.post(comment_url, data=comment_data, timeout=10)
                     if comment_response.status_code == 200:
-                        logger.info(f"Facebook comment with link posted successfully")
+                        logger.info("Facebook comment with link posted successfully")
                     else:
                         logger.warning(f"Facebook comment failed: {comment_response.text}")
                 except Exception as e:
                     logger.error(f"Facebook comment error: {e}")
-            
+
             return True
         else:
             logger.error(f"Facebook post failed: {response.status_code} - {response.text}")
@@ -623,33 +623,33 @@ def post_to_pinterest(config, article, post_url, image_data=None):
     if not config.get('pinterest_enabled'):
         logger.info("Pinterest posting disabled")
         return False
-    
+
     board_id = config.get('pinterest_board_id')
     access_token = config.get('pinterest_access_token')
-    
+
     if not board_id or not access_token:
         logger.warning("Pinterest Board ID or Access Token not configured")
         return False
-        
+
     if not image_data:
         logger.warning("Pinterest requires an image, but no image data was provided")
         return False
-        
+
     try:
         import html
         import base64
-        
+
         # Get content - handle both dict and string
         content = article.get('content', '')
         if isinstance(content, dict):
             content = content.get('rendered', '')
-            
+
         title = article.get('title', '')
         if isinstance(title, dict):
             title = title.get('rendered', '')
-        
+
         title = html.unescape(title)
-        
+
         # We can extract a description from excerpt or just use the title
         description = html.unescape(article.get('excerpt', title))
         # Remove HTML from description
@@ -657,18 +657,18 @@ def post_to_pinterest(config, article, post_url, image_data=None):
         description = re.sub('<[^<]+>', '', description).strip()
         if len(description) > 490:
             description = description[:490] + '...'
-            
+
         # Encode image to base64
         img_bytes = image_data.getvalue()
         base64_img = base64.b64encode(img_bytes).decode('utf-8')
-        
+
         url = "https://api.pinterest.com/v5/pins"
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-        
+
         payload = {
             "board_id": board_id,
             "title": title[:100],  # Pinterest title max length is 100
@@ -680,9 +680,9 @@ def post_to_pinterest(config, article, post_url, image_data=None):
                 "data": base64_img
             }
         }
-        
+
         response = requests.post(url, headers=headers, json=payload, timeout=30)
-        
+
         if response.status_code in (200, 201):
             pin_data = response.json()
             pin_id = pin_data.get('id')
@@ -691,7 +691,7 @@ def post_to_pinterest(config, article, post_url, image_data=None):
         else:
             logger.error(f"Pinterest post failed: {response.status_code} - {response.text}")
             return False
-            
+
     except Exception as e:
         logger.error(f"Pinterest post error: {e}")
         return False
@@ -700,38 +700,38 @@ def post_to_twitter(config, article, post_url, image_data=None):
     """Post article to Twitter/X"""
     if not config.get('twitter_enabled'):
         return False
-    
+
     api_key = config.get('twitter_api_key')
     api_secret = config.get('twitter_api_secret')
     access_token = config.get('twitter_access_token')
     access_secret = config.get('twitter_access_secret')
-    
+
     if not all([api_key, api_secret, access_token, access_secret]):
         return False
-    
+
     try:
         import tweepy
         import re
-        
+
         client = tweepy.Client(
             consumer_key=api_key,
             consumer_secret=api_secret,
             access_token=access_token,
             access_token_secret=access_secret
         )
-        
+
         title = article.get('title', '')
         excerpt = article.get('excerpt', '')
         excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:200]
-        
+
         keyword = article.get('focus_keyword', '').replace(' ', '').title()
         hashtags = f"#{keyword}" if keyword else ""
-        
+
         tweet = f"{title}\n\n{excerpt_clean}...\n\n{post_url}\n\n{hashtags}"
-        
+
         if len(tweet) > 280:
             tweet = f"{title[:100]}...\n\n{post_url}\n\n{hashtags}"
-            
+
         response = client.create_tweet(text=tweet)
         logger.info(f"Twitter post successful, Tweet ID: {response.data.get('id')}")
         return True
@@ -743,22 +743,22 @@ def post_to_threads(config, article, post_url, image_data=None):
     """Post article to Threads with 1 paragraph + image, link in comment"""
     if not config.get('threads_enabled'):
         return False
-    
+
     user_id = config.get('threads_user_id')
     access_token = config.get('threads_access_token')
-    
+
     if not user_id or not access_token:
         return False
-    
+
     try:
         import re
         import html
-        
+
         # Get content - handle both dict and string
         content = article.get('content', '')
         if isinstance(content, dict):
             content = content.get('rendered', '')
-        
+
         # Get excerpt or fallback to first paragraph
         excerpt = article.get('excerpt', '')
         if excerpt:
@@ -772,20 +772,20 @@ def post_to_threads(config, article, post_url, image_data=None):
             sentences = re.split(r'(?<=[.!?])\s+', content_clean)
             first_para_sentences = [s.strip() for s in sentences[:4] if len(s.strip()) > 20]
             first_paragraph = ' '.join(first_para_sentences[:3])
-            
+
         keyword = article.get('focus_keyword', '').replace(' ', '').title()
         hashtags = f"#{keyword}" if keyword else ""
-        
+
         language = config.get('language', 'id')
         read_more_text = "Read more:" if language == 'en' else "Baca selengkapnya:"
-        
+
         # Build text: engaging excerpt + link + dynamic hashtags
         text = f"{first_paragraph}\n\n📖 {read_more_text}\n{post_url}\n\n{hashtags}"
-        
+
         # Limit to 500 chars (Threads limit)
         if len(text) > 500:
             text = first_paragraph[:430] + f"...\n\n📖 {post_url}\n\n{hashtags}"
-        
+
         # Get image URL from WordPress post
         image_url = None
         if post_url:
@@ -796,7 +796,7 @@ def post_to_threads(config, article, post_url, image_data=None):
                     image_url = img_match.group(1)
             except Exception:
                 pass
-        
+
         # Step 1: Create container
         url = f"https://graph.threads.net/v1.0/{user_id}/threads"
         if image_url:
@@ -812,14 +812,14 @@ def post_to_threads(config, article, post_url, image_data=None):
                 'text': text,
                 'access_token': access_token
             }
-            
+
         response = requests.post(url, data=post_data, timeout=30)
         if response.status_code != 200:
             logger.error(f"Threads container failed: {response.text}")
             return False
-            
+
         creation_id = response.json().get('id')
-        
+
         # Step 2: Publish container
         url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
         publish_data = {
@@ -827,7 +827,7 @@ def post_to_threads(config, article, post_url, image_data=None):
             'access_token': access_token
         }
         response = requests.post(url, data=publish_data, timeout=30)
-        
+
         if response.status_code == 200:
             logger.info(f"Threads post successful, Post ID: {response.json().get('id')}")
             return True
@@ -844,18 +844,18 @@ def send_email_notification(to_email, subject, body_text):
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
-    
+
     if not Config.SMTP_HOST or not Config.SMTP_USER or not Config.SMTP_PASSWORD:
         logger.info("SMTP settings not configured. Skipping email notification.")
         return False
-        
+
     try:
         msg = MIMEMultipart()
         msg['From'] = Config.SMTP_SENDER_EMAIL or Config.SMTP_USER
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body_text, 'plain'))
-        
+
         server = smtplib.SMTP(Config.SMTP_HOST, Config.SMTP_PORT or 587, timeout=15)
         server.starttls()
         server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
@@ -870,17 +870,17 @@ def send_email_notification(to_email, subject, body_text):
 def send_whatsapp_notification(to_number, message):
     """Send WhatsApp notification using Starsender WA Gateway"""
     from config import Config
-    
+
     if not Config.STARSENDER_API_KEY or not Config.STARSENDER_DEVICE_ID:
         logger.info("Starsender WA Gateway settings not configured. Skipping WhatsApp notification.")
         return False
-        
+
     to_number = str(to_number).strip()
     if to_number.startswith('0'):
         to_number = '62' + to_number[1:]
     elif to_number.startswith('+'):
         to_number = to_number[1:]
-        
+
     try:
         url = "https://starsender.online/api/sendText"
         headers = {

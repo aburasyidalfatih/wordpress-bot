@@ -1,0 +1,17 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["scratch", "legacy_sqlite_backup", "frontend", "logs"]
+
+[tool.ruff.lint]
+# Pyflakes (F), pycodestyle errors/warnings that matter (E4, E7, E9, W),
+# import sorting is left out on purpose to keep diffs small.
+select = ["E4", "E7", "E9", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests stub modules in sys.modules before importing the code under test.
+"tests/*" = ["E402"]
+"scripts/*" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -115,14 +115,14 @@ def api_auth_google():
     token_info = verify_google_token(id_token)
     if not token_info:
         return jsonify({'success': False, 'error': 'Invalid Google token'}), 400
-        
+
     email = token_info.get('email')
     google_id = token_info.get('sub')
     name = token_info.get('name', '')
-    
+
     if not email:
         return jsonify({'success': False, 'error': 'Google token did not provide an email'}), 400
-        
+
     with db.get_session() as session:
         from models import User
         user = session.query(User).filter_by(google_id=google_id).first()
@@ -130,11 +130,11 @@ def api_auth_google():
             user = session.query(User).filter_by(email=email).first()
             if user and user.google_id and user.google_id != google_id:
                 return jsonify({'success': False, 'error': 'Email is already linked to another Google account'}), 400
-        
+
         if not user:
             user_count = session.query(User).count()
             role = 'admin' if (user_count == 0 or is_configured_admin_email(email)) else 'user'
-            
+
             user = User(
                 email=email,
                 name=name,
@@ -146,27 +146,27 @@ def api_auth_google():
             )
             session.add(user)
             session.commit()
-            
+
             from database import Config as DBConfig
             config = DBConfig(user_id=user.id, gemini_api_key='', gemini_model='gemini-3.5-flash')
             session.add(config)
             session.commit()
-            
+
             logger.info(f"Registered new user via Google: {email} with role {role}")
-            
+
             # Send notifications
             try:
                 import threading
-                
+
                 # Welcome email to user
                 welcome_subj = "Welcome to AutoWP!"
                 welcome_body = f"Hello {name},\n\nThank you for registering on AutoWP! Your account has been initialized with 5 free credits."
                 threading.Thread(target=send_email_notification, args=(email, welcome_subj, welcome_body)).start()
-                
+
                 # WhatsApp/Email alert to Admin
                 admin_subj = "AutoWP - New User Registered (Google)"
                 admin_body = f"Halo Admin,\n\nUser baru telah mendaftar di AutoWP via Google:\n- Nama: {name}\n- Email: {email}\n- Role: {role}\n\nSilakan periksa dashboard admin untuk detailnya."
-                
+
                 admin_email = Config.SMTP_SENDER_EMAIL or Config.SMTP_USER
                 if admin_email:
                     threading.Thread(target=send_email_notification, args=(admin_email, admin_subj, admin_body)).start()
@@ -181,12 +181,12 @@ def api_auth_google():
                 user.role = 'admin'
                 logger.info(f"Updated configured admin user {email} role to admin on login")
             session.commit()
-                
+
         if not user.is_active:
             return jsonify({'success': False, 'error': 'Account is suspended'}), 403
-            
+
         token = issue_access_token(user.id)
-        
+
         resp = make_response(jsonify({
             'success': True,
             'token': token,
@@ -219,9 +219,9 @@ def api_auth_login():
             _clear_failed_logins(email)
             if not user.is_active:
                 return jsonify({'success': False, 'error': 'Account is suspended'}), 403
-                
+
             token = issue_access_token(user.id)
-            
+
             resp = make_response(jsonify({
                 'success': True,
                 'token': token,

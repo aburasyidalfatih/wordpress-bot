@@ -140,7 +140,7 @@ class ArticleGenerator:
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.image_model = image_model
-    
+
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=4, max=60),
@@ -152,12 +152,12 @@ class ArticleGenerator:
         custom_prompt = custom_prompt or kwargs.get('custom_article_prompt')
         language = kwargs.get('language') or 'id'
         target_site = site_name if site_name else "website"
-        
+
         if language == 'en':
             target_audience = f"Readers of website {target_site}"
         else:
             target_audience = f"Pembaca website {target_site}"
-        
+
         # Context for the article is derived from this site's own data (category name,
         # the admin-written category description, and researched keywords) instead of a
         # hardcoded industry vocabulary. AutoWP is multi-tenant: a fixed niche map made
@@ -180,17 +180,17 @@ class ArticleGenerator:
         if existing_titles:
             if language == 'en':
                 if avoid_similar:
-                    existing_titles_text = f"\n\nâš ï¸ CRITICAL - TITLES MUST BE VERY DIFFERENT:\n"
+                    existing_titles_text = "\n\n⚠️ CRITICAL - TITLES MUST BE VERY DIFFERENT:\n"
                     existing_titles_text += "Previous titles are too similar. Create a TRULY UNIQUE title with a different angle/perspective!\n\n"
                     existing_titles_text += "Titles to AVOID:\n"
                 else:
-                    existing_titles_text = f"\n\nâš ï¸ IMPORTANT - AVOID EXISTING TITLES:\n"
-                
+                    existing_titles_text = "\n\n⚠️ IMPORTANT - AVOID EXISTING TITLES:\n"
+
                 for title in existing_titles[-10:]:
                     existing_titles_text += f"- {title}\n"
-                
+
                 if avoid_similar:
-                    existing_titles_text += "\nðŸ’¡ TIPS FOR UNIQUE TITLES:\n"
+                    existing_titles_text += "\n💡 TIPS FOR UNIQUE TITLES:\n"
                     existing_titles_text += "- Use different angles (e.g., from customer's perspective, manager's perspective, general public)\n"
                     existing_titles_text += "- Focus on specific aspects not yet discussed\n"
                     existing_titles_text += "- Use different formats (guide, checklist, case study, analysis, etc.)\n"
@@ -199,31 +199,31 @@ class ArticleGenerator:
                     existing_titles_text += "\nThe article title MUST be different and unique from the list above!\n"
             else:
                 if avoid_similar:
-                    existing_titles_text = f"\n\nâš ï¸ CRITICAL - JUDUL HARUS SANGAT BERBEDA:\n"
+                    existing_titles_text = "\n\n⚠️ CRITICAL - JUDUL HARUS SANGAT BERBEDA:\n"
                     existing_titles_text += "Judul sebelumnya terlalu mirip. Buat judul yang BENAR-BENAR UNIK dengan angle/perspektif berbeda!\n\n"
                     existing_titles_text += "Judul yang HARUS DIHINDARI:\n"
                 else:
-                    existing_titles_text = f"\n\nâš ï¸ PENTING - HINDARI JUDUL YANG SUDAH ADA:\n"
-                
+                    existing_titles_text = "\n\n⚠️ PENTING - HINDARI JUDUL YANG SUDAH ADA:\n"
+
                 for title in existing_titles[-10:]:  # Last 10 titles
                     existing_titles_text += f"- {title}\n"
-                
+
                 if avoid_similar:
-                    existing_titles_text += "\nðŸ’¡ TIPS MEMBUAT JUDUL UNIK:\n"
+                    existing_titles_text += "\n💡 TIPS MEMBUAT JUDUL UNIK:\n"
                     existing_titles_text += "- Gunakan angle berbeda (misalnya: dari sisi orang tua, dari sisi guru, dari sisi siswa)\n"
                     existing_titles_text += "- Fokus pada aspek spesifik yang belum dibahas\n"
                     existing_titles_text += "- Gunakan format berbeda (panduan, checklist, studi kasus, analisis, dll)\n"
                     existing_titles_text += "- Tambahkan konteks spesifik (lokasi, waktu, situasi)\n\n"
                 else:
                     existing_titles_text += "\nJudul artikel HARUS berbeda dan unik dari daftar di atas!\n"
-        
+
         # Add custom topic from research if available
         topic_focus = custom_topic if custom_topic else topic
         if language == 'en':
-            research_note = f"\n\nðŸ”¥ TRENDING TOPIC: {custom_topic}\nFocus the article on this trending topic within the context of {topic}.\n" if custom_topic else ""
+            research_note = f"\n\n🔥 TRENDING TOPIC: {custom_topic}\nFocus the article on this trending topic within the context of {topic}.\n" if custom_topic else ""
         else:
-            research_note = f"\n\nðŸ”¥ TRENDING TOPIC: {custom_topic}\nFokuskan artikel pada topik trending ini dalam konteks {topic}.\n" if custom_topic else ""
-        
+            research_note = f"\n\n🔥 TRENDING TOPIC: {custom_topic}\nFokuskan artikel pada topik trending ini dalam konteks {topic}.\n" if custom_topic else ""
+
         # Research evidence handed to the model. Everything factual the article claims
         # must be traceable back to this block; see the EVIDENCE POLICY in the prompt.
         seo_section = ""
@@ -904,7 +904,7 @@ Design requirements:
                 (
                     "generic-education",
                     f"""Create a high-quality 16:9 featured image for an article about {topic}.
-Include a descriptive, click-worthy typographic hook of 3 to 6 words in the center (e.g. "Essential Tips for {topic}"). 
+Include a descriptive, click-worthy typographic hook of 3 to 6 words in the center (e.g. "Essential Tips for {topic}").
 Do NOT write the full lengthy title, but make sure the text clearly describes the content.
 Use abstract modern symbols and a soft geometric background.
 Modern clean vector or soft 3D illustration, professional blog thumbnail."""

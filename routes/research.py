@@ -32,20 +32,20 @@ def api_research(user_id):
     site_id = request.args.get('site_id', type=int)
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
         from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
-            
+
         selected_categories = site.selected_categories or []
         # Snapshot these values while the ORM instance is still attached. The
         # response is assembled after other sessions have committed and closed.
         gsc_connected = bool(site.gsc_refresh_token)
         gsc_property_url = site.gsc_property_url
         gsc_last_synced_at = site.gsc_last_synced_at
-    
+
     # Get the latest two research runs per category in ONE query, instead of a
     # query per category plus another per category for the delta.
     research_data = {}
@@ -99,7 +99,7 @@ def api_research(user_id):
                     'created_at': researched_at.strftime('%d %b %Y, %H:%M') if researched_at else None,
                     'change_since_last_run': _research_delta(latest, previous),
                 }
-    
+
     gsc_opportunities = []
     gsc_metrics_error = None
     current_metrics = []
@@ -256,7 +256,7 @@ def suggest_topics(user_id):
                 site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
                 if site:
                     language = site.language or 'id'
-        
+
         suggestions = trending.suggest_article_topics(category, count, language=language)
         return jsonify({'suggestions': suggestions})
     except Exception as e:
@@ -277,29 +277,29 @@ def manual_research(user_id):
         data = request.get_json(silent=True) or {}
         site_id = data.get('site_id')
         category = data.get('category')
-        
+
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     if category == "" or category == "all" or category == "All":
         category = None
-        
+
     try:
         try:
             site_id_int = int(site_id)
         except (TypeError, ValueError):
             return jsonify({'success': False, 'error': 'Format site_id tidak valid.'}), 400
-            
+
         with db.get_session() as session:
             from models import WordPressSite, User
             site = session.query(WordPressSite).filter_by(id=site_id_int, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
-                
+
             user = session.query(User).filter_by(id=user_id).first()
             if not user:
                 return jsonify({'success': False, 'error': 'User tidak ditemukan.'}), 404
-                
+
             # The research job researches each category name once, so charge per
             # unique name; duplicate entries must not be billed twice.
             selected_category_names = list(dict.fromkeys(
@@ -316,7 +316,7 @@ def manual_research(user_id):
                 required_credits = 1
             else:
                 required_credits = len(selected_category_names)
-                
+
             user_credits = user.credits if user.credits is not None else 0
             if user_credits < required_credits:
                 return jsonify({
@@ -372,12 +372,12 @@ def generate_titles(user_id, category):
     except (TypeError, ValueError):
         count = 5
     site_id = data.get('site_id') or request.args.get('site_id', type=int)
-    
+
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
     if not category.strip() or len(category) > MAX_TITLE_CATEGORY_CHARS:
         return jsonify({'success': False, 'error': 'Kategori tidak valid.', 'code': 400}), 400
-    
+
     try:
         # Get keywords from research data
         with db.get_session() as session:
@@ -385,7 +385,7 @@ def generate_titles(user_id, category):
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
-                
+
             latest = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
@@ -404,7 +404,7 @@ def generate_titles(user_id, category):
                     'success': False,
                     'error': f'Tidak aman membuat judul dari data ini: {reason}. Silakan riset ulang.'
                 }), 400
-            
+
             keywords = latest.keywords or []
             questions = latest.questions or []
             competitor_outlines = latest.competitor_outlines or []
@@ -425,7 +425,7 @@ def generate_titles(user_id, category):
         if quota_error:
             return quota_error
         config = load_config(user_id)
-        
+
         # Search Console queries are the strongest topic signal available: real
         # searches that already produced impressions for this exact site. Feed the
         # quick-win queries and the content gaps into the title prompt.
@@ -483,12 +483,12 @@ def generate_titles(user_id, category):
         # Use ArticleGenerator to suggest titles
         from services.article_generator import ArticleGenerator
         generator = ArticleGenerator(
-            config['gemini_api_key'], 
+            config['gemini_api_key'],
             config.get('gemini_model', DEFAULT_GEMINI_MODEL),
             config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
         current_year = datetime.now().year
-        
+
         if language == 'en':
             prompt = f"""Create {count} highly engaging, natural (like written by a professional journalist or blogger), click-worthy (High CTR), and SEO-optimized blog article titles for the category "{category}" on the website {site_name}. All titles MUST BE IN ENGLISH.
 
@@ -536,7 +536,7 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
             text = '\n'.join(text.split('\n')[1:-1])
             if text.startswith('json'):
                 text = text[4:].strip()
-        
+
         titles = json.loads(text)
         if not isinstance(titles, list):
             raise ValueError('Respons AI bukan daftar judul')
@@ -582,7 +582,7 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
                 )
                 session.add(queue_item)
             session.commit()
-            
+
         return jsonify({'success': True, 'message': f'{len(titles)} judul berhasil dibuat dan dimasukkan ke antrean!'})
     except Exception as e:
         logger.error(f"Generate titles error: {e}")
@@ -598,18 +598,18 @@ Format output harus berupa JSON list of strings tanpa markdown formatting sepert
 def clear_research(user_id):
     data = request.json or {}
     site_id = data.get('site_id')
-    
+
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required'}), 400
-        
+
     try:
         with db.get_session() as session:
             from models import ResearchData
             deleted_count = session.query(ResearchData).filter_by(site_id=site_id, user_id=user_id).delete()
             session.commit()
-            
+
         return jsonify({
-            'success': True, 
+            'success': True,
             'message': f'Berhasil membersihkan {deleted_count} data riset.'
         })
     except Exception as e:

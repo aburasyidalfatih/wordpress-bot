@@ -36,20 +36,20 @@ class Transaction(Base):
 
 class Config(Base):
     __tablename__ = 'config'
-    
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     _gemini_api_key = Column('gemini_api_key', String(500))
     gemini_model = Column(String(100), default=DEFAULT_GEMINI_MODEL)
     gemini_image_model = Column(String(100), default=DEFAULT_GEMINI_IMAGE_MODEL)
-    
+
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
     @property
     def gemini_api_key(self):
         from security import decrypt_value
         return decrypt_value(self._gemini_api_key)
-        
+
     @gemini_api_key.setter
     def gemini_api_key(self, value):
         from security import encrypt_value
@@ -57,7 +57,7 @@ class Config(Base):
 
 class WordPressSite(Base):
     __tablename__ = 'wordpress_sites'
-    
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_name = Column(String(200), default="My Website")
@@ -71,31 +71,31 @@ class WordPressSite(Base):
     categories = Column(JSON, default=[])
     selected_categories = Column(JSON, default=[])
     auto_post = Column(Boolean, default=False)
-    
+
     # Telegram settings
     _telegram_bot_token = Column('telegram_bot_token', String(500))
     telegram_chat_id = Column(String(200))
     telegram_enabled = Column(Boolean, default=False)
     telegram_channel_id = Column(String(200))
     telegram_post_to_channel = Column(Boolean, default=False)
-    
+
     # Facebook settings
     facebook_page_id = Column(String(200))
     _facebook_access_token = Column('facebook_access_token', String(500))
     facebook_enabled = Column(Boolean, default=False)
-    
+
     # Pinterest settings
     pinterest_board_id = Column(String(200))
     _pinterest_access_token = Column('pinterest_access_token', String(500))
     pinterest_enabled = Column(Boolean, default=False)
-    
+
     # Twitter/X settings
     _twitter_api_key = Column('twitter_api_key', String(500))
     _twitter_api_secret = Column('twitter_api_secret', String(500))
     _twitter_access_token = Column('twitter_access_token', String(500))
     _twitter_access_secret = Column('twitter_access_secret', String(500))
     twitter_enabled = Column(Boolean, default=False)
-    
+
     # Threads settings
     threads_user_id = Column(String(200))
     _threads_access_token = Column('threads_access_token', String(500))
@@ -110,13 +110,13 @@ class WordPressSite(Base):
     gsc_connected_at = Column(DateTime)
     gsc_last_synced_at = Column(DateTime)
     gsc_last_error = Column(Text)
-    
+
     # Auto Research settings
 
 
     article_prompt = Column(Text, default=None)
     image_prompt = Column(Text, default=None)
-    
+
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
@@ -125,32 +125,32 @@ class WordPressSite(Base):
     def wordpress_password(self):
         from security import decrypt_value
         return decrypt_value(self._wordpress_password)
-        
+
     @wordpress_password.setter
     def wordpress_password(self, value):
         from security import encrypt_value
         self._wordpress_password = encrypt_value(value)
-        
+
     @property
     def telegram_bot_token(self):
         from security import decrypt_value
         return decrypt_value(self._telegram_bot_token)
-        
+
     @telegram_bot_token.setter
     def telegram_bot_token(self, value):
         from security import encrypt_value
         self._telegram_bot_token = encrypt_value(value)
-        
+
     @property
     def facebook_access_token(self):
         from security import decrypt_value
         return decrypt_value(self._facebook_access_token)
-        
+
     @facebook_access_token.setter
     def facebook_access_token(self, value):
         from security import encrypt_value
         self._facebook_access_token = encrypt_value(value)
-        
+
     @property
     def pinterest_access_token(self):
         from security import decrypt_value
@@ -165,52 +165,52 @@ class WordPressSite(Base):
             self._pinterest_access_token = None
             return
         self._pinterest_access_token = encrypt_value(value)
-        
+
     @property
     def twitter_api_key(self):
         from security import decrypt_value
         return decrypt_value(self._twitter_api_key)
-        
+
     @twitter_api_key.setter
     def twitter_api_key(self, value):
         from security import encrypt_value
         self._twitter_api_key = encrypt_value(value)
-        
+
     @property
     def twitter_api_secret(self):
         from security import decrypt_value
         return decrypt_value(self._twitter_api_secret)
-        
+
     @twitter_api_secret.setter
     def twitter_api_secret(self, value):
         from security import encrypt_value
         self._twitter_api_secret = encrypt_value(value)
-        
+
     @property
     def twitter_access_token(self):
         from security import decrypt_value
         return decrypt_value(self._twitter_access_token)
-        
+
     @twitter_access_token.setter
     def twitter_access_token(self, value):
         from security import encrypt_value
         self._twitter_access_token = encrypt_value(value)
-        
+
     @property
     def twitter_access_secret(self):
         from security import decrypt_value
         return decrypt_value(self._twitter_access_secret)
-        
+
     @twitter_access_secret.setter
     def twitter_access_secret(self, value):
         from security import encrypt_value
         self._twitter_access_secret = encrypt_value(value)
-        
+
     @property
     def threads_access_token(self):
         from security import decrypt_value
         return decrypt_value(self._threads_access_token)
-        
+
     @threads_access_token.setter
     def threads_access_token(self, value):
         from security import encrypt_value
@@ -265,7 +265,7 @@ class SearchConsoleMetric(Base):
 
 class PostLog(Base):
     __tablename__ = 'post_logs'
-    
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True, nullable=True)
@@ -277,24 +277,24 @@ class PostLog(Base):
     success = Column(Boolean, index=True)
     result = Column(Text)
     image_failed = Column(Boolean, default=False)
-    
+
     # Engagement metrics
     views = Column(Integer, default=0)
     comments = Column(Integer, default=0)
     likes = Column(Integer, default=0)
     shares = Column(Integer, default=0)
     engagement_score = Column(Float, default=0.0, index=True)
-    
+
     created_at = Column(DateTime, default=datetime.now, index=True)
     last_synced = Column(DateTime)
-    
+
     __table_args__ = (
         Index('idx_category_created', 'category_name', 'created_at'),
     )
 
 class ResearchData(Base):
     __tablename__ = 'research_data'
-    
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True, nullable=True)
@@ -322,7 +322,7 @@ class ResearchData(Base):
 
 class ContentQueue(Base):
     __tablename__ = 'content_queue'
-    
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), index=True)
     site_id = Column(Integer, ForeignKey('wordpress_sites.id', ondelete='CASCADE'), index=True, nullable=True)
@@ -351,7 +351,7 @@ class ContentQueue(Base):
 
 class SystemSetting(Base):
     __tablename__ = 'system_settings'
-    
+
     key = Column(String(100), primary_key=True)
     value = Column(Text, nullable=True)
 

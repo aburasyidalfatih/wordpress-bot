@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 
-import requests
 
 from services.article_generator import ArticleGenerator
 from services.quality_gate import check_article, strip_invalid_internal_links
@@ -276,54 +275,54 @@ def regenerate_image_job(user_id, log_id):
     try:
         config = load_config(user_id)
         generator = ArticleGenerator(
-            config['gemini_api_key'], 
+            config['gemini_api_key'],
             config.get('gemini_model', DEFAULT_GEMINI_MODEL),
             config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
-        
+
         with db.get_session() as session:
             log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
             if not log:
                 db.refund_user_credits(user_id, 1)
                 logger.error(f"Post log not found for ID {log_id}")
                 return
-            
+
             title = log.title
             category_name = log.category_name
             post_id = log.post_id
             site_id = log.site_id
-            
+
             if not site_id:
                 # Fallback to first active site if site_id is missing from log
                 site = session.query(WordPressSite).filter_by(user_id=user_id, is_active=True).first()
             else:
                 site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-                
+
             if not site:
                 db.refund_user_credits(user_id, 1)
                 logger.error(f"No active WordPress site found for user {user_id} and site {site_id}")
                 return
-                
+
             wordpress_url = site.wordpress_url
             wordpress_username = site.wordpress_username
             wordpress_password = site.wordpress_password
             site_name = site.site_name
             site_image_prompt = site.image_prompt
-            
+
         if not post_id:
             db.refund_user_credits(user_id, 1)
             logger.error("No post ID found in post log")
             return
-            
+
         publisher = WordPressPublisher(
             wordpress_url,
             wordpress_username,
             wordpress_password
         )
-            
+
         logger.info(f"Regenerating image for post {post_id} - {title}")
         custom_image_prompt = site_image_prompt or None
-        
+
         image_data = generator.generate_image(
             category_name,
             title,
@@ -331,7 +330,7 @@ def regenerate_image_job(user_id, log_id):
             custom_prompt=custom_image_prompt,
             site_name=site_name
         )
-        
+
         if image_data:
             logger.info("Image generated, uploading to WordPress...")
             featured_image_id = publisher.upload_image(image_data, title)
@@ -361,7 +360,7 @@ def regenerate_image_job(user_id, log_id):
                 raise Exception("WordPress image upload failed (check credentials or media library size)")
         else:
             raise Exception("Gemini image model failed to generate image data (verify API Key / Image Model)")
-            
+
     except Exception as e:
         logger.error(f"Error in regenerate_image_job: {e}", exc_info=True)
         try:
@@ -384,64 +383,64 @@ def regenerate_article_job(user_id, log_id):
     try:
         config = load_config(user_id)
         generator = ArticleGenerator(
-            config['gemini_api_key'], 
+            config['gemini_api_key'],
             config.get('gemini_model', DEFAULT_GEMINI_MODEL),
             config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
         )
-        
+
         with db.get_session() as session:
             log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
             if not log:
                 db.refund_user_credits(user_id, 1)
                 logger.error(f"Post log not found for ID {log_id}")
                 return
-            
+
             title = log.title
             category_name = log.category_name
             post_id = log.post_id
             site_id = log.site_id
             keyword = title
-            
+
             if not site_id:
                 site = session.query(WordPressSite).filter_by(user_id=user_id, is_active=True).first()
             else:
                 site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-                
+
             if not site:
                 db.refund_user_credits(user_id, 1)
                 logger.error(f"No active WordPress site found for user {user_id}")
                 return
-                
+
             wordpress_url = site.wordpress_url
             wordpress_username = site.wordpress_username
             wordpress_password = site.wordpress_password
             site_name = site.site_name
             language = site.language
             article_prompt = site.article_prompt
-            
+
         if not post_id:
             db.refund_user_credits(user_id, 1)
             logger.error("No post ID found in post log")
             return
-            
+
         publisher = WordPressPublisher(
             wordpress_url,
             wordpress_username,
             wordpress_password
         )
-            
+
         logger.info(f"Regenerating article for post {post_id} - {title}")
-        
+
         recent_posts_for_links = []
         try:
             recent_posts_for_links = publisher.get_recent_posts(limit=30)
         except Exception:
             pass
-            
+
         article = generator.generate_checked_article(
-            category_name, 
-            [], 
-            keyword, 
+            category_name,
+            [],
+            keyword,
             None,
             avoid_similar=False,
             custom_prompt=article_prompt,
@@ -450,7 +449,7 @@ def regenerate_article_job(user_id, log_id):
             category_desc=None,
             internal_links_context=recent_posts_for_links
         )
-        
+
         allowed_link_urls = article.get('allowed_link_urls')
         ok, gate_errors, gate_warnings = check_article(
             article,
@@ -477,7 +476,7 @@ def regenerate_article_job(user_id, log_id):
             key_takeaways=article.get('key_takeaways'),
             faqs=article.get('faqs')
         )
-        
+
         if success:
             logger.info(f"Successfully regenerated article for post {post_id}")
             with db.get_session() as session:
@@ -488,7 +487,7 @@ def regenerate_article_job(user_id, log_id):
             logger.info(f"Consumed reserved credit for user_id={user_id}, log_id={log_id}")
         else:
             raise Exception(f"WordPress update failed: {result}")
-            
+
     except Exception as e:
         logger.error(f"Error in regenerate_article_job: {e}", exc_info=True)
         try:
@@ -714,14 +713,14 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
             f"📂 Kategori: {category['name']}" + (f"\n🎯 Judul: {custom_topic}" if custom_topic else ""))
 
         existing_titles = db.get_existing_titles(user_id, site_id, category['name'], limit=50)
-        
+
         # Check if should use research topic (only if not a manual queue item)
         seo_data = None
         if not item_id:
             custom_topic = db.get_unused_research_topic(user_id, site_id, category['name'])
             if custom_topic:
                 logger.info(f"Using research topic: {custom_topic}")
-            
+
             # Get SEO research data
             try:
                 with db.get_session() as session:
@@ -732,7 +731,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                         ResearchData.confidence_level.in_(['high', 'medium', 'low']),
                         ResearchData.researched_at >= datetime.now() - timedelta(days=7),
                     ).order_by(ResearchData.created_at.desc()).first()
-                    
+
                     if research:
                         seo_data = {
                             # hasattr is always true for a mapped column, so it never
@@ -769,18 +768,18 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
 
         custom_article_prompt = site_config.get('article_prompt') or None
         custom_image_prompt = site_config.get('image_prompt') or None
-        
+
         # Get category description from site categories list
         category_desc = ""
         for cat in site_config.get('categories', []):
             if cat.get('name') == category['name']:
                 category_desc = cat.get('description', '')
                 break
-                
+
         article = generator.generate_checked_article(
-            category['name'], 
-            existing_titles, 
-            custom_topic, 
+            category['name'],
+            existing_titles,
+            custom_topic,
             seo_data,
             custom_prompt=custom_article_prompt,
             site_name=site_config.get('site_name'),
@@ -788,55 +787,55 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
             category_desc=category_desc,
             internal_links_context=recent_posts_for_links
         )
-        
+
         # Check for duplicate or similar titles
         def is_similar_title(new_title, existing_titles):
             """Check if title is duplicate or too similar"""
             import re
             from difflib import SequenceMatcher
-            
+
             # Normalize title for comparison
             def normalize(text):
                 text = re.sub(r'\d+', '', text.lower())
                 text = re.sub(r'[^\w\s]', '', text)
                 return ' '.join(text.split())
-            
+
             # Extract main topic (first 5-6 words usually contain main topic)
             def get_main_topic(text):
                 words = normalize(text).split()[:6]
                 return ' '.join(words)
-            
+
             new_normalized = normalize(new_title)
             new_main = get_main_topic(new_title)
-            
+
             for existing in existing_titles:
                 existing_normalized = normalize(existing)
                 existing_main = get_main_topic(existing)
-                
+
                 # Check exact match
                 if new_normalized == existing_normalized:
                     return True, existing, "exact"
-                
+
                 # Check character similarity (>60% = too similar)
                 char_similarity = SequenceMatcher(None, new_normalized, existing_normalized).ratio()
                 if char_similarity > 0.6:
                     return True, existing, f"char {char_similarity:.0%}"
-                
+
                 # Check main topic similarity (>75% = same topic)
                 topic_similarity = SequenceMatcher(None, new_main, existing_main).ratio()
                 if topic_similarity > 0.75:
                     return True, existing, f"topic {topic_similarity:.0%}"
-            
+
             return False, None, None
-        
+
         is_dup, similar_to, reason = is_similar_title(article.get('title', ''), existing_titles)
-        
+
         if is_dup:
             logger.warning(f"Similar title detected ({reason}): '{article.get('title')}' ~ '{similar_to}'. Regenerating...")
             article = generator.generate_checked_article(
-                category['name'], 
-                existing_titles, 
-                custom_topic, 
+                category['name'],
+                existing_titles,
+                custom_topic,
                 seo_data,
                 avoid_similar=True,
                 custom_prompt=custom_article_prompt,
@@ -845,7 +844,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
                 category_desc=category_desc,
                 internal_links_context=recent_posts_for_links
             )
-        
+
         # Quality gate. Blocks publishing of truncated, too-short, template-leaking or
         # fabricated-credential output instead of pushing it live and burning a credit.
         allowed_link_urls = article.get('allowed_link_urls')
@@ -867,11 +866,11 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         image_failed = False
         featured_image_id = None
         image_data = None
-        
+
         try:
             logger.info("Generating featured image...")
             image_data = generator.generate_image(
-                category['name'], 
+                category['name'],
                 article.get('title', ''),
                 article.get('content', ''),
                 custom_prompt=custom_image_prompt,
@@ -887,7 +886,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
         except Exception as img_err:
             logger.error(f"Image generation or upload failed: {img_err}", exc_info=True)
             image_failed = True
-        
+
         success, result = publisher.create_post(
             article.get('title', ''),
             article.get('content', ''),
@@ -899,7 +898,7 @@ def generate_and_post(user_id, item_id=None, site_id=None, credit_pre_reserved=F
             key_takeaways=article.get('key_takeaways'),
             faqs=article.get('faqs')
         )
-        
+
         post_id = None
         post_url = None
         # TIMEOUT-style results mean the request reached WordPress but the outcome

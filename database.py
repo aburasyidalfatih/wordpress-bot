@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import logging
-from sqlalchemy import exc, event
+from sqlalchemy import exc, event, text
 
 from models import Base, Config, WordPressSite, PostLog, ResearchData, SystemSetting
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
@@ -26,6 +26,36 @@ MAX_RESEARCH_AGE_DAYS = 7
 USABLE_CONFIDENCE_LEVELS = ('high', 'medium', 'low')
 
 
+
+# Credit balance changes are always single atomic SQL statements, never
+# "read balance in Python, write it back", so concurrent jobs and top-ups
+# cannot overwrite each other. Use these inside the caller's session when the
+# credit change must commit together with another row (queue item, transaction).
+
+def debit_credits(session, user_id, amount=1):
+    """Subtract `amount` credits if the balance allows it. Returns True on success."""
+    if amount <= 0:
+        return True
+    result = session.execute(
+        text(
+            "UPDATE users SET credits = COALESCE(credits, 0) - :amount "
+            "WHERE id = :user_id AND COALESCE(credits, 0) >= :amount"
+        ),
+        {'user_id': user_id, 'amount': amount}
+    )
+    return result.rowcount == 1
+
+
+def add_credits(session, user_id, amount=1):
+    """Add `amount` credits (top-up or refund). Returns True if the user exists."""
+    if amount <= 0:
+        return True
+    result = session.execute(
+        text("UPDATE users SET credits = COALESCE(credits, 0) + :amount WHERE id = :user_id"),
+        {'user_id': user_id, 'amount': amount}
+    )
+    return result.rowcount == 1
+
 class Database:
     def __init__(self, db_url):
         if not db_url.startswith(('postgresql://', 'postgresql+psycopg2://')):
@@ -41,7 +71,7 @@ class Database:
                 pool_recycle=1800,
                 echo=False
             )
-            
+
             # Dispose of connections after process fork (multiprocessing safety)
             @event.listens_for(self.engine, "connect")
             def connect(dbapi_connection, connection_record):
@@ -61,12 +91,12 @@ class Database:
                 logger.warning(f"Database initialization conflict (expected in multi-process startup): {e}")
             self.session_factory = sessionmaker(bind=self.engine)
             self.Session = scoped_session(self.session_factory)
-            
+
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
             raise
-            
+
     def run_migrations(self):
         """Run schema/data migrations under a PostgreSQL advisory lock.
 
@@ -76,7 +106,6 @@ class Database:
         migrations on every worker respawn. pg_try_advisory_lock lets exactly one
         process do the work; everyone else returns immediately.
         """
-        from sqlalchemy import text
 
         conn = self.engine.connect()
         acquired = False
@@ -121,7 +150,6 @@ class Database:
 
     def _schema_version_matches(self, conn):
         """True when the database is already at the current schema version."""
-        from sqlalchemy import text
         try:
             current = conn.execute(
                 text("SELECT value FROM system_settings WHERE key = :k"),
@@ -136,7 +164,6 @@ class Database:
             return False
 
     def _record_schema_version(self, conn):
-        from sqlalchemy import text
         try:
             conn.execute(
                 text(
@@ -182,7 +209,7 @@ class Database:
             return False
         logger.info("Database migrations completed successfully")
         return True
-    
+
     @contextmanager
     def get_session(self):
         session = self.session_factory()
@@ -200,7 +227,7 @@ class Database:
         from security import decrypt_value
         with self.get_session() as session:
             migrated = False
-            
+
             # Migrate Config table
             configs = session.query(Config).all()
             for config in configs:
@@ -210,7 +237,7 @@ class Database:
                     if decrypted == val:
                         setattr(config, 'gemini_api_key', val)
                         migrated = True
-            
+
             # Migrate WordPressSite table
             sites = session.query(WordPressSite).all()
             for site in sites:
@@ -232,13 +259,12 @@ class Database:
                         if decrypted == val:
                             setattr(site, prop_name, val)
                             migrated = True
-            
+
             if migrated:
                 session.commit()
                 logger.info("Migrated plaintext credentials in database to encrypted format successfully.")
 
     def migrate_add_timezone_column(self):
-        from sqlalchemy import text
         # Migration steps let errors propagate so _run_migrations_locked records
         # the failure and the schema version is not bumped past it.
         with self.get_session() as session:
@@ -252,7 +278,6 @@ class Database:
                 logger.info("Added column 'timezone' to 'wordpress_sites' table")
 
     def migrate_add_language_column(self):
-        from sqlalchemy import text
         with self.get_session() as session:
             res = session.execute(text(
                 "SELECT column_name FROM information_schema.columns "
@@ -265,7 +290,6 @@ class Database:
 
     def migrate_add_posting_started_at_column(self):
         """Track when a queue item entered 'posting' so stuck items can be recovered."""
-        from sqlalchemy import text
         with self.get_session() as session:
             res = session.execute(text(
                 "SELECT column_name FROM information_schema.columns "
@@ -286,7 +310,6 @@ class Database:
 
     def migrate_add_queue_job_columns(self):
         """Record which RQ job owns a 'posting' item and whether it holds a credit."""
-        from sqlalchemy import text
         with self.get_session() as session:
             session.execute(text(
                 "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS job_id VARCHAR(100) NULL"
@@ -297,7 +320,6 @@ class Database:
 
     def migrate_research_quality_columns(self):
         """Add auditable research metadata without invalidating legacy rows."""
-        from sqlalchemy import text
         columns = {
             'semantic_context': 'TEXT',
             'news_insights': 'JSON',
@@ -319,7 +341,6 @@ class Database:
 
     def migrate_search_console_foundation(self):
         """Add encrypted GSC connection fields and analytics snapshot table."""
-        from sqlalchemy import text
         site_columns = {
             'gsc_client_id': 'VARCHAR(500)',
             'gsc_client_secret': 'TEXT',
@@ -337,7 +358,6 @@ class Database:
                 ))
 
     def migrate_credit_system_tables(self):
-        from sqlalchemy import text
         with self.get_session() as session:
             for col, col_type, default_val in [
                 ('role', 'VARCHAR(50)', "'user'"),
@@ -370,7 +390,6 @@ class Database:
             session.commit()
 
     def migrate_add_foreign_keys(self):
-        from sqlalchemy import text
         with self.get_session() as session:
             tables = ['transactions', 'config', 'wordpress_sites', 'post_logs', 'research_data', 'content_queue']
             for table in tables:
@@ -388,7 +407,7 @@ class Database:
                     session.execute(text(f"ALTER TABLE {table} ADD CONSTRAINT fk_{table}_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"))
                     session.commit()
                     logger.info(f"Added foreign key constraint fk_{table}_user_id to {table}")
-    
+
     def get_config(self, user_id):
         with self.get_session() as session:
             config = session.query(Config).filter_by(user_id=user_id).first()
@@ -406,21 +425,21 @@ class Database:
                 'gemini_model': config.gemini_model or DEFAULT_GEMINI_MODEL,
                 'gemini_image_model': config.gemini_image_model or DEFAULT_GEMINI_IMAGE_MODEL
             }
-    
+
     def save_config(self, user_id, data):
         with self.get_session() as session:
             config = session.query(Config).filter_by(user_id=user_id).first()
             if not config:
                 config = Config(user_id=user_id)
                 session.add(config)
-            
+
             if 'gemini_api_key' in data and data.get('gemini_api_key'):
                 config.gemini_api_key = data['gemini_api_key']
             if 'gemini_model' in data:
                 config.gemini_model = data.get('gemini_model') or DEFAULT_GEMINI_MODEL
             if 'gemini_image_model' in data:
                 config.gemini_image_model = data.get('gemini_image_model') or DEFAULT_GEMINI_IMAGE_MODEL
-    
+
     def get_system_settings(self):
         with self.get_session() as session:
             try:
@@ -450,37 +469,15 @@ class Database:
                 raise e
 
     def reserve_user_credits(self, user_id, amount=1):
-        if amount <= 0:
-            return True
-
-        from sqlalchemy import text
+        """Take `amount` credits in their own transaction. False if the balance is too low."""
         with self.get_session() as session:
-            result = session.execute(
-                text(
-                    "UPDATE users "
-                    "SET credits = COALESCE(credits, 0) - :amount "
-                    "WHERE id = :user_id AND COALESCE(credits, 0) >= :amount"
-                ),
-                {'user_id': user_id, 'amount': amount}
-            )
-            return result.rowcount == 1
+            return debit_credits(session, user_id, amount)
 
     def refund_user_credits(self, user_id, amount=1):
-        if amount <= 0:
-            return True
-
-        from sqlalchemy import text
+        """Give `amount` credits back in their own transaction."""
         with self.get_session() as session:
-            result = session.execute(
-                text(
-                    "UPDATE users "
-                    "SET credits = COALESCE(credits, 0) + :amount "
-                    "WHERE id = :user_id"
-                ),
-                {'user_id': user_id, 'amount': amount}
-            )
-            return result.rowcount == 1
-    
+            return add_credits(session, user_id, amount)
+
     def add_log(self, user_id, site_id, category_id, category_name, title, success, result, post_id=None, post_url=None, image_failed=False):
         with self.get_session() as session:
             log = PostLog(
@@ -498,7 +495,7 @@ class Database:
             session.add(log)
             session.flush()
             return log.id
-    
+
     def update_engagement(self, log_id, views=0, comments=0, likes=0, shares=0):
         with self.get_session() as session:
             log = session.query(PostLog).filter(PostLog.id == log_id).first()
@@ -509,7 +506,7 @@ class Database:
                 log.shares = shares
                 log.engagement_score = (views * 0.1) + (comments * 2) + (likes * 1) + (shares * 3)
                 log.last_synced = datetime.now()
-    
+
     def get_logs(self, user_id, site_id=None, limit=50):
         with self.get_session() as session:
             query = session.query(PostLog).filter_by(user_id=user_id)
@@ -530,13 +527,13 @@ class Database:
                 'comments': log.comments,
                 'engagement_score': round(log.engagement_score, 2)
             } for log in logs]
-    
+
     def get_stats(self, user_id, site_id=None):
         with self.get_session() as session:
             query = session.query(PostLog).filter_by(user_id=user_id)
             if site_id is not None:
                 query = query.filter_by(site_id=site_id)
-                
+
             total = query.count()
             success = query.filter_by(success=True).count()
             success_rate = round((success / total * 100), 1) if total > 0 else 0.0
@@ -546,7 +543,7 @@ class Database:
                 'failed_posts': total - success,
                 'success_rate': success_rate
             }
-    
+
     def get_category_performance(self, user_id, site_id=None):
         from sqlalchemy import func
         with self.get_session() as session:
@@ -560,12 +557,12 @@ class Database:
                 PostLog.user_id == user_id,
                 PostLog.success.is_(True)
             )
-            
+
             if site_id is not None:
                 query = query.filter(PostLog.site_id == site_id)
-                
+
             results = query.group_by(PostLog.category_name).all()
-            
+
             return [{
                 'category': r.category_name,
                 'total_posts': r.total_posts,
@@ -573,19 +570,19 @@ class Database:
                 'total_views': r.total_views or 0,
                 'total_comments': r.total_comments or 0
             } for r in results]
-    
+
     def get_top_performing_posts(self, user_id, site_id=None, limit=10):
         with self.get_session() as session:
             query = session.query(PostLog).filter(
                 PostLog.user_id == user_id,
                 PostLog.success.is_(True)
             )
-            
+
             if site_id is not None:
                 query = query.filter(PostLog.site_id == site_id)
-                
+
             logs = query.order_by(PostLog.engagement_score.desc()).limit(limit).all()
-            
+
             return [{
                 'title': log.title,
                 'category': log.category_name,
@@ -594,20 +591,20 @@ class Database:
                 'comments': log.comments,
                 'created_at': log.created_at.isoformat() + ('Z' if log.created_at.tzinfo is None else '')
             } for log in logs]
-    
+
     def get_existing_titles(self, user_id, site_id=None, category_name=None, limit=50):
         with self.get_session() as session:
             query = session.query(PostLog.title).filter(PostLog.user_id == user_id, PostLog.success.is_(True))
-            
+
             if site_id is not None:
                 query = query.filter(PostLog.site_id == site_id)
-                
+
             if category_name:
                 query = query.filter(PostLog.category_name == category_name)
-            
+
             logs = query.order_by(PostLog.created_at.desc()).limit(limit).all()
             return [log.title for log in logs]
-    
+
     def save_research_data(self, user_id, site_id, category, trending, rising, top,
                            suggestions, keywords=None, questions=None, long_tail=None,
                            competitor_outlines=None, youtube_insights=None,
@@ -625,7 +622,7 @@ class Database:
                 top_topics=top,
                 suggested_topics=suggestions
             )
-            
+
             # Add SEO research data if provided
             if keywords:
                 research.keywords = keywords
@@ -647,11 +644,11 @@ class Database:
             research.confidence_level = confidence_level or 'unknown'
             research.is_fallback = bool(is_fallback)
             research.researched_at = researched_at or datetime.now()
-            
+
             session.add(research)
             session.commit()
             logger.info(f"Research data saved for category: {category}")
-    
+
     def get_unused_research_topic(self, user_id, site_id, category):
         """Pick the next researched topic for an automated post.
 
@@ -691,7 +688,7 @@ class Database:
                 f"(site_id={site_id}); falling back to category rotation."
             )
             return None
-    
+
     def get_latest_research(self, user_id, site_id, category):
         with self.get_session() as session:
             return session.query(ResearchData).filter(
@@ -699,7 +696,7 @@ class Database:
                 ResearchData.site_id == site_id,
                 ResearchData.category == category
             ).order_by(ResearchData.created_at.desc()).first()
-    
+
     def close(self):
         try:
             self.Session.remove()

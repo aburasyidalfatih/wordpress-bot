@@ -17,25 +17,25 @@ def api_dashboard(user_id):
     site_id = request.args.get('site_id', type=int)
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
         from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
-            
+
         site_auto_post = site.auto_post
         site_selected_categories = site.selected_categories
         site_schedule_hours = site.schedule_hours
         site_timezone = site.timezone
-            
+
         logs = db.get_logs(user_id, site_id=site_id, limit=20)
-        
+
         from models import ContentQueue
         active_queue = session.query(ContentQueue).filter_by(
             user_id=user_id, site_id=site_id, status='posting'
         ).order_by(ContentQueue.created_at.desc()).all()
-        
+
         for q in active_queue:
             logs.insert(0, {
                 'id': f"q_{q.id}",
@@ -54,9 +54,9 @@ def api_dashboard(user_id):
         # Use the shared 5s cache instead of hitting the database on every poll;
         # the dashboard is refreshed frequently.
         stats = get_cached_stats(user_id, site_id=site_id)
-        insights = optimizer.get_content_recommendations(user_id, site_id=site_id) 
+        insights = optimizer.get_content_recommendations(user_id, site_id=site_id)
         performance = db.get_category_performance(user_id, site_id=site_id)
-        
+
         # Get next scheduled post time dynamically
         next_post_time = None
         if site_auto_post and site_selected_categories:
@@ -66,13 +66,13 @@ def api_dashboard(user_id):
                 if hours_list:
                     from datetime import datetime, timedelta
                     from zoneinfo import ZoneInfo
-                    
+
                     tz_name = site_timezone or 'Asia/Jakarta'
                     try:
                         local_tz = ZoneInfo(tz_name)
                     except Exception:
                         local_tz = ZoneInfo('Asia/Jakarta')
-                        
+
                     now_local = datetime.now(local_tz)
                     next_time = None
                     for hour in hours_list:
@@ -86,7 +86,7 @@ def api_dashboard(user_id):
             except Exception as e:
                 from core_extensions import logger
                 logger.error(f"Error calculating next post time: {e}")
-        
+
         return jsonify({
             'success': True,
             'logs': logs if logs else [],
@@ -104,7 +104,7 @@ def sync_engagement(user_id):
     site_id = (request.get_json(silent=True) or {}).get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     try:
         with db.get_session() as session:
             from models import WordPressSite
@@ -124,11 +124,11 @@ def sync_engagement(user_id):
                 site.wordpress_username,
                 site.wordpress_password
             )
-            
+
         logs = db.get_logs(user_id, site_id=site_id, limit=SYNC_ENGAGEMENT_MAX_POSTS)
         synced = 0
         deadline = time.monotonic() + SYNC_ENGAGEMENT_MAX_SECONDS
-        
+
         for log in logs:
             if time.monotonic() >= deadline:
                 break
@@ -143,7 +143,7 @@ def sync_engagement(user_id):
                         shares=stats.get('shares', 0)
                     )
                     synced += 1
-        
+
         return jsonify({
             'success': True,
             'message': f'Berhasil sync {synced} artikel',
@@ -161,18 +161,18 @@ def optimize_categories(user_id):
     site_id = (request.get_json(silent=True) or {}).get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     try:
         with db.get_session() as session:
             from models import WordPressSite
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
                 return jsonify({'success': False, 'error': 'Site not found'}), 404
-                
+
             optimized = optimizer.optimize_category_order(site.selected_categories or [], user_id, site_id=site.id)
             site.selected_categories = optimized
             session.commit()
-        
+
         return jsonify({
             'success': True,
             'message': 'Kategori berhasil dioptimasi berdasarkan performa',

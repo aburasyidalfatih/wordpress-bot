@@ -35,10 +35,10 @@ def bulk_update_year_endpoint(user_id):
     site_id = data.get('site_id')
     from_year = data.get('from_year')
     to_year = data.get('to_year')
-    
+
     if not all([site_id, from_year, to_year]):
         return jsonify({'success': False, 'error': 'Missing site_id, from_year, or to_year'}), 400
-        
+
     try:
         # Enqueue by dotted path against the shared queue. The previous version
         # imported redis_conn from a worker.py that no longer exists and pulled the
@@ -96,7 +96,7 @@ def approve_payment(user_id, transaction_id):
         tx = session.query(Transaction).filter_by(id=transaction_id).first()
         if not tx:
             return jsonify({'success': False, 'error': 'Transaction not found'}), 404
-            
+
         if tx.status != 'awaiting_approval':
             return jsonify({'success': False, 'error': f'Transaction status is {tx.status}, cannot approve'}), 400
 
@@ -130,7 +130,7 @@ def reject_payment(user_id, transaction_id):
         tx = session.query(Transaction).filter_by(id=transaction_id).first()
         if not tx:
             return jsonify({'success': False, 'error': 'Transaction not found'}), 404
-            
+
         if tx.status != 'awaiting_approval':
             return jsonify({'success': False, 'error': f'Transaction status is {tx.status}, cannot reject'}), 400
 
@@ -172,7 +172,7 @@ def update_user(user_id, target_user_id):
         user = session.query(User).filter_by(id=target_user_id).first()
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 404
-            
+
         if 'name' in data:
             user.name = str(data['name']).strip()
         if 'role' in data:
@@ -210,12 +210,12 @@ def update_user(user_id, target_user_id):
 def delete_user(user_id, target_user_id):
     if target_user_id == user_id:
         return jsonify({'success': False, 'error': 'You cannot delete yourself'}), 400
-        
+
     with db.get_session() as session:
         user = session.query(User).filter_by(id=target_user_id).first()
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 404
-            
+
         # Cascade delete user data
         session.query(DBConfig).filter_by(user_id=target_user_id).delete()
         session.query(WordPressSite).filter_by(user_id=target_user_id).delete()
@@ -224,7 +224,7 @@ def delete_user(user_id, target_user_id):
         session.query(ContentQueue).filter_by(user_id=target_user_id).delete()
         session.query(Transaction).filter_by(user_id=target_user_id).delete()
         session.delete(user)
-        
+
         session.commit()
         logger.info(f"Admin {user_id} deleted User {target_user_id}")
         return jsonify({'success': True, 'message': 'User deleted successfully'})
@@ -235,7 +235,7 @@ def get_admin_stats(user_id):
     with db.get_session() as session:
         total_users = session.query(User).count()
         total_pro = session.query(User).filter_by(tier='pro').count()
-        
+
         # Aggregate in SQL rather than loading every successful transaction just to
         # sum two columns.
         earnings, credits_purchased = session.query(
@@ -244,13 +244,13 @@ def get_admin_stats(user_id):
         ).filter(Transaction.status == 'success').one()
         total_earnings = float(earnings or 0)
         total_credits_purchased = int(credits_purchased or 0)
-        
+
         # Active queue count
         queue_count = session.query(ContentQueue).count()
-        
+
         # Total generated articles
         total_articles = session.query(PostLog).count()
-        
+
         return jsonify({
             'success': True,
             'stats': {
@@ -270,7 +270,7 @@ def get_system_logs(user_id):
     log_file = 'bot.log'
     if not os.path.exists(log_file):
         return jsonify({'success': True, 'logs': ['Log file not found.']})
-        
+
     try:
         with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
@@ -286,7 +286,7 @@ def get_admin_config(user_id):
     from config import Config
     from core_extensions import load_config
     db_config = load_config(user_id)
-    
+
     system_settings = {}
     try:
         system_settings = db.get_system_settings()
@@ -385,10 +385,10 @@ def update_admin_config(user_id):
         gemini_data['gemini_model'] = data['gemini_model']
     if 'gemini_image_model' in data:
         gemini_data['gemini_image_model'] = data['gemini_image_model']
-        
+
     if gemini_data:
         save_config(user_id, gemini_data)
-        
+
     keys = [
         'TRIPAY_API_KEY', 'TRIPAY_PRIVATE_KEY', 'TRIPAY_MERCHANT_CODE', 'TRIPAY_API_URL',
         'PAYPAL_CLIENT_ID', 'PAYPAL_SECRET', 'PAYPAL_API_URL', 'PAYMENT_USD_RATE',
@@ -398,7 +398,7 @@ def update_admin_config(user_id):
         'MANUAL_BANK_NAME', 'MANUAL_BANK_ACCOUNT', 'MANUAL_BANK_HOLDER', 'ADMIN_WHATSAPP',
         'PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED'
     ]
-    
+
     updates = {}
     for k in keys:
         if k in data:
@@ -435,7 +435,7 @@ def update_admin_config(user_id):
                 lines = f.readlines()
         except Exception as e:
             logger.error(f"Error reading .env: {e}")
-            
+
     env_vars = {}
     for line in lines:
         line = line.strip()
@@ -443,7 +443,7 @@ def update_admin_config(user_id):
             parts = line.split('=', 1)
             if len(parts) == 2:
                 env_vars[parts[0].strip()] = parts[1].strip()
-                
+
     for k, v in updates.items():
         env_vars[k] = str(v)
         os.environ[k] = str(v)
@@ -451,7 +451,7 @@ def update_admin_config(user_id):
             setattr(Config, k, v == 'true')
         else:
             setattr(Config, k, v)
-        
+
     try:
         with open(env_path, 'w', encoding='utf-8') as f:
             for k, v in sorted(env_vars.items()):
@@ -459,6 +459,6 @@ def update_admin_config(user_id):
     except Exception as e:
         logger.error(f"Error writing to .env: {e}")
         return jsonify({'success': False, 'error': f"Failed to save to env: {e}"}), 500
-        
+
     logger.info(f"Admin {user_id} updated system settings in .env and memory")
     return jsonify({'success': True, 'message': 'Configurations updated successfully'})

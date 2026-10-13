@@ -184,12 +184,12 @@ def dispatch_jobs():
         sites = session.query(WordPressSite).filter_by(is_active=True).all()
         if not sites:
             return
-        
+
         # Batch load users to prevent N+1 queries
         user_ids = list(set([site.user_id for site in sites]))
         users = session.query(User).filter(User.id.in_(user_ids)).all()
         users_dict = {user.id: user for user in users}
-        
+
         for site in sites:
             try:
                 user_id = site.user_id
@@ -223,7 +223,7 @@ def dispatch_jobs():
                                     raise
                 except Exception as gsc_err:
                     logger.error(f"Error scheduling Search Console sync for site_id={site_id}: {gsc_err}")
-                
+
                 # Check user credits
                 if not user or (user.credits or 0) <= 0:
                     # Log only once every hour to avoid spamming the log
@@ -233,18 +233,18 @@ def dispatch_jobs():
                         logger.info(f"Skipping auto-post for site_id={site_id}: user_id={user_id} has insufficient credits.")
                         redis_conn.setex(lock_key_log, 3600, "1")
                     continue
-                
+
                 tz_name = site.timezone or 'Asia/Jakarta'
                 try:
                     tz = ZoneInfo(tz_name)
                 except Exception as e:
                     logger.error(f"Invalid timezone '{tz_name}' for site_id={site_id}, falling back to Asia/Jakarta: {e}")
                     tz = ZoneInfo('Asia/Jakarta')
-                
+
                 now_site = datetime.now(tz)
                 current_hour = now_site.hour
                 current_hour_str = now_site.strftime("%Y-%m-%d %H")
-                
+
                 # 1. Check auto post
                 if site.auto_post and site.selected_categories:
                     schedule_hours = site.schedule_hours or '0,6,12,18'
@@ -256,15 +256,15 @@ def dispatch_jobs():
                             if not lock_set:
                                 continue
                             delay_minutes = random.randint(0, 50)
-                            
+
                             # Check if there is a pending item in ContentQueue (pick oldest pending)
                             from models import ContentQueue
                             queue_item = session.query(ContentQueue).filter_by(
-                                user_id=user_id, 
-                                site_id=site_id, 
+                                user_id=user_id,
+                                site_id=site_id,
                                 status='pending'
                             ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
-                            
+
                             item_id = None
                             # The scheduler does not reserve credit; the job reserves
                             # it itself once it has claimed the item. Recording the
@@ -279,7 +279,7 @@ def dispatch_jobs():
                                 queue_item.job_id = job_id
                                 queue_item.credit_held = False
                                 session.commit()
-                            
+
                             logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
                             try:
                                 q.enqueue_in(
@@ -305,7 +305,7 @@ def dispatch_jobs():
             except Exception as loop_err:
                 logger.error(f"Error processing site_id={site.id}: {loop_err}")
                 continue
-            
+
             # Auto research scheduler check removed since manual research is used instead.
 
 if __name__ == '__main__':

@@ -16,13 +16,13 @@ def api_queue(user_id):
     site_id = request.args.get('site_id', type=int)
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
         from models import ContentQueue, WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
-            
+
         queue = session.query(ContentQueue).filter(
             ContentQueue.user_id == user_id,
             ContentQueue.site_id == site_id,
@@ -37,7 +37,7 @@ def api_queue(user_id):
             'created_at': q.created_at.isoformat() + ('Z' if q.created_at.tzinfo is None else '')
         } for q in queue]
         categories = site.selected_categories or []
-    
+
     history_data = db.get_logs(user_id, site_id=site_id, limit=50)
     return jsonify({
         'success': True,
@@ -55,10 +55,10 @@ def add_queue_api(user_id):
     title = data.get('title')
     category = data.get('category')
     target_keywords = data.get('target_keywords', '')
-    
+
     if not title or not category or not site_id:
         return jsonify({'success': False, 'error': 'Title, category, and site_id are required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
@@ -85,30 +85,30 @@ def shuffle_queue(user_id):
     site_id = data.get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
         items = session.query(ContentQueue).filter_by(
-            user_id=user_id, 
-            site_id=site_id, 
+            user_id=user_id,
+            site_id=site_id,
             status='pending'
         ).order_by(ContentQueue.created_at.asc()).all()
-        
+
         if len(items) <= 1:
             return jsonify({'success': True, 'message': 'Not enough items to shuffle'})
-            
+
         # Extract existing created_at values
         timestamps = [item.created_at for item in items]
-        
+
         # Shuffle items
         shuffled_items = list(items)
         random.shuffle(shuffled_items)
-        
+
         # Re-assign timestamps to change their order
         for i, item in enumerate(shuffled_items):
             item.created_at = timestamps[i]
-            
+
         session.commit()
-        
+
     return jsonify({'success': True, 'message': 'Antrean berhasil diacak!'})
 
 @queue_bp.route('/api/queue', methods=['DELETE'])
@@ -119,7 +119,7 @@ def delete_queue_api(user_id):
     item_id = data.get('id')
     if not item_id:
         return jsonify({'success': False, 'error': 'id is required', 'code': 400}), 400
-    
+
     with db.get_session() as session:
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if not item:
@@ -139,12 +139,12 @@ def clear_queue_api(user_id):
     site_id = data.get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-    
+
     try:
         with db.get_session() as session:
             session.query(ContentQueue).filter_by(
-                user_id=user_id, 
-                site_id=site_id, 
+                user_id=user_id,
+                site_id=site_id,
                 status='pending'
             ).delete()
             session.commit()
@@ -163,7 +163,7 @@ def edit_queue_api(user_id, item_id):
         return jsonify({'success': False, 'error': 'Title must be a non-empty string', 'code': 400}), 400
     if 'target_keywords' in data and data['target_keywords'] is not None and not isinstance(data['target_keywords'], str):
         return jsonify({'success': False, 'error': 'target_keywords must be a string', 'code': 400}), 400
-    
+
     with db.get_session() as session:
         item = session.query(ContentQueue).filter_by(id=item_id, user_id=user_id).first()
         if not item:
@@ -183,15 +183,15 @@ def reorder_queue_api(user_id):
     from models import ContentQueue
     data = request.get_json(silent=True) or {}
     ids = data.get('ids', [])
-    
+
     if not ids:
         return jsonify({'success': True})
     if (not isinstance(ids, list) or len(ids) > 1000
             or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
         return jsonify({'success': False, 'error': 'ids must be a list of integers', 'code': 400}), 400
-        
+
     import datetime
-    
+
     with db.get_session() as session:
         # Keep order compatible with the queue query, which sorts created_at ascending.
         base_time = datetime.datetime.now() - datetime.timedelta(seconds=len(ids))
@@ -334,12 +334,12 @@ def delete_history_log(user_id, log_id):
     from models import PostLog
     import requests
     from requests.auth import HTTPBasicAuth
-    
+
     with db.get_session() as session:
         log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
         if not log:
             return jsonify({'success': False, 'error': 'Log not found', 'code': 404}), 404
-            
+
         post_id = log.post_id
         site_id = log.site_id
         wp_deleted = False
@@ -377,7 +377,7 @@ def delete_history_log(user_id, log_id):
 
         session.delete(log)
         session.commit()
-        
+
     if wp_deleted:
         message = 'Log deleted and article moved to WordPress trash'
     elif wp_error:
@@ -389,14 +389,13 @@ def delete_history_log(user_id, log_id):
 @queue_bp.route('/manual-post', methods=['POST'])
 @require_jwt
 def manual_post(user_id):
-    from models import User, WordPressSite
+    from models import WordPressSite
     data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
-        user = session.query(User).filter_by(id=user_id).first()
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
@@ -406,7 +405,7 @@ def manual_post(user_id):
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi', 'code': 402}), 402
 
     try:
-        job = q.enqueue(
+        q.enqueue(
             'tasks.article_jobs.generate_and_post', user_id,
             site_id=site_id, credit_pre_reserved=True, manual=True, job_timeout='25m'
         )
@@ -424,7 +423,7 @@ def job_status(user_id, job_id):
         if job.args and job.args[0] != user_id:
             return jsonify({'success': False, 'error': 'Job not found', 'code': 404}), 404
         status = job.get_status()
-        
+
         progress = int(job.meta.get('progress', 0) or 0)
         message = job.meta.get('message') or 'Processing...'
         if status == 'finished':
@@ -436,7 +435,7 @@ def job_status(user_id, job_id):
         elif status == 'started' and progress == 0:
             progress = 50
             message = 'In progress'
-            
+
         return jsonify({
             'success': True,
             'status': status,
@@ -455,21 +454,21 @@ def test_generate(user_id):
     data = request.get_json(silent=True) or {}
     category_name = data.get('category', '')
     site_id = data.get('site_id')
-    
+
     if not site_id:
         return jsonify({'success': False, 'error': 'site_id is required', 'code': 400}), 400
-        
+
     with db.get_session() as session:
         from models import WordPressSite
         site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
         if not site:
             return jsonify({'success': False, 'error': 'Site not found', 'code': 404}), 404
-            
+
         try:
             # We will need to pass site prompts to ArticleGenerator, but let's keep it simple for now
             # The app.py generate_and_post will need refactoring to take site_id
             generator = ArticleGenerator(
-                config['gemini_api_key'], 
+                config['gemini_api_key'],
                 config.get('gemini_model', DEFAULT_GEMINI_MODEL),
                 config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
             )

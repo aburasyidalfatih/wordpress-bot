@@ -3,7 +3,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, send_file
 import psutil
 
-from core_extensions import db, logger, get_cached_stats, require_admin, redis_conn
+from core_extensions import db, logger, require_admin, redis_conn
 from config import Config
 
 monitor_bp = Blueprint('monitor', __name__)
@@ -57,15 +57,11 @@ def _database_size_mb():
 @require_admin
 def api_monitor(user_id):
     """Monitoring dashboard"""
-    from flask import request
-    site_id = request.args.get('site_id', type=int)
-    stats = get_cached_stats(user_id, site_id=site_id)
-    
     try:
         disk_percent = psutil.disk_usage('/').percent
     except OSError:
         disk_percent = psutil.disk_usage('C:\\').percent
-    
+
     # Get system info
     system_info = {
         'cpu_percent': psutil.cpu_percent(interval=0.1),
@@ -73,16 +69,16 @@ def api_monitor(user_id):
         'disk_percent': disk_percent,
         'uptime': str(datetime.now() - datetime.fromtimestamp(psutil.boot_time())).split('.')[0]
     }
-    
+
     # Resolve log path dynamically using Config
     log_path = Config.LOG_FILE
     # If config file is a relative name, check common directories (like logs/)
     if not os.path.isabs(log_path):
         if os.path.exists(os.path.join('logs', log_path)):
             log_path = os.path.join('logs', log_path)
-            
+
     log_size = os.path.getsize(log_path) / 1024 / 1024 if os.path.exists(log_path) else 0
-    
+
     scheduler = _scheduler_status()
     service_info = {
         'scheduler_running': scheduler['running'],
@@ -92,10 +88,10 @@ def api_monitor(user_id):
         'database_size': _database_size_mb(),
         'log_size': log_size
     }
-    
+
     # Gemini status - don't test on page load, use cached status
     gemini_status = {'status': 'unknown', 'message': 'Check via API endpoint'}
-    
+
     # Get recent errors from log (limit to last 50 lines for speed)
     recent_errors = []
     try:
@@ -115,7 +111,7 @@ def api_monitor(user_id):
                         recent_errors.append(sanitized)
     except Exception as e:
         logger.error(f"Error reading log file: {e}")
-    
+
     return jsonify({
         'system_info': system_info,
         'service_info': service_info,
@@ -132,14 +128,14 @@ def health_metrics(user_id):
         log_path = Config.LOG_FILE
         if not os.path.isabs(log_path) and os.path.exists(os.path.join('logs', log_path)):
             log_path = os.path.join('logs', log_path)
-            
+
         log_size = os.path.getsize(log_path) / 1024 / 1024 if os.path.exists(log_path) else 0
-        
+
         try:
             _disk_percent = psutil.disk_usage('/').percent
         except OSError:
             _disk_percent = psutil.disk_usage('C:\\').percent
-        
+
         scheduler = _scheduler_status()
         return jsonify({
             'timestamp': datetime.now().isoformat(),
@@ -169,11 +165,11 @@ def download_logs(user_id):
         log_path = Config.LOG_FILE
         if not os.path.isabs(log_path) and os.path.exists(os.path.join('logs', log_path)):
             log_path = os.path.join('logs', log_path)
-            
+
         if not os.path.exists(log_path):
             return jsonify({'error': 'Log file not found'}), 404
-            
-        return send_file(log_path, 
+
+        return send_file(log_path,
                         as_attachment=True,
                         download_name=f'bot_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
     except Exception as e:
@@ -188,7 +184,7 @@ def health():
         with db.get_session() as session:
             from models import User
             session.query(User).first()
-        
+
         redis_conn.ping()
 
         scheduler = _scheduler_status()

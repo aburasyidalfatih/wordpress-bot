@@ -194,21 +194,21 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
         telegram_bot_token = site.telegram_bot_token
         telegram_chat_id = site.telegram_chat_id
         language = site.language or 'id'
-        
+
     site_config = {
         'telegram_enabled': telegram_enabled,
         'telegram_bot_token': telegram_bot_token,
         'telegram_chat_id': telegram_chat_id,
         'site_name': site_name
     }
-    
+
     try:
         logger.info(f"Starting auto-research job for site {site_name} (language={language})")
-        
+
         # Import SEO research module
         from seo_research import SEOResearch
         seo = SEOResearch()
-        
+
         # Loaded once for the whole job rather than per category.
         gsc_queries = _load_search_console_queries(user_id, site_id)
         if gsc_queries:
@@ -221,21 +221,21 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
 
         successful_categories = 0
         failed_categories = 0
-        
+
         for cat in selected_categories:
             category_name = cat['name']
             logger.info(f"Researching category: {category_name} on {site_name}")
-            
+
             try:
                 # Get trending data
                 trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
-                
+
                 # Derive suggestions from the same snapshot. This avoids a second
                 # Google Trends request and inconsistent results/rate limiting.
                 suggestions = trending.build_topic_suggestions(
                     category_name, trending_data, count=10
                 )
-                
+
                 # Get SEO research data
                 try:
                     seo_data = seo.research_category(category_name, language=language)
@@ -302,7 +302,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                             f'Insufficient research evidence (quality={quality_score}, '
                             f'real_providers={real_provider_count})'
                         )
-                    
+
                     logger.info(f"SEO research: {len(keywords)} keywords, {len(questions)} questions, trend score: {trend_score}")
                 except Exception as e:
                     logger.error(f"SEO research error for {category_name}: {e}")
@@ -319,7 +319,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                     quality_score = 0
                     confidence_level = 'insufficient'
                     raise
-                
+
                 # Save to database with SEO data
                 db.save_research_data(
                     user_id=user_id,
@@ -347,11 +347,11 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                         if isinstance(meta, dict)
                     ),
                 )
-                
+
                 logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
                 successful_categories += 1
                 state['successful'] = successful_categories
-                
+
             except BaseTimeoutException:
                 # RQ's death penalty raises inside the job and is an Exception
                 # subclass, so the per-category handler below used to swallow it and
@@ -365,7 +365,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
             except Exception as cat_error:
                 logger.error(f"Failed to research category {category_name}: {cat_error}")
                 failed_categories += 1
-        
+
         # Refund every charged credit that did not produce research: failed
         # categories, and any surplus charged for duplicate category entries.
         settle_refund()
@@ -386,7 +386,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                    f"📊 Trending topics saved for tomorrow's articles")
             if failed_categories > 0:
                 msg += f"\n⚠️ Failed to research {failed_categories} categories (credits refunded if manual)."
-            
+
             send_telegram_notification(site_config, msg)
         else:
             send_telegram_notification(site_config,
@@ -394,7 +394,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                 f"🌐 <b>Website:</b> {site_name}\n"
                 f"⚠️ Failed to research any categories. Credits refunded if manual.")
         return result
-                
+
     except Exception as e:
         logger.error(f"Auto research error: {e}", exc_info=True)
         # Refund whatever was charged and not yet researched or refunded. Bounded
@@ -421,14 +421,14 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
             if not site:
                 logger.error(f"Site {site_id} not found")
                 return
-            
+
             site_config = {
                 'wordpress_url': site.wordpress_url,
                 'wordpress_username': site.wordpress_username,
                 'wordpress_password': site.wordpress_password,
                 'site_name': site.site_name
             }
-        
+
         from services.wp_publisher import WordPressPublisher
         bot = WordPressPublisher(
             site_config['wordpress_url'],
@@ -436,7 +436,7 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
             site_config['wordpress_password'],
             site_name=site_config.get('site_name')
         )
-        
+
         # Get all posts
         page = 1
         total_updated = 0
@@ -462,23 +462,23 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
                 if str(from_year) in title:
                     new_title = title.replace(str(from_year), str(to_year))
                     new_content = content.replace(str(from_year), str(to_year))
-                    
+
                     update_data = {
                         'title': new_title,
                         'content': new_content
                     }
-                    
+
                     up_success, up_res = bot.update_post(post['id'], update_data)
                     if up_success:
                         total_updated += 1
                         logger.info(f"Updated post ID {post['id']}: {new_title}")
                     else:
                         logger.error(f"Failed to update post ID {post['id']}: {up_res}")
-            
+
             if page >= total_pages:
                 break
             page += 1
-            
+
         logger.info(f"Finished bulk update. Total updated: {total_updated}")
         try:
             send_telegram_notification(site_config,
@@ -488,7 +488,7 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
                 f"📊 <b>Total Update:</b> {total_updated} Artikel")
         except Exception as e:
             logger.error(f"Failed to send Telegram notification: {e}")
-            
+
     except Exception as e:
         logger.error(f"Error in bulk_update_year_task: {e}", exc_info=True)
 

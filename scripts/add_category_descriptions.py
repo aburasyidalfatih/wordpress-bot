@@ -22,7 +22,7 @@ CATEGORY_DESCRIPTIONS = {
     'Manajemen Kelas': 'Metode praktis pengelolaan kelas berbasis disiplin positif dan pembelajaran berdiferensiasi (Kurikulum Merdeka). Tips merancang iklim belajar yang inklusif, mengatasi distraksi digital siswa di kelas, dan menjaga well-being murid.',
     'Pembelajaran Abad 21': 'Strategi pengajaran inovatif yang mengintegrasikan keterampilan 4C (Critical Thinking, Collaboration, Communication, Creativity). Panduan implementasi Projek P5 serta metode asesmen otentik yang relevan dengan masa depan siswa.',
     'Teknologi Pendidikan': 'Panduan implementasi EdTech dan kecerdasan buatan (AI) untuk efisiensi administrasi serta pengajaran. Membahas manajemen infrastruktur IT sekolah, keamanan data digital, dan optimalisasi bujet investasi teknologi.',
-    
+
     # Kategori Lainnya
     'Kepemimpinan Lembaga Pendidikan': 'Panduan lengkap kepemimpinan dan manajemen lembaga pendidikan Indonesia. Tips memimpin sekolah, yayasan, dan institusi pendidikan dengan efektif.',
     'Digitalisasi Pendidikan': 'Transformasi digital sekolah dan lembaga pendidikan. Panduan implementasi teknologi, sistem informasi manajemen, dan platform pembelajaran online.',
@@ -42,10 +42,10 @@ CATEGORY_DESCRIPTIONS = {
 def update_category_description(wp_url, username, password, category_id, description):
     """Update deskripsi kategori di WordPress"""
     api_url = f"{wp_url.rstrip('/')}/wp-json/wp/v2/categories/{category_id}"
-    
+
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
+
     response = requests.post(
         api_url,
         json={'description': description},
@@ -53,16 +53,16 @@ def update_category_description(wp_url, username, password, category_id, descrip
         timeout=30,
         verify=False
     )
-    
+
     return response.status_code == 200
 
 def get_remote_categories(wp_url, username, password):
     """Ambil daftar kategori dari WordPress API secara langsung"""
     api_url = f"{wp_url.rstrip('/')}/wp-json/wp/v2/categories"
-    
+
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
+
     try:
         response = requests.get(
             api_url,
@@ -84,18 +84,18 @@ def main():
     parser.add_argument("--username", help="WordPress Username")
     parser.add_argument("--password", help="WordPress Application Password")
     args = parser.parse_args()
-    
+
     wp_url = None
     username = None
     password = None
     categories = None
-    
+
     # Cek jika kredensial dioper via CLI
     if args.url and args.username and args.password:
         wp_url = args.url
         username = args.username
         password = args.password
-        
+
         print("[INFO] Mengambil kategori langsung dari REST API...")
         remote_cats = get_remote_categories(wp_url, username, password)
         if remote_cats:
@@ -111,43 +111,43 @@ def main():
                 username = site.wordpress_username
                 password = site.wordpress_password
                 categories = site.categories or []
-                
+
     if not wp_url or not username or not password:
         print("[ERROR] WordPress credentials belum diisi. Silakan isi lewat database atau oper lewat argument:")
         print("   python scripts/add_category_descriptions.py --url <URL> --username <USER> --password <APP_PASSWORD>")
         return
-        
+
     if not categories:
         print("[ERROR] Kategori tidak ditemukan.")
         return
-    
+
     print("="*70)
     print("MENAMBAHKAN DESKRIPSI KE SEMUA KATEGORI")
     print("="*70)
     print(f"WordPress URL: {wp_url}")
     print(f"Total kategori: {len(categories)}\n")
-    
+
     success_count = 0
     skip_count = 0
-    
+
     for cat in categories:
         cat_name = cat['name']
         cat_id = cat['id']
-        
+
         if cat_name in CATEGORY_DESCRIPTIONS:
             description = CATEGORY_DESCRIPTIONS[cat_name]
             print(f"Kategori: {cat_name} (ID: {cat_id})")
             print(f"   Deskripsi: {description[:60]}...")
-            
+
             if update_category_description(wp_url, username, password, cat_id, description):
-                print(f"   [SUCCESS] Berhasil diupdate\n")
+                print("   [SUCCESS] Berhasil diupdate\n")
                 success_count += 1
             else:
-                print(f"   [ERROR] Gagal update\n")
+                print("   [ERROR] Gagal update\n")
         else:
             print(f"[SKIP] {cat_name} - Tidak ada deskripsi baru\n")
             skip_count += 1
-    
+
     print("="*70)
     print("SUMMARY")
     print("="*70)
