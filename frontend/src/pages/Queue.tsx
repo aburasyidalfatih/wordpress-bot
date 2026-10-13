@@ -1,71 +1,47 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { apiFetch } from '../lib/api';
-import { toast } from 'sonner';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { RefreshCw, Plus, LayoutList, Eye, AlertCircle, Shuffle, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { RefreshCw, LayoutList, Shuffle, Trash2 } from 'lucide-react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { SortableQueueItem } from './SortableQueueItem';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { useSiteContext } from '@/contexts/SiteContext';
+import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { Button } from '@/components/ui/button';
+import { useSiteContext } from '@/hooks/useSiteContext';
+import { useQueueData } from '@/hooks/useQueueData';
+import { useQueueActions } from '@/hooks/useQueueActions';
 import EmptyState from '@/components/EmptyState';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { SortableQueueItem } from '@/components/queue/SortableQueueItem';
+import { HistoryItemCard } from '@/components/queue/HistoryItemCard';
+import { AddToQueueForm } from '@/components/queue/AddToQueueForm';
+import { EditQueueItemDialog } from '@/components/queue/EditQueueItemDialog';
+import type { QueueItem } from '@/lib/types';
 
-export interface QueueItemType {
-  id: number;
-  title: string;
-  category: string;
-  status: string;
-  target_keywords?: string;
-  created_at?: string;
-  post_url?: string;
-}
+type ConfirmAction =
+  | { type: 'delete'; id: number }
+  | { type: 'post'; id: number }
+  | { type: 'delete_history'; id: number }
+  | { type: 'clear' };
 
-export interface HistoryItemType {
-  id: number;
-  title: string;
-  category: string;
-  success: boolean;
-  image_failed: boolean;
-  timestamp: string;
-  result: string;
-  post_url?: string;
-}
+const CONFIRM_TEXT: Record<ConfirmAction['type'], string> = {
+  delete: 'Tindakan ini tidak dapat dibatalkan. Judul ini akan dihapus permanen dari antrean.',
+  clear: 'Peringatan: Semua artikel di antrean website ini akan dihapus secara permanen.',
+  delete_history: 'Log ini akan dihapus dan artikelnya akan dicoba dipindahkan ke tempat sampah WordPress.',
+  post: 'Artikel ini akan langsung diproses dan diposting sekarang.',
+};
+
+const TAB_CLASS = 'px-4 py-2 border-b-2 font-medium text-sm transition-colors';
+const tabClass = (active: boolean) =>
+  `${TAB_CLASS} ${active ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`;
 
 export default function Queue() {
   const { selectedSiteId, sites } = useSiteContext();
-  const [items, setItems] = useState<QueueItemType[]>([]);
-  const [historyItems, setHistoryItems] = useState<HistoryItemType[]>([]);
+  const queue = useQueueData(selectedSiteId);
+  const actions = useQueueActions(selectedSiteId, queue);
   const [activeTab, setActiveTab] = useState<'queue' | 'history'>('queue');
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newCategory, setNewCategory] = useState('');
-  const [editingItem, setEditingItem] = useState<QueueItemType | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editKeywords, setEditKeywords] = useState('');
-  const [regeneratingIds, setRegeneratingIds] = useState<Record<number, boolean>>({});
+  const [editingItem, setEditingItem] = useState<QueueItem | null>(null);
   const [shuffling, setShuffling] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const pollingDelayRef = useRef(3000);
-  const [confirmAction, setConfirmAction] = useState<{type: 'delete' | 'post' | 'clear' | 'delete_history', id?: number} | null>(null);
-
-  // Track the currently selected site and the in-flight queue request so a late
-  // response for a previously selected site never overwrites the current view.
-  const selectedSiteIdRef = useRef(selectedSiteId);
-  const loadControllerRef = useRef<AbortController | null>(null);
-  useEffect(() => { selectedSiteIdRef.current = selectedSiteId; }, [selectedSiteId]);
-  useEffect(() => () => loadControllerRef.current?.abort(), []);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -74,437 +50,63 @@ export default function Queue() {
     })
   );
 
-  const handleDragEnd = async (event: any) => {
-    const { active, over } = event;
-    if (!over) return;
-    
-    if (active.id !== over.id) {
-      // Compute the new order outside the state updater so the request is sent
-      // exactly once (updaters may run twice in StrictMode).
-      const previousItems = items;
-      const oldIndex = previousItems.findIndex((i) => i.id === active.id);
-      const newIndex = previousItems.findIndex((i) => i.id === over.id);
-      if (oldIndex === -1 || newIndex === -1) return;
-      const newItems = arrayMove(previousItems, oldIndex, newIndex);
-      const siteId = selectedSiteId;
-      setItems(newItems);
-
-      // Save the new order to the backend
-      apiFetch('/api/queue/reorder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: newItems.map((i) => i.id) })
-      })
-      .then(async (res) => {
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Server error');
-        }
-      })
-      .catch(err => {
-        if (import.meta.env.DEV) console.error('Failed to save order:', err);
-        toast.error('Gagal menyimpan urutan antrean');
-        if (selectedSiteIdRef.current === siteId) {
-          setItems(previousItems); // Revert to old items
-        }
-      });
-    }
-  };
-
-  const loadQueue = useCallback((silent = false) => {
-    // A newer load always supersedes the previous one (polling or manual).
-    loadControllerRef.current?.abort();
-    if (!selectedSiteId) {
-      loadControllerRef.current = null;
-      setLoading(false);
-      return;
-    }
-    const controller = new AbortController();
-    loadControllerRef.current = controller;
-    const siteId = selectedSiteId;
-    const isStale = () => controller.signal.aborted || selectedSiteIdRef.current !== siteId;
-
-    if (!silent) setLoading(true);
-    apiFetch(`/api/queue?site_id=${siteId}&t=${Date.now()}`, { signal: controller.signal })
-      .then(res => {
-        if (!res.ok) throw new Error('API Error');
-        return res.json();
-      })
-      .then(d => {
-        if (isStale()) return;
-        if (d.success) {
-          setItems(d.queue || []);
-          setHistoryItems(d.history || []);
-        } else {
-          if (import.meta.env.DEV) console.error('Queue API failed:', d.error);
-        }
-      })
-      .catch(e => {
-        if (e?.name === 'AbortError' || isStale()) return;
-        if (import.meta.env.DEV) console.error('Failed to load queue/history:', e);
-      })
-      .finally(() => {
-        // Only the latest request may clear the spinner; a superseded request
-        // leaves it to the one that replaced it.
-        if (loadControllerRef.current === controller) {
-          loadControllerRef.current = null;
-          setLoading(false);
-        }
-      });
-  }, [selectedSiteId]);
-
-  useEffect(() => {
-    const hasPosting = items.some(i => i.status === 'posting');
-    const hasRegenerating = Object.values(regeneratingIds).some(Boolean);
-    
-    let timeoutId: ReturnType<typeof setTimeout>;
-    
-    if (hasPosting || hasRegenerating) {
-      timeoutId = setTimeout(() => {
-        loadQueue(true);
-        // Exponential backoff, max 15 seconds
-        pollingDelayRef.current = Math.min(pollingDelayRef.current * 1.5, 15000);
-      }, pollingDelayRef.current);
-    } else {
-      // Reset delay when no active processes
-      pollingDelayRef.current = 3000;
-    }
-    
-    return () => clearTimeout(timeoutId);
-  }, [items, regeneratingIds, loadQueue]);
-
-  useEffect(() => {
-    loadQueue();
-  }, [loadQueue]);
-
-  // Keep the chosen category valid for the current site: when switching sites
-  // (or when the site's categories change) and the previous choice isn't among
-  // them, fall back to the first available category.
-  const siteCategories = sites.find(s => s.id === selectedSiteId)?.categories || [];
-  const selectedCategory = siteCategories.some(c => c.name === newCategory)
-    ? newCategory
-    : (siteCategories[0]?.name ?? '');
-
-  const handleDelete = (id: number) => {
-    setConfirmAction({ type: 'delete', id });
-  };
-
-  const executeDelete = async (id: number) => {
-    try {
-      const res = await apiFetch('/api/queue', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (res.status === 409) {
-          toast.error(data.error || 'Artikel sedang diposting dan tidak dapat dihapus.');
-        } else {
-          toast.error('Gagal menghapus: ' + (data.error || 'Server error'));
-        }
-      }
-      loadQueue();
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-    } finally {
-      setConfirmAction(null);
-    }
-  };
-
-  const handleRegenerateImage = async (logId: number) => {
-    setRegeneratingIds(prev => ({ ...prev, [logId]: true }));
-    try {
-      const res = await apiFetch(`/api/queue/history/regenerate-image/${logId}`, {
-        method: 'POST'
-      });
-      const data = await res.json();
-      if (!data.success) {
-        toast.error('Failed: ' + (data.error || 'Server error'));
-        setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
-      }
-      // If success, leave it true so it keeps spinning. The polling will update the list and remove the button when done.
-      if (data.success) {
-        setTimeout(() => {
-          setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
-        }, 60000);
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-      setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
-    }
-  };
-
-  const handleRegenerateArticle = async (logId: number) => {
-    setRegeneratingIds(prev => ({ ...prev, [logId]: true }));
-    try {
-      const res = await apiFetch(`/api/queue/history/regenerate-article/${logId}`, {
-        method: 'POST'
-      });
-      const data = await res.json();
-      if (!data.success) {
-        toast.error('Failed: ' + (data.error || 'Server error'));
-        setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
-      }
-      if (data.success) {
-        toast.success('Regenerating article in background...');
-        setTimeout(() => {
-          setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
-        }, 120000); // 2 minutes, as it takes time to generate an article
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-      setRegeneratingIds(prev => ({ ...prev, [logId]: false }));
-    }
-  };
-
-  const handleDeleteHistory = (logId: number) => {
-    setConfirmAction({ type: 'delete_history', id: logId });
-  };
-
-  const executeDeleteHistory = async (logId: number) => {
-    try {
-      const res = await apiFetch(`/api/queue/history/${logId}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
-      if (!data.success) {
-        toast.error('Failed: ' + (data.error || 'Server error'));
-      } else {
-        if (data.wp_deleted === false && data.message?.includes('not deleted')) {
-          toast.warning(data.message);
-        } else {
-          toast.success(data.message || 'Deleted successfully');
-        }
-        loadQueue();
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-    } finally {
-      setConfirmAction(null);
-    }
-  };
-
-  const handleManualAdd = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle || !selectedCategory) return;
-    setAdding(true);
-    try {
-      const res = await apiFetch('/api/queue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          site_id: selectedSiteId,
-          title: newTitle,
-          category: selectedCategory,
-          target_keywords: ''
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success('Artikel berhasil ditambahkan ke antrian!');
-        setNewTitle('');
-        loadQueue();
-      } else {
-        toast.error('Gagal menambahkan ke antrian: ' + (data.error || 'Terjadi kesalahan pada peladen.'));
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Galat jaringan! Pastikan Anda sudah memuat ulang (Refresh) halaman.');
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const handleShuffle = async () => {
-    if (!selectedSiteId || items.length <= 1) return;
-    setShuffling(true);
-    try {
-      const res = await apiFetch('/api/queue/shuffle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ site_id: selectedSiteId })
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success(data.message || 'Antrean berhasil diacak!');
-        loadQueue(true);
-      } else {
-        toast.error('Gagal mengacak: ' + (data.error || 'Server error'));
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-    } finally {
-      setShuffling(false);
-    }
-  };
-
-  const handleClearQueue = async () => {
-    if (!selectedSiteId) return;
-    setClearing(true);
-    try {
-      const res = await apiFetch('/api/queue/clear', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ site_id: selectedSiteId })
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success('Semua antrean berhasil dihapus!');
-        loadQueue(true);
-      } else {
-        toast.error('Gagal menghapus antrean: ' + (data.error || 'Server error'));
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-    } finally {
-      setClearing(false);
-      setConfirmAction(null);
-    }
-  };
-
-  const handlePostNow = (id: number) => {
-    setConfirmAction({ type: 'post', id });
-  };
-
-  const executePostNow = async (id: number) => {
-    // Optimistic UI update to show progress bar instantly
-    setItems(current => current.map(item => 
-      item.id === id ? { ...item, status: 'posting' } : item
-    ));
-
-    try {
-      const res = await apiFetch(`/api/queue/post/${id}`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409) {
-        toast.error(data.error || 'Artikel ini sedang diposting.');
-        loadQueue(true);
-      } else if (data.success) {
-        toast.success('Artikel sedang diproses!');
-        // Posting reserves a credit; refresh the credit badge in the layout.
-        window.dispatchEvent(new Event('refresh-profile'));
-        loadQueue(true);
-      } else {
-        toast.error('Failed to post item: ' + (data.error || 'Server error'));
-        loadQueue(true);
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-      loadQueue(true);
-    } finally {
-      setConfirmAction(null);
-    }
-  };
-
-  const handleEdit = (item: QueueItemType) => {
-    setEditingItem(item);
-    setEditTitle(item.title);
-    setEditKeywords(item.target_keywords || '');
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingItem) return;
-    try {
-      const res = await apiFetch(`/api/queue/edit/${editingItem.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Only send target_keywords when we actually know the current value (or the
-        // user typed one) so an older payload without the field can't wipe it.
-        body: JSON.stringify({
-          title: editTitle,
-          ...(editingItem.target_keywords !== undefined || editKeywords ? { target_keywords: editKeywords } : {})
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success('Perubahan berhasil disimpan!');
-        setEditingItem(null);
-        loadQueue(true);
-      } else {
-        toast.error('Failed to save edit: ' + (data.error || 'Server error'));
-      }
-    } catch (e) {
-      if (import.meta.env.DEV) console.error(e);
-      toast.error('Network error');
-    }
-  };
-
-
   if (!selectedSiteId) return <EmptyState title="Antrean Artikel" description="Pilih salah satu website Anda dari menu dropdown di kanan atas untuk mengelola antrean penerbitan artikel AI." />;
-  if (loading) return <div className="p-8 flex items-center justify-center">
+  if (queue.loading) return <div className="p-8 flex items-center justify-center">
     <RefreshCw className="h-8 w-8 animate-spin text-primary" />
   </div>;
 
-  const activeSite = sites.find(s => s.id === selectedSiteId);
-  const availableCategories = activeSite?.categories || [];
-
+  const { items, historyItems, regeneratingIds } = queue;
+  const availableCategories = sites.find(s => s.id === selectedSiteId)?.categories || [];
   const pendingItems = items.filter(i => i.status !== 'posted' && i.status !== 'failed');
+
+  const handleShuffle = async () => {
+    setShuffling(true);
+    await actions.shuffle();
+    setShuffling(false);
+  };
+
+  const runConfirmedAction = async () => {
+    const action = confirmAction;
+    if (!action) return;
+    if (action.type === 'clear') {
+      setClearing(true);
+      await actions.clearQueue();
+      setClearing(false);
+    } else if (action.type === 'delete') {
+      await actions.deleteItem(action.id);
+    } else if (action.type === 'post') {
+      await actions.postNow(action.id);
+    } else {
+      await actions.deleteHistory(action.id);
+    }
+    setConfirmAction(null);
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-primary to-indigo-600 dark:from-primary dark:to-indigo-400 bg-clip-text text-transparent flex items-center gap-2">
-          <LayoutList className="h-8 w-8 text-primary" /> Content Queue
+          <LayoutList className="h-8 w-8 text-primary" /> Antrean Konten
         </h1>
-        <p className="text-muted-foreground mt-1">Manage AI-generated titles and manual ideas waiting to be published.</p>
+        <p className="text-muted-foreground mt-1">Kelola judul hasil AI dan ide manual yang menunggu diterbitkan.</p>
       </div>
 
-      <Card className="border-border/50 shadow-md">
-        <CardHeader>
-          <CardTitle>Add Custom Title</CardTitle>
-          <CardDescription>Manually insert an idea into the publishing queue.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleManualAdd} className="flex gap-4 items-center">
-            <label htmlFor="category-select" className="sr-only">Category</label>
-            <select
-              id="category-select"
-              value={selectedCategory}
-              onChange={e => setNewCategory(e.target.value)}
-              className="flex h-10 w-[300px] items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {availableCategories.length === 0 ? (
-                <option value="" disabled>No categories found</option>
-              ) : (
-                availableCategories.map((cat: {id: number, name: string}) => (
-                  <option key={cat.id} value={cat.name}>{cat.name}</option>
-                ))
-              )}
-            </select>
-            <Input 
-              placeholder="Article Title..." 
-              value={newTitle} 
-              onChange={e => setNewTitle(e.target.value)} 
-              className="flex-1 h-10 text-base"
-            />
-            <Button type="submit" disabled={adding || !newTitle || !selectedCategory} className="h-10 px-5 text-sm">
-              <Plus className="h-4 w-4 mr-2" />
-              Add to Queue
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <AddToQueueForm
+        categories={availableCategories}
+        title={newTitle}
+        onTitleChange={setNewTitle}
+        category={newCategory}
+        onCategoryChange={setNewCategory}
+        onAdd={actions.addTitle}
+      />
 
       <div className="flex justify-between items-center border-b border-muted">
         <div className="flex">
-          <button 
-            className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'queue' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-            onClick={() => setActiveTab('queue')}
-          >
-            Pending / Draft ({pendingItems.length})
+          <button className={tabClass(activeTab === 'queue')} onClick={() => setActiveTab('queue')}>
+            Menunggu / Draf ({pendingItems.length})
           </button>
-          <button 
-            className={`px-4 py-2 border-b-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-            onClick={() => setActiveTab('history')}
-          >
-            History ({historyItems.length})
+          <button className={tabClass(activeTab === 'history')} onClick={() => setActiveTab('history')}>
+            Riwayat ({historyItems.length})
           </button>
         </div>
         {activeTab === 'queue' && (
@@ -525,13 +127,19 @@ export default function Queue() {
         <div className="grid gap-4">
           {pendingItems.length === 0 ? (
             <div className="text-center p-8 text-muted-foreground bg-muted/50 rounded-xl">
-              No items in queue. Go to Research to generate some!
+              Antrean kosong. Buka halaman Riset untuk membuat judul baru!
             </div>
           ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={actions.reorder}>
               <SortableContext items={pendingItems.map(i => i.id)} strategy={verticalListSortingStrategy}>
                 {pendingItems.map(item => (
-                  <SortableQueueItem key={item.id} item={item} handleDelete={handleDelete} handleEdit={handleEdit} handlePostNow={handlePostNow} />
+                  <SortableQueueItem
+                    key={item.id}
+                    item={item}
+                    onDelete={(id) => setConfirmAction({ type: 'delete', id })}
+                    onEdit={setEditingItem}
+                    onPostNow={(id) => setConfirmAction({ type: 'post', id })}
+                  />
                 ))}
               </SortableContext>
             </DndContext>
@@ -541,138 +149,38 @@ export default function Queue() {
         <div className="grid gap-4">
           {historyItems.length === 0 ? (
             <div className="text-center p-8 text-muted-foreground bg-muted/50 rounded-xl">
-              No history found.
+              Belum ada riwayat.
             </div>
           ) : (
             historyItems.map(item => (
-              <Card key={item.id} className="bg-card">
-                <CardContent className="p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-600 text-white shadow-sm border border-transparent">
-                        {item.category}
-                      </span>
-                      <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full shadow-sm border border-transparent ${item.success ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
-                        {item.success ? 'POSTED' : 'FAILED'}
-                      </span>
-                      {item.success && item.image_failed && (
-                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800/50 flex items-center gap-1">
-                          <AlertCircle className="w-3 h-3" /> Image Failed
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="font-semibold text-lg">{item.title}</h3>
-                    <p className="text-xs text-muted-foreground mt-2">Posted: {new Date(item.timestamp).toLocaleString()}</p>
-                    {(!item.success || item.image_failed) && (
-                        <p className="text-xs text-red-500 mt-1 bg-red-50 p-2 rounded border border-red-100">{item.result}</p>
-                    )}
-                  </div>
-                  
-                  {item.success && item.post_url && (
-                    <div className="flex gap-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-amber-600 border-amber-200 hover:bg-amber-50"
-                        disabled={regeneratingIds[item.id]}
-                        onClick={() => handleRegenerateImage(item.id)}
-                      >
-                        {regeneratingIds[item.id] ? (
-                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-4 w-4 mr-2" />
-                        )}
-                        Regenerate Image
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="text-blue-600 border-blue-200 hover:bg-blue-50"
-                        disabled={regeneratingIds[item.id]}
-                        onClick={() => handleRegenerateArticle(item.id)}
-                      >
-                        {regeneratingIds[item.id] ? (
-                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-4 w-4 mr-2" />
-                        )}
-                        Regenerate Article
-                      </Button>
-                      <Button variant="outline" size="icon" onClick={() => window.open(item.post_url, '_blank')} className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 z-20" title="View Post">
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button variant="outline" size="icon" onClick={() => handleDeleteHistory(item.id)} className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 z-20" title="Delete Post & History">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <HistoryItemCard
+                key={item.id}
+                item={item}
+                regenerating={!!regeneratingIds[item.id]}
+                onRegenerate={(kind) => actions.regenerate(item.id, kind)}
+                onDelete={() => setConfirmAction({ type: 'delete_history', id: item.id })}
+              />
             ))
           )}
         </div>
       )}
 
       {editingItem && (
-        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <Card className="w-full max-w-lg shadow-lg">
-            <CardHeader>
-              <CardTitle>Edit Queue Item</CardTitle>
-              <CardDescription>Modify title and target keywords before posting.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Title</label>
-                <Input value={editTitle} onChange={e => setEditTitle(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Keywords</label>
-                <Input value={editKeywords} onChange={e => setEditKeywords(e.target.value)} placeholder="Comma separated keywords" />
-              </div>
-              <div className="flex justify-end gap-2 pt-4">
-                <Button variant="outline" onClick={() => setEditingItem(null)}>Cancel</Button>
-                <Button onClick={handleSaveEdit}>Save Changes</Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <EditQueueItemDialog
+          key={editingItem.id}
+          item={editingItem}
+          onClose={() => setEditingItem(null)}
+          onSave={(title, keywords, sendKeywords) => actions.saveEdit(editingItem.id, title, keywords, sendKeywords)}
+        />
       )}
 
-      <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction?.type === 'delete' 
-                ? 'This action cannot be undone. This will permanently delete this title from the queue.' 
-                : confirmAction?.type === 'clear'
-                ? 'Peringatan: Semua artikel di antrean untuk situs ini akan dihapus secara permanen. Apakah Anda yakin?'
-                : confirmAction?.type === 'delete_history'
-                ? 'Are you sure you want to delete this log? This will also attempt to move the article to the WordPress trash.'
-                : 'This will immediately process and post this item right now.'}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction 
-              className={confirmAction?.type === 'clear' || confirmAction?.type === 'delete' || confirmAction?.type === 'delete_history' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}
-              onClick={() => {
-              if (confirmAction?.type === 'delete' && confirmAction.id) {
-                executeDelete(confirmAction.id);
-              } else if (confirmAction?.type === 'clear') {
-                handleClearQueue();
-              } else if (confirmAction?.type === 'post' && confirmAction.id) {
-                executePostNow(confirmAction.id);
-              } else if (confirmAction?.type === 'delete_history' && confirmAction.id) {
-                executeDeleteHistory(confirmAction.id);
-              }
-            }}>
-              Continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
+      <ConfirmDialog
+        open={!!confirmAction}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={runConfirmedAction}
+        description={confirmAction ? CONFIRM_TEXT[confirmAction.type] : ''}
+        destructive={confirmAction?.type !== 'post'}
+      />
     </div>
   );
 }

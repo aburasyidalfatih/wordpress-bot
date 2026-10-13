@@ -36,13 +36,13 @@ function App() {
   }, []);
 
   if (isAuthenticated === null) {
-    return <div className="flex h-screen items-center justify-center">Loading...</div>;
+    return <div className="flex h-screen items-center justify-center">Memuat...</div>;
   }
 
   return (
     <SiteProvider>
       <BrowserRouter>
-        <Suspense fallback={<div className="flex h-screen items-center justify-center">Loading page...</div>}>
+        <Suspense fallback={<div className="flex h-screen items-center justify-center">Memuat halaman...</div>}>
           <ErrorBoundary>
             <Routes>
               <Route path="/" element={<Landing />} />

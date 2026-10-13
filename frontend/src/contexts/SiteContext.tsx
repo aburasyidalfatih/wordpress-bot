@@ -1,81 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ReactNode } from 'react';
+import { apiFetch, isAbortError } from '@/lib/api';
+import type { WordPressSite } from '@/lib/types';
+import { SiteContext } from './siteContextValue';
 
-export interface SiteCategory {
-  id: number;
-  name: string;
-  description?: string;
-  count?: number;
-}
-
-export interface WordPressSite {
-  id: number;
-  site_name: string;
-  wordpress_url: string;
-  wordpress_username: string;
-  is_active: boolean;
-
-  schedule_hours: string;
-  timezone?: string;
-  language?: string;
-  auto_post: boolean;
-  categories: SiteCategory[];
-  selected_categories: SiteCategory[];
-  telegram_enabled: boolean;
-  telegram_bot_token: string;
-  telegram_chat_id: string;
-  facebook_enabled: boolean;
-  twitter_enabled: boolean;
-  threads_enabled: boolean;
-
-  article_prompt: string | null;
-  image_prompt: string | null;
-  wordpress_password?: string;
-  has_wordpress_password?: boolean;
-  telegram_post_to_channel?: boolean;
-  telegram_channel_id?: string;
-  has_telegram_bot_token?: boolean;
-  facebook_page_id?: string;
-  facebook_access_token?: string;
-  has_facebook_access_token?: boolean;
-  pinterest_enabled?: boolean;
-  pinterest_board_id?: string;
-  pinterest_access_token?: string;
-  has_pinterest_access_token?: boolean;
-  twitter_api_key?: string;
-  twitter_api_secret?: string;
-  twitter_access_token?: string;
-  twitter_access_secret?: string;
-  has_twitter_api_key?: boolean;
-  has_twitter_api_secret?: boolean;
-  has_twitter_access_token?: boolean;
-  has_twitter_access_secret?: boolean;
-  threads_user_id?: string;
-  threads_access_token?: string;
-  has_threads_access_token?: boolean;
-  gsc_connected?: boolean;
-  gsc_client_id?: string;
-  gsc_client_secret?: string;
-  has_gsc_client_secret?: boolean;
-  gsc_property_url?: string | null;
-  gsc_permission_level?: string | null;
-  gsc_connected_at?: string | null;
-  gsc_last_synced_at?: string | null;
-  gsc_last_error?: string | null;
-}
-
-interface SiteContextType {
-  sites: WordPressSite[];
-  selectedSiteId: number | null;
-  selectedSite: WordPressSite | null;
-  setSelectedSiteId: (id: number | null) => void;
-  fetchSites: () => Promise<void>;
-  loading: boolean;
-}
-
-const SiteContext = createContext<SiteContextType | undefined>(undefined);
-
-export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export function SiteProvider({ children }: { children: ReactNode }) {
   const [sites, setSites] = useState<WordPressSite[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(() => {
     const saved = localStorage.getItem('selectedSiteId');
@@ -90,47 +19,40 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // (e.g. the unauthenticated mount fetch) can't overwrite a post-login result.
   const requestIdRef = useRef(0);
 
-  const fetchSites = useCallback(async (signal?: AbortSignal) => {
+  const fetchSites = useCallback((signal?: AbortSignal): Promise<void> => {
     const requestId = ++requestIdRef.current;
-    try {
-      // Users may be authenticated via the localStorage token or only via the
-      // httpOnly auth_token cookie, so always try; the token header is optional.
-      // Plain fetch (not apiFetch) is used on purpose: a 401 here (e.g. on public
-      // pages) must not trigger apiFetch's redirect to /login.
-      const token = localStorage.getItem('token');
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      const response = await fetch('/api/sites', {
-        headers,
-        credentials: 'include',
-        signal
-      });
-      if (requestId !== requestIdRef.current) return;
-      if (response.status === 401) {
-        setSites([]);
-        return;
-      }
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const data = await response.json();
-      if (requestId !== requestIdRef.current) return;
-      if (data.success && data.sites) {
-        setSites(data.sites);
-        
-        const currentSelectedId = selectedSiteIdRef.current;
-        // If we don't have a selected site, or the selected site is no longer in the list
-        if (!currentSelectedId && data.sites.length > 0) {
-          setSelectedSiteId(data.sites[0].id);
-        } else if (currentSelectedId && !data.sites.find((s: WordPressSite) => s.id === currentSelectedId)) {
-          setSelectedSiteId(data.sites.length > 0 ? data.sites[0].id : null);
+    const isLatest = () => requestId === requestIdRef.current;
+    // Users may be authenticated via the localStorage token or only via the
+    // httpOnly auth_token cookie, so always try. A 401 here (e.g. on public
+    // pages) is expected and must not redirect to /login.
+    return apiFetch('/api/sites', { signal, redirectOnUnauthorized: false })
+      .then(async response => {
+        if (!isLatest()) return;
+        if (response.status === 401) {
+          setSites([]);
+          return;
         }
-      }
-    } catch (error: unknown) {
-      if (error instanceof DOMException && error.name === 'AbortError') return;
-      if (import.meta.env.DEV) console.error('Failed to fetch sites:', error);
-    } finally {
-      if (requestId === requestIdRef.current) setLoading(false);
-    }
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (!isLatest() || !data.success || !data.sites) return;
+        const nextSites: WordPressSite[] = data.sites;
+        setSites(nextSites);
+
+        const currentSelectedId = selectedSiteIdRef.current;
+        // Select the first site when nothing is selected or the selected site is gone.
+        if (!currentSelectedId && nextSites.length > 0) {
+          setSelectedSiteId(nextSites[0].id);
+        } else if (currentSelectedId && !nextSites.some(s => s.id === currentSelectedId)) {
+          setSelectedSiteId(nextSites.length > 0 ? nextSites[0].id : null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (isAbortError(error)) return;
+        if (import.meta.env.DEV) console.error('Failed to fetch sites:', error);
+      })
+      .finally(() => {
+        if (isLatest()) setLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -154,12 +76,4 @@ export const SiteProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       {children}
     </SiteContext.Provider>
   );
-};
-
-export const useSiteContext = () => {
-  const context = useContext(SiteContext);
-  if (context === undefined) {
-    throw new Error('useSiteContext must be used within a SiteProvider');
-  }
-  return context;
-};
+}

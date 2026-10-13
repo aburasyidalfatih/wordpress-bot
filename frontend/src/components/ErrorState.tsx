@@ -16,13 +16,13 @@ export function ErrorState({ message, onRetry, className = '' }: ErrorStateProps
           <AlertCircle className="w-8 h-8 text-destructive" />
         </div>
         <div className="space-y-1">
-          <h3 className="font-semibold text-destructive">Failed to Load Data</h3>
+          <h3 className="font-semibold text-destructive">Gagal Memuat Data</h3>
           <p className="text-sm text-muted-foreground max-w-md">{message}</p>
         </div>
         {onRetry && (
           <Button variant="outline" onClick={onRetry} className="mt-2 border-destructive/20 hover:bg-destructive/10 text-foreground">
             <RefreshCw className="w-4 h-4 mr-2" />
-            Try Again
+            Coba Lagi
           </Button>
         )}
       </CardContent>

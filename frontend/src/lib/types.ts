@@ -1,57 +1,180 @@
-export interface DashboardData {
-  total_posts: number;
-  total_categories: number;
-  category_stats: CategoryStat[];
-  recent_posts: RecentPost[];
-  insights?: DashboardInsights;
-  weekly_trend?: WeeklyTrend[];
-}
+// Shapes of the JSON returned by the backend API.
 
-export interface CategoryStat {
+// ---------------------------------------------------------------------------
+// Websites
+// ---------------------------------------------------------------------------
+
+export interface SiteCategory {
+  id: number;
   name: string;
-  count: number;
-  percentage: number;
+  description?: string;
+  count?: number;
 }
 
-export interface RecentPost {
+export interface WordPressSite {
+  id: number;
+  site_name: string;
+  wordpress_url: string;
+  wordpress_username: string;
+  is_active: boolean;
+
+  schedule_hours: string;
+  timezone?: string;
+  language?: string;
+  auto_post: boolean;
+  categories: SiteCategory[];
+  selected_categories: SiteCategory[];
+  telegram_enabled: boolean;
+  telegram_bot_token: string;
+  telegram_chat_id: string;
+  facebook_enabled: boolean;
+  twitter_enabled: boolean;
+  threads_enabled: boolean;
+
+  article_prompt: string | null;
+  image_prompt: string | null;
+  wordpress_password?: string;
+  has_wordpress_password?: boolean;
+  telegram_post_to_channel?: boolean;
+  telegram_channel_id?: string;
+  has_telegram_bot_token?: boolean;
+  facebook_page_id?: string;
+  facebook_access_token?: string;
+  has_facebook_access_token?: boolean;
+  pinterest_enabled?: boolean;
+  pinterest_board_id?: string;
+  pinterest_access_token?: string;
+  has_pinterest_access_token?: boolean;
+  twitter_api_key?: string;
+  twitter_api_secret?: string;
+  twitter_access_token?: string;
+  twitter_access_secret?: string;
+  has_twitter_api_key?: boolean;
+  has_twitter_api_secret?: boolean;
+  has_twitter_access_token?: boolean;
+  has_twitter_access_secret?: boolean;
+  threads_user_id?: string;
+  threads_access_token?: string;
+  has_threads_access_token?: boolean;
+  gsc_connected?: boolean;
+  gsc_client_id?: string;
+  gsc_client_secret?: string;
+  has_gsc_client_secret?: boolean;
+  gsc_property_url?: string | null;
+  gsc_permission_level?: string | null;
+  gsc_connected_at?: string | null;
+  gsc_last_synced_at?: string | null;
+  gsc_last_error?: string | null;
+}
+
+/** A website being created (no id yet) or edited in the site form. */
+export type SiteDraft = Partial<WordPressSite>;
+
+export interface GscProperty {
+  site_url: string;
+  permission_level?: string;
+}
+
+// ---------------------------------------------------------------------------
+// User profile
+// ---------------------------------------------------------------------------
+
+export interface UserProfile {
+  name?: string;
+  email?: string;
+  role?: string;
+  tier?: string;
+  credits?: number;
+}
+
+interface AuthUser {
+  role?: string;
+}
+
+/** Response of /api/login and /api/auth/google. */
+export interface LoginResponse {
+  success: boolean;
+  token?: string;
+  user?: AuthUser;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+interface DashboardRecommendation {
+  type: string;
+  category: string;
+  action: string;
+  reason: string;
+}
+
+export interface DashboardInsightsData {
+  status: string;
+  message?: string;
+  recommendations?: DashboardRecommendation[];
+}
+
+export interface DashboardLogEntry {
   title: string;
   category: string;
-  created_at: string;
-  post_url?: string;
-  status?: string;
-}
-
-export interface DashboardInsights {
-  recommendations: string[];
-  best_time: string;
-  top_category: string;
-}
-
-export interface WeeklyTrend {
-  day: string;
-  count: number;
-}
-
-export interface MonitorData {
-  system_status: string;
-  uptime: string;
-  worker_status: string;
-  queue_size: number;
-  failed_jobs: number;
-  total_completed: number;
-  memory_usage?: string;
-  cpu_usage?: string;
-  last_post_time?: string;
-  active_sites?: number;
-  redis_status?: string;
-  logs?: LogEntry[];
-}
-
-export interface LogEntry {
   timestamp: string;
-  level: string;
-  message: string;
+  success: boolean | 'pending';
+  result?: string;
 }
+
+export interface CategoryPerformance {
+  category: string;
+  total_posts: number;
+  total_views: number;
+  total_comments: number;
+  avg_engagement: number;
+}
+
+export interface DashboardApiResponse {
+  stats?: {
+    total_posts: number;
+    success_rate: number;
+    failed_posts: number;
+  };
+  next_post_time?: string;
+  logs?: DashboardLogEntry[];
+  insights?: DashboardInsightsData;
+  performance?: CategoryPerformance[];
+}
+
+// ---------------------------------------------------------------------------
+// System monitor
+// ---------------------------------------------------------------------------
+
+interface MonitorSystemInfo {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  uptime: string;
+}
+
+export interface MonitorServiceInfo {
+  // null means the heartbeat could not be read (e.g. Redis unreachable), which is
+  // different from the scheduler being confirmed down.
+  scheduler_running: boolean | null;
+  scheduler_last_heartbeat?: string | null;
+  scheduler_detail?: string | null;
+  scheduler_jobs: number | null;
+  database_size?: number | null;
+  log_size: number;
+}
+
+export interface MonitorApiResponse {
+  system_info?: MonitorSystemInfo;
+  service_info?: MonitorServiceInfo;
+  recent_errors?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
 
 export interface PromptsData {
   article_prompt: string;
@@ -64,99 +187,223 @@ export interface PromptsData {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Queue
+// ---------------------------------------------------------------------------
+
 export interface QueueItem {
   id: number;
   title: string;
   category: string;
   status: string;
-  created_at: string;
-  site_id?: number;
-  position?: number;
   target_keywords?: string;
+  created_at?: string;
+  post_url?: string;
 }
 
-export interface ResearchCategory {
-  name: string;
-  topic_count: number;
-  last_research: string | null;
-  topics: ResearchTopic[];
-}
-
-export interface ResearchTopic {
+export interface HistoryItem {
   id: number;
-  topic: string;
-  used: boolean;
+  title: string;
+  category: string;
+  success: boolean;
+  image_failed: boolean;
+  timestamp: string;
+  result: string;
+  post_url?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Research
+// ---------------------------------------------------------------------------
+
+export interface SearchOpportunity {
+  type: 'quick_win' | 'low_ctr' | 'declining';
+  query: string;
+  page: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  click_change: number;
+  position_change?: number | null;
+  opportunity_score: number;
+  rationale: string;
+}
+
+export interface SearchConsoleSummary {
+  connected: boolean;
+  property_url?: string | null;
+  last_synced_at?: string | null;
+  opportunities: SearchOpportunity[];
+}
+
+interface ResearchKeyword {
+  keyword: string;
+  impressions: number | null;
+  has_demand_data: boolean;
+  intent?: string;
+}
+
+type ConfidenceLevel = 'high' | 'medium' | 'low' | 'insufficient' | 'unknown';
+
+export interface ResearchStats {
   created_at: string;
+  trend_score: number;
+  // The API annotates keywords with Search Console demand. Older responses (and
+  // research saved before that change) may still return plain strings.
+  keywords: (ResearchKeyword | string)[];
+  quality_score: number;
+  confidence_level: ConfidenceLevel;
+  is_fallback: boolean;
+  is_stale: boolean;
+  age_hours: number | null;
+  long_tail_keywords: string[];
+  semantic_context: string;
+  news_insights: { title: string; source?: string; url?: string; published_at?: string }[];
+  source_metadata: Record<string, { status?: string; count?: number; checked_at?: string; reason?: string }>;
+  social_insights: ({ text: string; url?: string; provider?: string } | string)[];
+  competitor_outlines: {
+    title: string;
+    url: string;
+    headers: string[];
+  }[];
+  youtube_insights: {
+    title: string;
+    snippets: string;
+    url?: string;
+    transcript_available?: boolean;
+  }[];
 }
 
-export interface SiteConfig {
-  id: number;
-  site_name: string;
-  wordpress_url: string;
-  wordpress_username: string;
-  is_active: boolean;
-  auto_post: boolean;
-  selected_categories: SiteCategory[];
+export interface ResearchDataResponse {
   categories: SiteCategory[];
-  language: string;
-  post_interval: number;
-  telegram_enabled: boolean;
-  telegram_bot_token?: string;
-  telegram_chat_id?: string;
-  telegram_channel_id?: string;
-  telegram_post_to_channel?: boolean;
-  facebook_enabled: boolean;
-  facebook_page_id?: string;
-  facebook_access_token?: string;
-  twitter_enabled: boolean;
-  twitter_api_key?: string;
-  twitter_api_secret?: string;
-  twitter_access_token?: string;
-  twitter_access_secret?: string;
-  threads_enabled: boolean;
-  threads_user_id?: string;
-  threads_access_token?: string;
-  article_prompt?: string;
-  image_prompt?: string;
+  research_data: Record<string, ResearchStats>;
+  search_console?: SearchConsoleSummary;
 }
 
-export interface SiteCategory {
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+export interface BankDetails {
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  whatsapp_number?: string;
+}
+
+export interface InvoiceData {
+  invoice_id: string;
+  payment_method: string;
+  is_mock?: boolean;
+  amount?: number;
+  amount_usd?: number;
+  checkout_url?: string | null;
+  tripay_data?: {
+    reference?: string;
+    pay_code?: string;
+    qr_string?: string;
+    payment_name?: string;
+    amount?: number;
+    status?: string;
+  };
+  paypal_order_id?: string;
+  paypal_approve_url?: string | null;
+  bank_details?: BankDetails;
+}
+
+export interface BillingProfile {
+  credits?: number;
+  tier?: string;
+}
+
+export interface BillingHistoryItem {
   id: number;
-  name: string;
-  description?: string;
-}
-
-export interface UserProfile {
-  email: string;
-  name: string;
-  credits: number;
-  is_admin: boolean;
-}
-
-export interface BillingHistory {
-  id: number;
-  amount: number;
-  credits: number;
-  status: string;
+  invoice_id: string;
   created_at: string;
-  payment_method?: string;
+  payment_method: string;
+  credits_purchased: number;
+  amount: number;
+  status: string;
+  receipt_url?: string;
+  bank_details?: BankDetails;
 }
+
+export type PaymentMethod = 'manual' | 'tripay' | 'paypal' | '';
+
+export interface PaymentMethodsEnabled {
+  manual: boolean;
+  tripay: boolean;
+  paypal: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
 
 export interface AdminStats {
-  total_users: number;
-  total_sites: number;
-  total_posts: number;
-  total_credits_used: number;
-  active_users: number;
+  total_users?: number;
+  total_pro?: number;
+  total_earnings_idr?: number;
+  total_credits_purchased?: number;
+  queue_count?: number;
+  total_articles?: number;
 }
 
 export interface AdminUser {
   id: number;
-  email: string;
   name: string;
+  email: string;
+  role: string;
+  tier: string;
   credits: number;
   is_active: boolean;
-  is_admin: boolean;
-  sites_count: number;
+}
+
+export interface PendingPayment {
+  id: number;
+  invoice_id: string;
   created_at: string;
+  user_name: string;
+  user_email: string;
+  credits_purchased: number;
+  amount: number;
+  receipt_url?: string;
+}
+
+export interface AdminConfig {
+  PAYMENT_USD_RATE?: number;
+  PAYMENT_TRIPAY_ENABLED?: boolean;
+  TRIPAY_MERCHANT_CODE?: string;
+  TRIPAY_API_URL?: string;
+  TRIPAY_API_KEY?: string;
+  TRIPAY_PRIVATE_KEY?: string;
+  has_TRIPAY_API_KEY?: boolean;
+  has_TRIPAY_PRIVATE_KEY?: boolean;
+  PAYMENT_PAYPAL_ENABLED?: boolean;
+  PAYPAL_API_URL?: string;
+  PAYPAL_CLIENT_ID?: string;
+  PAYPAL_SECRET?: string;
+  has_PAYPAL_SECRET?: boolean;
+  PAYMENT_MANUAL_ENABLED?: boolean;
+  MANUAL_BANK_NAME?: string;
+  MANUAL_BANK_HOLDER?: string;
+  MANUAL_BANK_ACCOUNT?: string;
+  ADMIN_WHATSAPP?: string;
+  gemini_api_key?: string;
+  has_gemini_api_key?: boolean;
+  gemini_model?: string;
+  gemini_image_model?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  has_GOOGLE_CLIENT_SECRET?: boolean;
+  SMTP_HOST?: string;
+  SMTP_PORT?: number;
+  SMTP_USER?: string;
+  SMTP_PASSWORD?: string;
+  has_SMTP_PASSWORD?: boolean;
+  SMTP_SENDER_EMAIL?: string;
+  STARSENDER_API_KEY?: string;
+  has_STARSENDER_API_KEY?: boolean;
+  STARSENDER_DEVICE_ID?: string;
 }

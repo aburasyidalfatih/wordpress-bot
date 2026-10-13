@@ -1,0 +1,123 @@
+import { useEffect, useState } from 'react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { Trash2, GripVertical, Pencil, Play, Eye, Loader2 } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import type { QueueItem } from '@/lib/types';
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: 'MENUNGGU',
+  posting: 'MEMPROSES...',
+  posted: 'TERBIT',
+  failed: 'GAGAL',
+};
+
+/** Fake progress bar: animates towards 95% over ~30 s while an item is posting. */
+function PostingProgress() {
+  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    const timer = setTimeout(() => setProgress(95), 100);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="mt-4 max-w-sm">
+      <div className="flex justify-between text-xs text-blue-600 mb-1">
+        <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Membuat artikel & gambar...</span>
+        <span>Tunggu ~30 detik</span>
+      </div>
+      <div className="w-full bg-blue-100 rounded-full h-2.5 overflow-hidden">
+        <div className="bg-blue-600 h-2.5 rounded-full transition-all ease-out" style={{ width: `${progress}%`, transitionDuration: '30000ms' }}></div>
+      </div>
+    </div>
+  );
+}
+
+interface SortableQueueItemProps {
+  item: QueueItem;
+  onDelete: (id: number) => void;
+  onEdit: (item: QueueItem) => void;
+  onPostNow: (id: number) => void;
+}
+
+export function SortableQueueItem({ item, onDelete, onEdit, onPostNow }: SortableQueueItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: item.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    position: 'relative' as const,
+  };
+  const isPosting = item.status === 'posting';
+
+  return (
+    <div ref={setNodeRef} style={style} className={`transition-opacity ${isDragging ? 'opacity-50' : 'opacity-100'}`}>
+      <Card className={`hover:border-primary/50 transition-all duration-300 bg-card ${isPosting ? 'border-blue-500/60 shadow-lg shadow-blue-500/5 ring-1 ring-blue-500/15 bg-gradient-to-r from-card via-card to-blue-500/[0.02]' : ''}`}>
+        <CardContent className="p-0 flex items-stretch">
+          <div
+            {...attributes}
+            {...listeners}
+            className="w-12 border-r flex items-center justify-center cursor-grab active:cursor-grabbing bg-muted/20 hover:bg-muted/50 transition-colors"
+          >
+            <GripVertical className="h-5 w-5 text-muted-foreground" />
+          </div>
+
+          <div className="p-6 flex flex-1 flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-600 text-white shadow-sm border border-transparent">
+                  {item.category}
+                </span>
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full shadow-sm transition-all border border-transparent ${
+                  item.status === 'pending'
+                    ? 'bg-amber-500 text-white'
+                    : isPosting
+                    ? 'bg-blue-500 text-white animate-pulse'
+                    : 'bg-green-600 text-white'
+                }`}>
+                  {STATUS_LABELS[item.status] ?? item.status.toUpperCase()}
+                </span>
+              </div>
+              <h3 className="font-semibold text-lg">{item.title}</h3>
+              {item.target_keywords && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  <span className="font-medium text-foreground">Kata kunci:</span> {item.target_keywords}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground mt-2">Ditambahkan: {item.created_at}</p>
+
+              {/* Remounts (restarting at 0%) each time the item starts posting. */}
+              {isPosting && <PostingProgress />}
+            </div>
+
+            <div className="flex gap-2">
+              {item.status === 'posted' && item.post_url && (
+                <Button variant="outline" size="icon" onClick={() => window.open(item.post_url, '_blank')} className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 z-20" title="Lihat Artikel">
+                  <Eye className="h-4 w-4" />
+                </Button>
+              )}
+              <Button variant="outline" size="icon" onClick={() => onPostNow(item.id)} className="text-green-600 hover:text-green-700 hover:bg-green-50 z-20" title={isPosting ? 'Coba Posting Lagi' : 'Posting Sekarang'}>
+                <Play className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="icon" onClick={() => onEdit(item)} className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 z-20" title="Edit">
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="icon" onClick={() => onDelete(item.id)} className="text-red-500 hover:text-red-600 hover:bg-red-50 z-20" title="Hapus">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

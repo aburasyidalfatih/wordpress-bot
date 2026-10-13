@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  FileText, 
-  Search, 
+import {
+  LayoutDashboard,
+  FileText,
+  Search,
   Settings,
   LogOut,
   Bot,
@@ -13,102 +13,56 @@ import {
   Sun,
   Moon,
   Bell,
-  ChevronDown,
   Shield,
   CreditCard,
-  Coins,
-  Plus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Toaster } from 'sonner';
-import { useSiteContext } from '@/contexts/SiteContext';
-import { apiFetch } from '../lib/api';
+import { apiFetch } from '@/lib/api';
+import { useProfile } from '@/hooks/useProfile';
+import { useDarkMode } from '@/hooks/useDarkMode';
+import { CreditsBadge } from '@/components/layout/CreditsBadge';
+import { SiteSelector } from '@/components/layout/SiteSelector';
+import { ProfileMenu } from '@/components/layout/ProfileMenu';
+
+const NAVIGATION = [
+  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { name: 'Website', href: '/sites', icon: Bot },
+  { name: 'Riset', href: '/research', icon: Search },
+  { name: 'Antrean', href: '/queue', icon: ListTodo },
+  { name: 'Perencana Konten', href: '/prompts', icon: FileText },
+  { name: 'Tagihan', href: '/billing', icon: CreditCard },
+  { name: 'Pengaturan', href: '/settings', icon: Settings },
+];
+const ADMIN_NAVIGATION = { name: 'Panel Admin', href: '/admin', icon: Shield };
+
+const navLinkClass = (active: boolean, layout: string) =>
+  `flex items-center ${layout} rounded-xl px-4 py-3 text-sm font-medium transition-all duration-200 ${
+    active
+      ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/20 scale-[1.02]'
+      : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+  }`;
+
+async function logout() {
+  try {
+    await apiFetch('/logout', { method: 'POST' });
+  } catch {
+    // The logout endpoint may not exist; the token is dropped either way.
+  }
+  localStorage.removeItem('token');
+  window.location.href = '/login';
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    return localStorage.getItem('theme') === 'dark' || 
-      (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  });
-  const [profile, setProfile] = useState<{
-    name?: string;
-    email?: string;
-    role?: string;
-    tier?: string;
-    credits?: number;
-  }>({});
-
-  const { sites, selectedSiteId, setSelectedSiteId, loading } = useSiteContext();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch('/api/profile', { signal: controller.signal })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && data.profile) {
-          setProfile(data.profile);
-        }
-      })
-      .catch(err => { if (err.name !== 'AbortError') if (import.meta.env.DEV) console.error(err); });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    const handleRefresh = () => {
-      apiFetch('/api/profile')
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && data.profile) {
-            setProfile(data.profile);
-          }
-        })
-        .catch(err => { if (import.meta.env.DEV) console.error(err); });
-    };
-    window.addEventListener('refresh-profile', handleRefresh);
-    return () => window.removeEventListener('refresh-profile', handleRefresh);
-  }, []);
-
-  useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
-  }, [isDarkMode]);
-
-  const navigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Websites', href: '/sites', icon: Bot },
-    { name: 'Research', href: '/research', icon: Search },
-    { name: 'Queue', href: '/queue', icon: ListTodo },
-    { name: 'Planner', href: '/prompts', icon: FileText },
-    { name: 'Billing', href: '/billing', icon: CreditCard },
-    { name: 'Settings', href: '/settings', icon: Settings },
-    ...(profile.role === 'admin' ? [{ name: 'Admin Panel', href: '/admin', icon: Shield }] : [])
-  ];
-
-  const handleLogout = async () => {
-    try {
-      await apiFetch('/logout', { method: 'POST' });
-    } catch (e) {
-      // Logout endpoint may not exist, ignore
-    }
-    localStorage.removeItem('token');
-    window.location.href = '/login';
-  };
-
-  const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode);
-  };
+  const { isDarkMode, toggleDarkMode } = useDarkMode();
+  const profile = useProfile();
+  const navigation = profile.role === 'admin' ? [...NAVIGATION, ADMIN_NAVIGATION] : NAVIGATION;
+  const themeIcon = isDarkMode ? <Sun className="h-5 w-5 text-yellow-500" /> : <Moon className="h-5 w-5" />;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground transition-colors duration-300">
-      
+
       {/* Sidebar for Desktop */}
       <div className="hidden md:flex w-64 flex-col border-r bg-card/60 px-4 py-6 backdrop-blur-md">
         <div className="flex items-center gap-3 px-3 pb-8">
@@ -121,42 +75,29 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 space-y-1.5">
-          {navigation.map((item) => {
-            const isActive = location.pathname === item.href;
-            return (
-              <Link
-                key={item.name}
-                to={item.href}
-                className={`flex items-center gap-3.5 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-200 ${
-                  isActive 
-                    ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/20 scale-[1.02]' 
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                }`}
-              >
-                <item.icon className="h-5 w-5 shrink-0" />
-                {item.name}
-              </Link>
-            );
-          })}
+          {navigation.map((item) => (
+            <Link key={item.name} to={item.href} className={navLinkClass(location.pathname === item.href, 'gap-3.5')}>
+              <item.icon className="h-5 w-5 shrink-0" />
+              {item.name}
+            </Link>
+          ))}
         </nav>
-
-
 
         {/* Theme control */}
         <div className="pt-4 border-t">
-          <Button 
+          <Button
             variant="ghost"
             onClick={toggleDarkMode}
             className="w-full justify-start gap-3.5 text-muted-foreground hover:text-foreground rounded-xl"
           >
-            {isDarkMode ? <Sun className="h-5 w-5 text-yellow-500" /> : <Moon className="h-5 w-5" />}
-            {isDarkMode ? 'Light Mode' : 'Dark Mode'}
+            {themeIcon}
+            {isDarkMode ? 'Mode Terang' : 'Mode Gelap'}
           </Button>
         </div>
       </div>
 
-      {/* Mobile Top Bar */}
       <div className="flex flex-col flex-1 overflow-hidden">
+        {/* Mobile Top Bar */}
         <header className="flex md:hidden items-center justify-between px-6 py-4 border-b bg-card/60 backdrop-blur-md">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -165,30 +106,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <span className="text-lg font-bold bg-gradient-to-r from-primary to-indigo-600 bg-clip-text text-transparent">AutoWP</span>
           </div>
           <div className="flex items-center gap-2">
-            {/* Mobile Credits Badge */}
-            {(() => {
-              const credits = profile.credits !== undefined ? profile.credits : 0;
-              let badgeClass = "bg-primary/10 border-primary/25 text-primary";
-              let coinColor = "text-primary";
-              
-              if (credits === 0) {
-                badgeClass = "bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400 animate-pulse";
-                coinColor = "text-red-500";
-              } else if (credits <= 2) {
-                badgeClass = "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400";
-                coinColor = "text-amber-500";
-              }
-              
-              return (
-                <Link to="/billing" className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${badgeClass}`}>
-                  <Coins className={`h-3.5 w-3.5 shrink-0 ${coinColor}`} />
-                  <span className="text-xs font-bold">{credits}</span>
-                </Link>
-              );
-            })()}
-
+            <CreditsBadge profile={profile} compact />
             <Button variant="ghost" size="icon" onClick={toggleDarkMode} className="rounded-lg">
-              {isDarkMode ? <Sun className="h-5 w-5 text-yellow-500" /> : <Moon className="h-5 w-5" />}
+              {themeIcon}
             </Button>
             <Button variant="ghost" size="icon" onClick={() => setIsMobileMenuOpen(true)} className="rounded-lg">
               <Menu className="h-6 w-6" />
@@ -200,122 +120,26 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <header className="hidden md:flex items-center justify-between px-8 py-3 border-b bg-card/40 backdrop-blur-md z-10 sticky top-0">
           <div className="flex items-center gap-3 text-sm font-medium">
             <span className="text-muted-foreground font-semibold">Website:</span>
-            {loading ? (
-              <div className="h-9 w-64 animate-pulse rounded-md bg-muted"></div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <select
-                  value={selectedSiteId || ''}
-                  onChange={(e) => setSelectedSiteId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                  className="h-9 w-64 rounded-lg border border-input bg-card/80 backdrop-blur-sm px-3 py-1 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent cursor-pointer font-medium text-foreground/90"
-                >
-                  {sites.length > 0 && !selectedSiteId && <option disabled value="">Pilih website...</option>}
-                  {sites.map(site => (
-                    <option key={site.id} value={site.id} className="bg-background text-foreground">
-                      🌐 {site.site_name}
-                    </option>
-                  ))}
-                  {sites.length === 0 && <option disabled value="">No Sites Found</option>}
-                </select>
-                {sites.length === 0 && (
-                  <Link to="/sites" className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 font-bold transition-colors ml-1 bg-primary/5 border border-primary/20 px-2.5 py-1 rounded-lg">
-                    <Plus className="h-3 w-3" />
-                    Tambah Site
-                  </Link>
-                )}
-              </div>
-            )}
+            <SiteSelector />
           </div>
           <div className="flex items-center gap-4">
-            <div className="relative">
+            {/* Placeholder search; only shown where the header has room for it,
+                otherwise it pushes the credits badge and profile menu off-screen. */}
+            <div className="relative hidden xl:block">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
                 type="search"
-                placeholder="Search..."
+                placeholder="Cari..."
                 disabled
-                aria-label="Search (coming soon)"
+                aria-label="Pencarian (segera hadir)"
                 className="h-9 w-64 rounded-full border border-input bg-background/50 pl-9 pr-4 text-sm ring-offset-background transition-all focus:w-72 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
             <Button variant="ghost" size="icon" className="rounded-full relative hover:bg-secondary">
               <Bell className="h-5 w-5 text-muted-foreground" />
             </Button>
-
-            {/* Desktop Credits Badge */}
-            {(() => {
-              const credits = profile.credits !== undefined ? profile.credits : 0;
-              let badgeClass = "bg-primary/10 hover:bg-primary/20 border-primary/25 text-primary";
-              let coinColor = "text-primary";
-              
-              if (credits === 0) {
-                badgeClass = "bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-600 dark:text-red-400 animate-pulse";
-                coinColor = "text-red-500";
-              } else if (credits <= 2) {
-                badgeClass = "bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-600 dark:text-amber-400";
-                coinColor = "text-amber-500";
-              }
-              
-              return (
-                <Link to="/billing" className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all duration-200 hover:scale-[1.02] ${badgeClass}`}>
-                  <Coins className={`h-4 w-4 shrink-0 ${coinColor}`} />
-                  <span className="text-xs font-bold">{credits} Credits</span>
-                  <span className="text-[10px] bg-foreground/10 font-extrabold px-1.5 py-0.5 rounded-md capitalize">{profile.tier || 'free'}</span>
-                </Link>
-              );
-            })()}
-            <div className="relative">
-              <button 
-                onClick={() => setIsProfileOpen(!isProfileOpen)} 
-                className="outline-none flex items-center gap-2 rounded-full ring-2 ring-background shadow-sm hover:opacity-90 hover:ring-primary/20 transition-all bg-background pl-1 pr-3 py-1"
-              >
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src="https://api.dicebear.com/7.x/notionists/svg?seed=AutoWP" alt="@autowp" />
-                  <AvatarFallback className="bg-gradient-to-tr from-primary to-indigo-600 text-white font-bold text-xs">AW</AvatarFallback>
-                </Avatar>
-                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${isProfileOpen ? 'rotate-180' : ''}`} />
-              </button>
-              
-              {isProfileOpen && (
-                <>
-                  <div 
-                    className="fixed inset-0 z-40" 
-                    onClick={() => setIsProfileOpen(false)} 
-                  />
-                  <div className="absolute right-0 mt-2 w-56 rounded-xl bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-border animate-in fade-in zoom-in-95 duration-100 z-50">
-                    <div className="px-2 py-2 text-sm">
-                      <div className="flex flex-col space-y-1">
-                        <p className="font-medium leading-none">{profile.name || 'AutoWP User'}</p>
-                        <p className="text-xs leading-none text-muted-foreground mt-1">{profile.email || 'admin@autowp.test'}</p>
-                      </div>
-                    </div>
-                    <div className="h-px bg-border my-1" />
-                    <Link 
-                      to="/settings"
-                      onClick={() => setIsProfileOpen(false)} 
-                      className="relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
-                    >
-                      <Settings className="h-4 w-4" />
-                      <span>Settings</span>
-                    </Link>
-                    <button 
-                      onClick={() => { setIsProfileOpen(false); toggleDarkMode(); }} 
-                      className="relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
-                    >
-                      {isDarkMode ? <Sun className="h-4 w-4 text-yellow-500" /> : <Moon className="h-4 w-4" />}
-                      <span>Toggle Theme</span>
-                    </button>
-                    <div className="h-px bg-border my-1" />
-                    <button 
-                      onClick={() => { setIsProfileOpen(false); handleLogout(); }} 
-                      className="relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-2 text-sm outline-none text-red-600 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/30"
-                    >
-                      <LogOut className="h-4 w-4" />
-                      <span>Log out</span>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
+            <CreditsBadge profile={profile} />
+            <ProfileMenu profile={profile} isDarkMode={isDarkMode} onToggleDarkMode={toggleDarkMode} onLogout={logout} />
           </div>
         </header>
 
@@ -345,60 +169,33 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
             <nav className="flex-1 space-y-2">
               <div className="mb-6 space-y-2">
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4">Website Workspace</span>
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4">Website Aktif</span>
                 <div className="px-4">
-                  {loading ? (
-                    <div className="h-10 w-full animate-pulse rounded-lg bg-muted"></div>
-                  ) : (
-                    <select
-                      value={selectedSiteId || ''}
-                      onChange={(e) => {
-                        setSelectedSiteId(e.target.value ? parseInt(e.target.value, 10) : null);
-                      }}
-                      className="h-10 w-full rounded-lg border border-input bg-card/80 px-3 py-2 text-sm shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 hover:bg-accent"
-                    >
-                      {sites.length > 0 && !selectedSiteId && <option disabled value="">Pilih website...</option>}
-                      {sites.map(site => (
-                        <option key={site.id} value={site.id} className="bg-background text-foreground">
-                          {site.site_name}
-                        </option>
-                      ))}
-                      {sites.length === 0 && <option disabled value="">No Sites Found</option>}
-                    </select>
-                  )}
+                  <SiteSelector mobile />
                 </div>
               </div>
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4">Menu</span>
-              {navigation.map((item) => {
-                const isActive = location.pathname === item.href;
-                return (
-                  <Link
-                    key={item.name}
-                    to={item.href}
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className={`flex items-center gap-4 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-200 ${
-                      isActive 
-                        ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/20 scale-[1.02]' 
-                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                    }`}
-                  >
-                    <item.icon className="h-5 w-5" />
-                    {item.name}
-                  </Link>
-                );
-              })}
+              {navigation.map((item) => (
+                <Link
+                  key={item.name}
+                  to={item.href}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className={navLinkClass(location.pathname === item.href, 'gap-4')}
+                >
+                  <item.icon className="h-5 w-5" />
+                  {item.name}
+                </Link>
+              ))}
             </nav>
 
-
-
             <div className="pt-6 border-t">
-              <Button 
-                variant="ghost" 
+              <Button
+                variant="ghost"
                 className="w-full justify-start gap-4 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl"
-                onClick={handleLogout}
+                onClick={logout}
               >
                 <LogOut className="h-5 w-5" />
-                Logout
+                Keluar
               </Button>
             </div>
           </div>
@@ -406,7 +203,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      <Toaster position="bottom-right" />
     </div>
   );
 }

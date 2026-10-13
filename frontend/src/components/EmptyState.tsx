@@ -1,5 +1,5 @@
-import { useSiteContext } from '@/contexts/SiteContext';
-import { buttonVariants } from '@/components/ui/button';
+import { useSiteContext } from '@/hooks/useSiteContext';
+import { buttonVariants } from '@/components/ui/button-variants';
 import { Card, CardContent } from '@/components/ui/card';
 import { Bot, Plus, ArrowUp, Compass, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -74,7 +74,7 @@ export default function EmptyState({ title, description }: EmptyStateProps) {
               
               <div className="mt-8 flex items-center gap-2 text-xs font-semibold text-primary bg-primary/5 border border-primary/20 rounded-full px-4 py-2 animate-pulse">
                 <ArrowUp className="h-3.5 w-3.5" />
-                Pilih site di sudut kanan atas
+                Pilih website di sudut kanan atas
               </div>
             </>
           )}
