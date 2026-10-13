@@ -371,6 +371,9 @@ export interface PendingPayment {
   receipt_url?: string;
 }
 
+export type AiTextProvider = 'gemini' | 'anthropic' | 'openai';
+export type AiImageProvider = 'gemini' | 'openai';
+
 export interface AdminConfig {
   PAYMENT_USD_RATE?: number;
   PAYMENT_TRIPAY_ENABLED?: boolean;
@@ -390,10 +393,19 @@ export interface AdminConfig {
   MANUAL_BANK_HOLDER?: string;
   MANUAL_BANK_ACCOUNT?: string;
   ADMIN_WHATSAPP?: string;
+  ai_text_provider?: AiTextProvider;
+  ai_image_provider?: AiImageProvider;
   gemini_api_key?: string;
   has_gemini_api_key?: boolean;
   gemini_model?: string;
   gemini_image_model?: string;
+  anthropic_api_key?: string;
+  has_anthropic_api_key?: boolean;
+  anthropic_model?: string;
+  openai_api_key?: string;
+  has_openai_api_key?: boolean;
+  openai_model?: string;
+  openai_image_model?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   has_GOOGLE_CLIENT_SECRET?: boolean;

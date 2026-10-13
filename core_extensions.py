@@ -27,6 +27,7 @@ from models import User
 from ml_optimizer import ContentOptimizer
 from trending_research import TrendingResearch
 from config import Config, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from services.ai_providers import merge_shared_ai_config
 
 # Setup logging
 logging.basicConfig(
@@ -86,7 +87,8 @@ def _get_admin_user_id():
 
 
 def load_config(user_id=None):
-    """Load configuration for the specific user.
+    """Load the AI configuration used for user_id's work.
+
     Falls back to the admin account if user_id is not provided.
     """
     # RQ workers never run app.py's startup loader; this also picks up admin
@@ -100,21 +102,19 @@ def load_config(user_id=None):
     if target_id is None:
         logger.error("load_config: no user_id given and no admin account exists.")
         return {'gemini_api_key': '', 'gemini_model': DEFAULT_GEMINI_MODEL,
-                'gemini_image_model': DEFAULT_GEMINI_IMAGE_MODEL}
+                'gemini_image_model': DEFAULT_GEMINI_IMAGE_MODEL, 'own_ai_key': False}
 
     cached = _cache_get(_config_cache, target_id)
     if cached is not None:
         return cached
 
     config = db.get_config(target_id)
-
-    # Fall back to the admin's API key if this user has none of their own.
-    if not config.get('gemini_api_key'):
-        admin_id = _get_admin_user_id()
-        if admin_id is not None and admin_id != target_id:
-            admin_config = db.get_config(admin_id)
-            if admin_config and admin_config.get('gemini_api_key'):
-                config['gemini_api_key'] = admin_config['gemini_api_key']
+    admin_id = _get_admin_user_id()
+    if admin_id is not None and admin_id != target_id:
+        config = merge_shared_ai_config(config, db.get_config(admin_id))
+    else:
+        # The admin's (or the only) config is the shared one.
+        config['own_ai_key'] = True
 
     _cache_put(_config_cache, target_id, config)
     return config

@@ -71,10 +71,19 @@ def load_or_create_runtime_secret(env_name, filename, generator):
         os.environ[env_name] = value
         return value
 
-# Single source of truth for Gemini model defaults.
-# Keep in sync with the dropdowns in frontend/src/pages/AdminDashboard.tsx.
+# Single source of truth for AI provider/model defaults.
+# Keep in sync with frontend/src/components/admin/aiModels.ts.
 DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash'
 DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image'
+DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5'
+DEFAULT_OPENAI_MODEL = 'gpt-5.5'
+DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2'
+
+# Which provider writes articles / research titles, and which draws images.
+TEXT_PROVIDERS = ('gemini', 'anthropic', 'openai')
+IMAGE_PROVIDERS = ('gemini', 'openai')
+DEFAULT_TEXT_PROVIDER = 'gemini'
+DEFAULT_IMAGE_PROVIDER = 'gemini'
 
 
 class Config:

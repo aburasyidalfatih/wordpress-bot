@@ -8,7 +8,11 @@ import logging
 from sqlalchemy import exc, event, text
 
 from models import Base, Config, WordPressSite, PostLog, ResearchData, SystemSetting
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from config import (
+    DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL, DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_IMAGE_MODEL, DEFAULT_TEXT_PROVIDER, DEFAULT_IMAGE_PROVIDER,
+    TEXT_PROVIDERS, IMAGE_PROVIDERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ MIGRATION_LOCK_ID = 4207311001
 
 # Bump this whenever a new migration step is added to _run_migrations_locked so
 # that already-migrated databases re-run the set exactly once.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SCHEMA_VERSION_KEY = '__schema_version__'
 
 # Research older than this is not used to drive new articles. Shared by the
@@ -195,6 +199,7 @@ class Database:
             ('Search Console', self.migrate_search_console_foundation),
             ('credit system', self.migrate_credit_system_tables),
             ('foreign keys', self.migrate_add_foreign_keys),
+            ('AI providers', self.migrate_add_ai_provider_columns),
         ]
         failed = []
         for name, step in steps:
@@ -318,6 +323,21 @@ class Database:
                 "ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS credit_held BOOLEAN DEFAULT FALSE"
             ))
 
+    def migrate_add_ai_provider_columns(self):
+        """Provider choice plus Anthropic / OpenAI credentials and models on config."""
+        columns = (
+            ("ai_text_provider", f"VARCHAR(20) DEFAULT '{DEFAULT_TEXT_PROVIDER}'"),
+            ("ai_image_provider", f"VARCHAR(20) DEFAULT '{DEFAULT_IMAGE_PROVIDER}'"),
+            ("anthropic_api_key", "VARCHAR(500)"),
+            ("anthropic_model", f"VARCHAR(100) DEFAULT '{DEFAULT_ANTHROPIC_MODEL}'"),
+            ("openai_api_key", "VARCHAR(500)"),
+            ("openai_model", f"VARCHAR(100) DEFAULT '{DEFAULT_OPENAI_MODEL}'"),
+            ("openai_image_model", f"VARCHAR(100) DEFAULT '{DEFAULT_OPENAI_IMAGE_MODEL}'"),
+        )
+        with self.get_session() as session:
+            for name, ddl in columns:
+                session.execute(text(f"ALTER TABLE config ADD COLUMN IF NOT EXISTS {name} {ddl}"))
+
     def migrate_research_quality_columns(self):
         """Add auditable research metadata without invalidating legacy rows."""
         columns = {
@@ -420,11 +440,31 @@ class Database:
                 )
                 session.add(config)
                 session.commit()
+            text_provider = config.ai_text_provider if config.ai_text_provider in TEXT_PROVIDERS else DEFAULT_TEXT_PROVIDER
+            image_provider = config.ai_image_provider if config.ai_image_provider in IMAGE_PROVIDERS else DEFAULT_IMAGE_PROVIDER
             return {
                 'gemini_api_key': config.gemini_api_key or '',
                 'gemini_model': config.gemini_model or DEFAULT_GEMINI_MODEL,
-                'gemini_image_model': config.gemini_image_model or DEFAULT_GEMINI_IMAGE_MODEL
+                'gemini_image_model': config.gemini_image_model or DEFAULT_GEMINI_IMAGE_MODEL,
+                'ai_text_provider': text_provider,
+                'ai_image_provider': image_provider,
+                'anthropic_api_key': config.anthropic_api_key or '',
+                'anthropic_model': config.anthropic_model or DEFAULT_ANTHROPIC_MODEL,
+                'openai_api_key': config.openai_api_key or '',
+                'openai_model': config.openai_model or DEFAULT_OPENAI_MODEL,
+                'openai_image_model': config.openai_image_model or DEFAULT_OPENAI_IMAGE_MODEL,
             }
+
+    # Keys are only overwritten when a non-empty value is sent ("keep the stored
+    # key" is an empty field in the UI); models fall back to their default.
+    _CONFIG_SECRETS = ('gemini_api_key', 'anthropic_api_key', 'openai_api_key')
+    _CONFIG_MODELS = {
+        'gemini_model': DEFAULT_GEMINI_MODEL,
+        'gemini_image_model': DEFAULT_GEMINI_IMAGE_MODEL,
+        'anthropic_model': DEFAULT_ANTHROPIC_MODEL,
+        'openai_model': DEFAULT_OPENAI_MODEL,
+        'openai_image_model': DEFAULT_OPENAI_IMAGE_MODEL,
+    }
 
     def save_config(self, user_id, data):
         with self.get_session() as session:
@@ -433,12 +473,16 @@ class Database:
                 config = Config(user_id=user_id)
                 session.add(config)
 
-            if 'gemini_api_key' in data and data.get('gemini_api_key'):
-                config.gemini_api_key = data['gemini_api_key']
-            if 'gemini_model' in data:
-                config.gemini_model = data.get('gemini_model') or DEFAULT_GEMINI_MODEL
-            if 'gemini_image_model' in data:
-                config.gemini_image_model = data.get('gemini_image_model') or DEFAULT_GEMINI_IMAGE_MODEL
+            for key in self._CONFIG_SECRETS:
+                if data.get(key):
+                    setattr(config, key, data[key])
+            for key, default in self._CONFIG_MODELS.items():
+                if key in data:
+                    setattr(config, key, data.get(key) or default)
+            if data.get('ai_text_provider') in TEXT_PROVIDERS:
+                config.ai_text_provider = data['ai_text_provider']
+            if data.get('ai_image_provider') in IMAGE_PROVIDERS:
+                config.ai_image_provider = data['ai_image_provider']
 
     def get_system_settings(self):
         with self.get_session() as session:

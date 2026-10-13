@@ -110,18 +110,39 @@ autowp/
 | Sistem Kredit | Top-up via Tripay / PayPal / transfer manual |
 | Auth | Google OAuth + JWT (pendaftaran manual dinonaktifkan) |
 
-## Model Gemini
+## Provider & Model AI
 
-Default didefinisikan **satu tempat** di `config.py`:
+Admin memilih di **Panel Admin → Pengaturan Admin → Konfigurasi AI**:
+
+| Kebutuhan | Provider yang bisa dipilih |
+|---|---|
+| Teks: artikel, judul riset, optimasi prompt | Gemini, Claude (Anthropic), OpenAI |
+| Gambar featured image | Gemini, OpenAI |
+
+Pengaturan ini global (dipakai semua user). Provider yang dipilih wajib punya API
+key; tombol **Muat daftar model dari API** mengambil daftar model langsung dari
+provider sehingga model baru bisa dipilih tanpa mengubah kode.
+
+Default didefinisikan **satu tempat** di `config.py` (dan dicerminkan di
+`frontend/src/components/admin/aiModels.ts`):
 
 ```python
 DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash'
 DEFAULT_GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image'
+DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5'
+DEFAULT_OPENAI_MODEL = 'gpt-5.5'
+DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2'
 ```
 
-Semua modul mengimpor konstanta ini — jangan menulis ulang string model secara
-hardcode. Pilihan yang tersedia di UI ada di `frontend/src/pages/AdminDashboard.tsx`;
-kalau menambah opsi di sana, pastikan tetap konsisten dengan konstanta di atas.
+Semua kode khusus provider ada di `services/ai_providers.py`:
+
+- **Claude**: Messages API dengan streaming, `effort: medium`, tanpa `temperature`
+  (ditolak model Claude terbaru). Untuk Opus 5.5 / Sonnet 5.5 / Opus 5 / Fable 5.1
+  fallback penolakan server-side (`fallbacks: "default"`) aktif.
+- **OpenAI**: Responses API untuk teks; Images API (`gpt-image-*` 1536×1024,
+  `dall-e-3` 1792×1024) untuk gambar.
+- Output terpotong (batas token) dan error sementara (429/5xx/jaringan) di-retry;
+  key salah / model tidak ada tidak di-retry dan dilaporkan dalam Bahasa Indonesia.
 
 ## Kebijakan Konten
 

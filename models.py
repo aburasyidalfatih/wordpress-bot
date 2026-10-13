@@ -2,7 +2,10 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, F
 from sqlalchemy.orm import declarative_base
 from datetime import datetime
 import logging
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from config import (
+    DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL, DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_IMAGE_MODEL, DEFAULT_TEXT_PROVIDER, DEFAULT_IMAGE_PROVIDER,
+)
 from security import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,15 @@ class Config(Base):
     gemini_model = Column(String(100), default=DEFAULT_GEMINI_MODEL)
     gemini_image_model = Column(String(100), default=DEFAULT_GEMINI_IMAGE_MODEL)
 
+    # Provider used for articles / research titles, and for featured images.
+    ai_text_provider = Column(String(20), default=DEFAULT_TEXT_PROVIDER)
+    ai_image_provider = Column(String(20), default=DEFAULT_IMAGE_PROVIDER)
+    _anthropic_api_key = Column('anthropic_api_key', String(500))
+    anthropic_model = Column(String(100), default=DEFAULT_ANTHROPIC_MODEL)
+    _openai_api_key = Column('openai_api_key', String(500))
+    openai_model = Column(String(100), default=DEFAULT_OPENAI_MODEL)
+    openai_image_model = Column(String(100), default=DEFAULT_OPENAI_IMAGE_MODEL)
+
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
     @property
@@ -53,6 +65,22 @@ class Config(Base):
     @gemini_api_key.setter
     def gemini_api_key(self, value):
         self._gemini_api_key = encrypt_value(value)
+
+    @property
+    def anthropic_api_key(self):
+        return decrypt_value(self._anthropic_api_key)
+
+    @anthropic_api_key.setter
+    def anthropic_api_key(self, value):
+        self._anthropic_api_key = encrypt_value(value)
+
+    @property
+    def openai_api_key(self):
+        return decrypt_value(self._openai_api_key)
+
+    @openai_api_key.setter
+    def openai_api_key(self, value):
+        self._openai_api_key = encrypt_value(value)
 
 class WordPressSite(Base):
     __tablename__ = 'wordpress_sites'

@@ -7,9 +7,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from core_extensions import db, q, trending, logger, load_config, require_jwt
 from routes.prompts import check_ai_helper_quota
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 from database import MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
+from services.ai_providers import describe_provider_error, text_provider_name
 from services.article_generator import ArticleGenerator
 from services.search_console import build_search_opportunities
 from services.content_planner import (
@@ -617,13 +617,14 @@ def generate_titles(user_id, category):
     if not category.strip() or len(category) > MAX_TITLE_CATEGORY_CHARS:
         return jsonify({'success': False, 'error': 'Kategori tidak valid.', 'code': 400}), 400
 
+    config = {}
     try:
         try:
             context = _load_title_context(user_id, site_id, category)
         except _TitleRequestError as exc:
             return jsonify({'success': False, 'error': exc.message}), exc.status
 
-        # Only gate (and count) the uncharged Gemini call once the request is
+        # Only gate (and count) the uncharged AI call once the request is
         # otherwise valid. Bulk generation sends one request per category, so
         # titles get their own, larger bucket instead of sharing the prompt
         # optimizer's.
@@ -636,13 +637,8 @@ def generate_titles(user_id, category):
         evidence = _title_evidence_blocks(category, context['language'], gsc_topics, content_gaps)
         prompt = _build_title_prompt(count, category, context, evidence)
 
-        generator = ArticleGenerator(
-            config['gemini_api_key'],
-            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
-        )
-        response = generator.client.models.generate_content(model=generator.model, contents=prompt)
-        titles = _parse_title_response(response.text)
+        generator = ArticleGenerator.from_config(config)
+        titles = _parse_title_response(generator.generate_text(prompt))
 
         titles = _filter_duplicate_titles(titles, _existing_site_titles(user_id, site_id))[:count]
         if not titles:
@@ -655,7 +651,7 @@ def generate_titles(user_id, category):
         return jsonify({'success': True, 'message': f'{len(titles)} judul berhasil dibuat dan dimasukkan ke antrean!'})
     except Exception as e:
         logger.error(f"Generate titles error: {e}")
-        reason = AI_BUSY_MESSAGE if _is_ai_busy_error(e) else 'terjadi kesalahan, silakan coba lagi.'
+        reason = describe_provider_error(e, text_provider_name(config or {})) or 'terjadi kesalahan, silakan coba lagi.'
         return jsonify({'success': False, 'error': f'Gagal membuat judul: {reason}'}), 500
 
 

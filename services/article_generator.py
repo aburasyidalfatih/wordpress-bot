@@ -5,18 +5,14 @@ import time
 import unicodedata
 from io import BytesIO
 
-from google import genai
-from google.genai import types
 from PIL import Image
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from services.ai_providers import (
+    PROVIDER_LABELS, is_fatal_provider_error, is_retryable_provider_error, make_image_provider,
+    make_text_provider,
+)
 from services.article_prompts import build_article_prompt, build_image_prompts, build_system_instruction
-
-try:
-    import httpx  # transport used by google-genai
-except ImportError:  # pragma: no cover
-    httpx = None
 
 logger = logging.getLogger(__name__)
 
@@ -38,34 +34,15 @@ IMAGE_TIME_BUDGET_SECONDS = 150
 IMAGE_MIN_ATTEMPT_MS = 15000
 
 
-def _genai_status_code(exc):
-    code = getattr(exc, 'code', None)
-    if code is None:
-        code = getattr(exc, 'status_code', None)
-    try:
-        return int(code)
-    except (TypeError, ValueError):
-        return None
-
-
 def is_retryable_genai_error(exc):
-    """Retry only failures that can succeed on a second try.
+    """Retry only failures that can succeed on a second try (any provider).
 
-    4xx errors (invalid key 400/401, permission 403, unknown model 404, bad
-    request) fail identically every time; retrying them only multiplied job time.
-    429 (rate limit / quota) and 5xx are transient.
+    4xx errors (invalid key, permission, unknown model, bad request) fail
+    identically every time; truncation, 429, 5xx and network errors are transient.
     """
-    if isinstance(exc, (ConnectionError, TimeoutError, TruncatedGenerationError)):
+    if isinstance(exc, TruncatedGenerationError):
         return True
-    if isinstance(exc, genai.errors.APIError):
-        code = _genai_status_code(exc)
-        if code is None:
-            return isinstance(exc, genai.errors.ServerError)
-        return code == 429 or code >= 500
-    # httpx transport errors raised by the SDK (connect/read timeouts).
-    if httpx is not None and isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
-        return True
-    return False
+    return is_retryable_provider_error(exc)
 
 
 class ArticleQualityError(Exception):
@@ -135,19 +112,13 @@ def derive_takeaways(content, limit=4):
 _OUTPUT_TAGS = ('TITLE', 'META_DESCRIPTION', 'CONTENT', 'FOCUS_KEYWORD', 'FAQS', 'EXCERPT', 'KEY_TAKEAWAYS')
 
 
-def _raise_if_truncated(response):
-    """Detect a hard stop at the token ceiling.
-
-    Truncated output used to be silently salvaged by the unclosed-tag fallback
-    and published with broken HTML; now it fails so @retry can regenerate.
-    """
-    for candidate in getattr(response, 'candidates', None) or []:
-        finish_reason = str(getattr(candidate, 'finish_reason', '') or '')
-        if 'MAX_TOKENS' in finish_reason.upper():
-            raise TruncatedGenerationError(
-                f"Model mencapai batas {MAX_OUTPUT_TOKENS} token output; "
-                "artikel terpotong di tengah pembuatan."
-            )
+def _raise_truncated():
+    """Truncated output used to be silently salvaged by the unclosed-tag fallback
+    and published with broken HTML; now it fails so @retry can regenerate."""
+    raise TruncatedGenerationError(
+        f"Model mencapai batas {MAX_OUTPUT_TOKENS} token output; "
+        "artikel terpotong di tengah pembuatan."
+    )
 
 
 def _clean_response_text(text):
@@ -252,69 +223,44 @@ def _to_webp(image_bytes):
     return output
 
 
-def _iter_response_parts(response):
-    try:
-        direct_parts = getattr(response, 'parts', None)
-    except Exception as e:
-        # The SDK's .parts accessor raises on some blocked/empty responses;
-        # the candidates below are still worth inspecting.
-        logger.debug(f"Image response has no readable .parts: {e}")
-        direct_parts = None
-    if direct_parts:
-        yield from direct_parts
-
-    for candidate in getattr(response, 'candidates', None) or []:
-        content = getattr(candidate, 'content', None)
-        yield from getattr(content, 'parts', None) or []
-
-
-def _response_summary(response):
-    details = []
-    prompt_feedback = getattr(response, 'prompt_feedback', None)
-    if prompt_feedback:
-        details.append(f"prompt_feedback={prompt_feedback}")
-
-    for index, candidate in enumerate(getattr(response, 'candidates', None) or []):
-        details.append(
-            f"candidate[{index}] finish_reason={getattr(candidate, 'finish_reason', None)} "
-            f"finish_message={getattr(candidate, 'finish_message', None)} "
-            f"safety_ratings={getattr(candidate, 'safety_ratings', None)}"
-        )
-
-    text_parts = [
-        getattr(part, 'text', '').strip()
-        for part in _iter_response_parts(response)
-        if getattr(part, 'text', None)
-    ]
-    if text_parts:
-        details.append(f"text={text_parts[0][:300]}")
-
-    return " | ".join(details) if details else "no response details"
-
-
-def _inline_image_bytes(response):
-    for part in _iter_response_parts(response):
-        inline_data = getattr(part, 'inline_data', None)
-        if inline_data is not None and getattr(inline_data, 'data', None):
-            return inline_data.data
-    return None
-
-
-def _is_fatal_image_error(err):
-    # Bad key, no permission or unknown model fails the same for every prompt,
-    # so do not spend the remaining attempts on it.
-    return isinstance(err, genai.errors.APIError) and _genai_status_code(err) in (401, 403, 404)
-
-
 def _remaining_ms(deadline):
     return int((deadline - time.monotonic()) * 1000)
 
 
 class ArticleGenerator:
-    def __init__(self, api_key, model=DEFAULT_GEMINI_MODEL, image_model=DEFAULT_GEMINI_IMAGE_MODEL):
-        self.client = genai.Client(api_key=api_key)
-        self.model = model
-        self.image_model = image_model
+    """Writes articles and featured images with the configured AI providers.
+
+    `text` / `image` are services.ai_providers instances; build them from the
+    stored AI config with from_config(). The image provider is created lazily so
+    a missing image key does not block text-only work (titles, prompt help).
+    """
+
+    def __init__(self, text_provider, image_provider=None, image_factory=None):
+        self.text = text_provider
+        self._image = image_provider
+        self._image_factory = image_factory
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(make_text_provider(config), image_factory=lambda: make_image_provider(config))
+
+    @property
+    def image(self):
+        if self._image is None and self._image_factory is not None:
+            self._image = self._image_factory()
+        return self._image
+
+    @property
+    def model(self):
+        return self.text.model
+
+    @property
+    def image_model(self):
+        return self.image.model
+
+    def generate_text(self, prompt, system=None, max_tokens=8192):
+        """Plain text completion for research titles and prompt helpers."""
+        return self.text.generate(prompt, system=system, max_tokens=max_tokens).text
 
     def generate_checked_article(self, *args, **kwargs):
         """Allow one evidence-preserving correction, never publish rejected output."""
@@ -355,24 +301,23 @@ class ArticleGenerator:
             category_desc=kwargs.get('category_desc'),
             quality_feedback=kwargs.get('quality_feedback'),
         )
-        response = self._request_article(prompt, evidence_policy)
-        _raise_if_truncated(response)
-        article = parse_article_response(response.text, topic, language)
+        result = self._request_article(prompt, evidence_policy)
+        if result.truncated:
+            _raise_truncated()
+        article = parse_article_response(result.text, topic, language)
         article['allowed_link_urls'] = allowed_link_urls
         return article
 
     def _request_article(self, prompt, evidence_policy):
-        return self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=build_system_instruction(evidence_policy),
-                # Kept low: this content makes factual claims, and high
-                # temperature was compounding the fabrication problem.
-                temperature=0.7,
-                top_p=0.9,
-                max_output_tokens=MAX_OUTPUT_TOKENS
-            )
+        return self.text.generate(
+            prompt,
+            system=build_system_instruction(evidence_policy),
+            max_tokens=MAX_OUTPUT_TOKENS,
+            # Kept low where the provider supports it (Gemini): this content
+            # makes factual claims, and high temperature was compounding the
+            # fabrication problem.
+            temperature=0.7,
+            top_p=0.9,
         )
 
     def generate_image(self, topic, title, article_content=None, custom_prompt=None, site_name=None, **kwargs):
@@ -385,14 +330,13 @@ class ArticleGenerator:
         deadline = time.monotonic() + IMAGE_TIME_BUDGET_SECONDS
         try:
             prompts = build_image_prompts(topic, title, custom_prompt, site_name if site_name else "website")
-            if self.image_model.startswith('imagen-'):
-                attempt, label = self._imagen_attempt, 'Imagen'
-            else:
-                attempt, label = self._gemini_image_attempt, 'Gemini image'
-            return self._run_image_attempts(prompts, attempt, label, deadline)
+            image = self.image
+            label = f"{PROVIDER_LABELS.get(image.provider, image.provider)} image"
+            return self._run_image_attempts(prompts, image.attempt, label, deadline)
         except Exception as e:
             logger.error(f"Error generating featured image: {e}", exc_info=True)
-            raise Exception(f"Gagal membuat gambar dengan Gemini: {str(e)}")
+            provider = getattr(self._image, 'provider', None)
+            raise Exception(f"Gagal membuat gambar dengan {PROVIDER_LABELS.get(provider, 'AI')}: {str(e)}")
 
     def _run_image_attempts(self, prompts, attempt, label, deadline):
         """Try each prompt until one yields an image. Raises when none does."""
@@ -415,7 +359,7 @@ class ArticleGenerator:
             except Exception as attempt_err:
                 last_error = attempt_err
                 logger.warning(f"{label} attempt '{attempt_name}' failed: {attempt_err}", exc_info=True)
-                if _is_fatal_image_error(attempt_err):
+                if is_fatal_provider_error(attempt_err):
                     break
 
         if last_summary:
@@ -426,38 +370,3 @@ class ArticleGenerator:
         if last_error:
             raise last_error
         raise Exception("Model tidak menghasilkan gambar setelah mencoba semua prompt cadangan.")
-
-    def _imagen_attempt(self, prompt, timeout_ms):
-        """One Imagen call. Returns (image bytes, None) or (None, response summary)."""
-        response = self.client.models.generate_images(
-            model=self.image_model,
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio='16:9',
-                output_mime_type='image/webp',
-                http_options=types.HttpOptions(timeout=timeout_ms)
-            )
-        )
-        for generated_image in getattr(response, 'generated_images', None) or []:
-            image_bytes = getattr(getattr(generated_image, 'image', None), 'image_bytes', None)
-            if image_bytes:
-                return image_bytes, None
-        return None, getattr(response, 'model_dump_json', lambda **_: str(response))(exclude_none=True)
-
-    def _gemini_image_attempt(self, prompt, timeout_ms):
-        """One Gemini image call. Returns (image bytes, None) or (None, response summary)."""
-        response = self.client.models.generate_content(
-            model=self.image_model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=['TEXT', 'IMAGE'],
-                # person_generation is no longer supported by the Gemini API.
-                image_config=types.ImageConfig(aspect_ratio='16:9'),
-                http_options=types.HttpOptions(timeout=timeout_ms)
-            )
-        )
-        image_bytes = _inline_image_bytes(response)
-        if image_bytes:
-            return image_bytes, None
-        return None, _response_summary(response)

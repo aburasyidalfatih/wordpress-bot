@@ -13,7 +13,6 @@ from database import debit_credits, add_credits
 from models import ContentQueue, PostLog, WordPressSite
 from services.article_generator import ArticleGenerator
 from services.url_safety import validate_public_http_url
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 queue_bp = Blueprint('queue', __name__)
 
@@ -453,8 +452,8 @@ def job_status(user_id, job_id):
 @queue_bp.route('/test-generate', methods=['POST'])
 @require_admin
 def test_generate(user_id):
-    # Admin-only debugging aid: it calls Gemini (possibly with the admin key
-    # fallback) without charging credits, so it must not be open to all users.
+    # Admin-only debugging aid: it calls the configured AI provider without
+    # charging credits, so it must not be open to all users.
     config = load_config(user_id)
     data = request.get_json(silent=True) or {}
     category_name = data.get('category', '')
@@ -469,11 +468,7 @@ def test_generate(user_id):
             return _site_not_found()
 
         try:
-            generator = ArticleGenerator(
-                config['gemini_api_key'],
-                config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-                config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
-            )
+            generator = ArticleGenerator.from_config(config)
             article = generator.generate_article(category_name, custom_prompt=site.article_prompt, site_name=site.site_name, language=site.language or 'id')
             return jsonify({'success': True, 'article': article})
         except Exception as e:

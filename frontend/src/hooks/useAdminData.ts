@@ -109,11 +109,13 @@ export function useAdminData() {
 
   const saveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    await runAction('/api/admin/config', {
+    const saved = await runAction('/api/admin/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
     }, 'Pengaturan berhasil disimpan.', 'Gagal menyimpan pengaturan.');
+    // Reload so typed secrets are cleared and the "already saved" flags update.
+    if (saved) fetchAdminData();
   };
 
   return {

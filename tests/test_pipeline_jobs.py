@@ -100,7 +100,7 @@ class GenerateAndPostTitleRetryTests(unittest.TestCase):
         patches = [
             patch.object(jobs, 'db', self.db),
             patch.object(jobs, 'load_config', Mock(return_value={'gemini_api_key': 'k'})),
-            patch.object(jobs, 'ArticleGenerator', Mock(return_value=self.generator)),
+            patch.object(jobs, 'ArticleGenerator', Mock(**{'from_config.return_value': self.generator})),
             patch.object(jobs, 'WordPressPublisher', Mock(return_value=self.publisher)),
             patch.object(jobs, 'check_article', Mock(return_value=(True, [], []))),
             patch.object(jobs, '_merge_topic_research', lambda seo, *a, **k: seo),
@@ -160,7 +160,7 @@ class RegenerationJobTests(unittest.TestCase):
         patches = [
             patch.object(jobs, 'db', self.db),
             patch.object(jobs, 'load_config', Mock(return_value={'gemini_api_key': 'k'})),
-            patch.object(jobs, 'ArticleGenerator', Mock(return_value=self.generator)),
+            patch.object(jobs, 'ArticleGenerator', Mock(**{'from_config.return_value': self.generator})),
             patch.object(jobs, 'WordPressPublisher', Mock(return_value=self.publisher)),
             patch.object(jobs, 'check_article', Mock(return_value=(True, [], []))),
         ]

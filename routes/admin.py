@@ -10,7 +10,8 @@ from core_extensions import (
 )
 from database import Config as DBConfig
 from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
-from config import Config, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from config import Config, DEFAULT_IMAGE_PROVIDER, DEFAULT_TEXT_PROVIDER, IMAGE_PROVIDERS, TEXT_PROVIDERS
+from services.ai_providers import PROVIDER_LABELS, describe_provider_error, list_models
 from routes.payments import fulfill_transaction
 
 admin_bp = Blueprint('admin', __name__)
@@ -350,11 +351,7 @@ def get_admin_config(user_id):
         'PAYMENT_TRIPAY_ENABLED': is_enabled('PAYMENT_TRIPAY_ENABLED', Config.PAYMENT_TRIPAY_ENABLED),
         'PAYMENT_PAYPAL_ENABLED': is_enabled('PAYMENT_PAYPAL_ENABLED', Config.PAYMENT_PAYPAL_ENABLED),
         'PAYMENT_MANUAL_ENABLED': is_enabled('PAYMENT_MANUAL_ENABLED', Config.PAYMENT_MANUAL_ENABLED),
-        # Gemini database-backed configs
-        'gemini_api_key': '',
-        'has_gemini_api_key': bool(db_config.get('gemini_api_key')),
-        'gemini_model': db_config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-        'gemini_image_model': db_config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
+        **_ai_config_response(db_config),
     }
 
     raw_sensitive = {
@@ -387,16 +384,57 @@ def _parse_usd_rate(data):
     return usd_rate, None
 
 
-def _save_gemini_config(user_id, data):
-    gemini_data = {}
-    if 'gemini_api_key' in data and str(data.get('gemini_api_key') or '').strip():
-        gemini_data['gemini_api_key'] = data['gemini_api_key']
-    if 'gemini_model' in data:
-        gemini_data['gemini_model'] = data['gemini_model']
-    if 'gemini_image_model' in data:
-        gemini_data['gemini_image_model'] = data['gemini_image_model']
-    if gemini_data:
-        save_config(user_id, gemini_data)
+AI_KEY_FIELDS = ('gemini_api_key', 'anthropic_api_key', 'openai_api_key')
+AI_MODEL_FIELDS = ('gemini_model', 'gemini_image_model', 'anthropic_model', 'openai_model', 'openai_image_model')
+AI_MODEL_MAX_CHARS = 100
+
+
+def _ai_config_response(db_config):
+    """AI settings for the admin form. Keys are never returned, only whether one is stored."""
+    response = {
+        'ai_text_provider': db_config.get('ai_text_provider', DEFAULT_TEXT_PROVIDER),
+        'ai_image_provider': db_config.get('ai_image_provider', DEFAULT_IMAGE_PROVIDER),
+    }
+    for field in AI_KEY_FIELDS:
+        response[field] = ''
+        response[f'has_{field}'] = bool(db_config.get(field))
+    for field in AI_MODEL_FIELDS:
+        response[field] = db_config.get(field) or ''
+    return response
+
+
+def _ai_config_updates(user_id, data):
+    """Validate the AI part of the admin form. Returns (updates, error_response)."""
+    updates = {}
+    for field in AI_KEY_FIELDS:
+        value = data.get(field)
+        if isinstance(value, str) and value.strip():
+            updates[field] = value.strip()
+    for field in AI_MODEL_FIELDS:
+        if field not in data:
+            continue
+        value = data.get(field)
+        if not isinstance(value, str) or len(value.strip()) > AI_MODEL_MAX_CHARS:
+            return None, (jsonify({'success': False, 'error': f'Nama model {field} tidak valid.'}), 400)
+        updates[field] = value.strip()
+    for field, allowed in (('ai_text_provider', TEXT_PROVIDERS), ('ai_image_provider', IMAGE_PROVIDERS)):
+        if field not in data:
+            continue
+        if data[field] not in allowed:
+            return None, (jsonify({'success': False, 'error': 'Pilihan provider AI tidak valid.'}), 400)
+        updates[field] = data[field]
+
+    # The selected providers must have a key, either stored or in this request.
+    stored = load_config(user_id)
+    for field in ('ai_text_provider', 'ai_image_provider'):
+        provider = updates.get(field, stored.get(field))
+        key_field = f'{provider}_api_key'
+        if provider and not (updates.get(key_field) or stored.get(key_field)):
+            return None, (jsonify({
+                'success': False,
+                'error': f'Isi API key {PROVIDER_LABELS[provider]} sebelum memilihnya sebagai provider.',
+            }), 400)
+    return updates, None
 
 
 def _system_setting_updates(data, usd_rate):
@@ -454,6 +492,31 @@ def _apply_to_process(updates):
             setattr(Config, k, v)
 
 
+@admin_bp.route('/api/admin/ai-models', methods=['POST'])
+@require_admin
+def list_ai_models(user_id):
+    """Model ids available to a provider key, for the admin model picker.
+
+    Uses the key typed in the form if given (so it can be checked before
+    saving), otherwise the stored one.
+    """
+    data = request.get_json(silent=True) or {}
+    provider = data.get('provider')
+    if provider not in PROVIDER_LABELS:
+        return jsonify({'success': False, 'error': 'Provider tidak dikenal.'}), 400
+    api_key = data.get('api_key') if isinstance(data.get('api_key'), str) else ''
+    api_key = api_key.strip() or load_config(user_id).get(f'{provider}_api_key')
+    if not api_key:
+        return jsonify({'success': False, 'error': f'Isi API key {PROVIDER_LABELS[provider]} terlebih dahulu.'}), 400
+    try:
+        models = list_models(provider, api_key)
+    except Exception as e:
+        logger.warning(f"Listing {provider} models failed: {e}")
+        message = describe_provider_error(e, provider) or 'Gagal memuat daftar model. Periksa API key Anda.'
+        return jsonify({'success': False, 'error': message}), 400
+    return jsonify({'success': True, 'models': models})
+
+
 @admin_bp.route('/api/admin/config', methods=['PUT'])
 @require_admin
 def update_admin_config(user_id):
@@ -464,7 +527,11 @@ def update_admin_config(user_id):
     if rate_error:
         return rate_error
 
-    _save_gemini_config(user_id, data)
+    ai_updates, ai_error = _ai_config_updates(user_id, data)
+    if ai_error:
+        return ai_error
+    if ai_updates:
+        save_config(user_id, ai_updates)
     updates = _system_setting_updates(data, usd_rate)
 
     try:

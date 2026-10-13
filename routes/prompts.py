@@ -4,15 +4,15 @@ from flask import Blueprint, request, jsonify
 
 import rate_limit
 from core_extensions import db, logger, load_config, require_jwt
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 from models import User, WordPressSite
+from services.ai_providers import describe_provider_error, is_retryable_provider_error, text_provider_name
 from services.article_generator import ArticleGenerator
 
 prompts_bp = Blueprint('prompts', __name__)
 
 MAX_OPTIMIZE_PROMPT_CHARS = 12000  # default article prompt is ~5000 chars
 # Free AI helpers (prompt optimizer, title generator) do not charge credits and
-# may run on the admin's Gemini key, so cap how often one user can call them.
+# may run on the admin's shared AI key, so cap how often one user can call them.
 AI_HELPER_RATE_LIMIT = 20
 AI_HELPER_RATE_WINDOW_SECONDS = 3600
 OPTIMIZE_MAX_RETRIES = 3
@@ -148,14 +148,14 @@ Instruksi Revisi (SANGAT PENTING):
 
 
 def check_ai_helper_quota(user_id, bucket='ai_helper', limit=None):
-    """Gate uncharged Gemini helper calls.
+    """Gate uncharged AI helper calls.
 
     Returns None when the call may proceed, otherwise a (response, status)
-    tuple to return from the route. Users with their own Gemini key pay for
-    the calls themselves and are not limited.
+    tuple to return from the route. Users whose active text provider runs on
+    their own key pay for the calls themselves and are not limited.
     """
     try:
-        own_key = (db.get_config(user_id) or {}).get('gemini_api_key')
+        own_key = (load_config(user_id) or {}).get('own_ai_key')
     except Exception as exc:
         logger.error(f'Could not load config for AI helper quota (user {user_id}): {exc}')
         own_key = None
@@ -170,7 +170,7 @@ def check_ai_helper_quota(user_id, bucket='ai_helper', limit=None):
     if credits <= 0:
         return jsonify({
             'success': False,
-            'error': 'Kredit tidak mencukupi. Isi kredit atau atur API Key Gemini Anda sendiri di Settings.'
+            'error': 'Kredit tidak mencukupi. Silakan isi kredit terlebih dahulu.'
         }), 402
 
     allowed, retry_sec = rate_limit.hit(
@@ -267,14 +267,13 @@ def _optimizer_system_prompt(site, prompt_type):
     )
 
 
-def _generate_with_retry(generator, contents):
-    """Call Gemini, retrying transient 500/503 errors with a growing pause."""
+def _generate_with_retry(generator, prompt, system):
+    """Call the text provider, retrying transient errors with a growing pause."""
     for attempt in range(OPTIMIZE_MAX_RETRIES):
         try:
-            return generator.client.models.generate_content(model=generator.model, contents=contents)
+            return generator.generate_text(prompt, system=system)
         except Exception as e:
-            transient = "503" in str(e) or "500" in str(e) or "Unavailable" in str(e)
-            if transient and attempt < OPTIMIZE_MAX_RETRIES - 1:
+            if is_retryable_provider_error(e) and attempt < OPTIMIZE_MAX_RETRIES - 1:
                 time.sleep(2 * (attempt + 1))
                 continue
             raise
@@ -289,13 +288,8 @@ def _strip_code_fence(text):
     return text
 
 
-def _optimize_error_message(error):
-    error_msg = str(error)
-    if "503" in error_msg or "Unavailable" in error_msg or "high demand" in error_msg.lower():
-        return "Server AI Google Gemini sedang mengalami beban tinggi (Kapasitas Penuh). Silakan tunggu sebentar dan coba klik lagi."
-    if "API Key" in error_msg or "403" in error_msg:
-        return "API Key Gemini tidak valid atau tidak memiliki izin akses."
-    return "Gagal mengoptimasi prompt. Silakan coba lagi."
+def _optimize_error_message(error, provider):
+    return describe_provider_error(error, provider) or "Gagal mengoptimasi prompt. Silakan coba lagi."
 
 
 @prompts_bp.route('/api/optimize-prompt', methods=['POST'])
@@ -328,26 +322,18 @@ def api_optimize_prompt(user_id):
             if not site:
                 return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
 
-            api_key = config.get('gemini_api_key')
-            if not api_key:
-                return jsonify({'success': False, 'error': 'API Key Gemini belum diatur di menu Settings.'}), 400
-
             sys_prompt = _optimizer_system_prompt(site, prompt_type)
 
-        generator = ArticleGenerator(
-            api_key,
-            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
+        generator = ArticleGenerator.from_config(config)
+        response_text = _generate_with_retry(
+            generator, f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}", sys_prompt
         )
-        response = _generate_with_retry(
-            generator, [sys_prompt, f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}"]
-        )
-        if not response or not getattr(response, 'text', None):
-            return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 400
+        if not response_text:
+            return jsonify({'success': False, 'error': 'Tidak ada respons yang valid dari AI.'}), 400
 
         # Re-attach the exact OUTPUT FORMAT section the user wrote.
-        optimized_prompt = _strip_code_fence(response.text.strip()) + xml_format_part
+        optimized_prompt = _strip_code_fence(response_text.strip()) + xml_format_part
         return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
     except Exception as e:
         logger.error(f"Optimize prompt error: {e}")
-        return jsonify({'success': False, 'error': _optimize_error_message(e)}), 400
+        return jsonify({'success': False, 'error': _optimize_error_message(e, text_provider_name(config))}), 400

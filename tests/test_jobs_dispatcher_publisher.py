@@ -21,6 +21,7 @@ with patch('database.Database', Mock()):
 
 from services import wp_publisher  # noqa: E402
 from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result  # noqa: E402
+from services.ai_providers import GeminiImage, GeminiText  # noqa: E402
 from services.article_generator import ArticleGenerator, is_retryable_genai_error  # noqa: E402
 
 
@@ -206,19 +207,19 @@ class GeminiRetryPolicyTests(unittest.TestCase):
             genai.errors.ServerError(503, {'error': {'message': 'x', 'status': 'X'}})))
 
     def test_invalid_key_is_not_retried(self):
-        generator = ArticleGenerator.__new__(ArticleGenerator)
-        generator.model = 'm'
-        generator.client = SimpleNamespace(models=SimpleNamespace(
+        client = SimpleNamespace(models=SimpleNamespace(
             generate_content=Mock(side_effect=client_error(401))))
+        generator = ArticleGenerator(GeminiText(None, 'm', client=client))
+        generator.client = client
         with self.assertRaises(genai.errors.ClientError):
             generator.generate_article('Sekolah')
         self.assertEqual(generator.client.models.generate_content.call_count, 1)
 
     def test_image_permission_error_stops_after_one_attempt(self):
-        generator = ArticleGenerator.__new__(ArticleGenerator)
-        generator.image_model = 'gemini-image'
-        generator.client = SimpleNamespace(models=SimpleNamespace(
+        client = SimpleNamespace(models=SimpleNamespace(
             generate_content=Mock(side_effect=client_error(403))))
+        generator = ArticleGenerator(None, image_provider=GeminiImage(None, 'gemini-image', client=client))
+        generator.client = client
         with self.assertRaises(Exception):
             generator.generate_image('Sekolah', 'Judul')
         self.assertEqual(generator.client.models.generate_content.call_count, 1)
@@ -231,7 +232,7 @@ class MigrationBookkeepingTests(unittest.TestCase):
                      'migrate_add_language_column', 'migrate_add_posting_started_at_column',
                      'migrate_add_queue_job_columns', 'migrate_research_quality_columns',
                      'migrate_search_console_foundation', 'migrate_credit_system_tables',
-                     'migrate_add_foreign_keys'):
+                     'migrate_add_foreign_keys', 'migrate_add_ai_provider_columns'):
             setattr(database, name, Mock(side_effect=RuntimeError('boom') if name == failing else None))
         return database
 

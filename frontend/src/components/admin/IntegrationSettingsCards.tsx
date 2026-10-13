@@ -5,25 +5,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ConfigInput, type ConfigFormProps } from './ConfigInput';
 
-const SELECT_CLASS = 'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
-
-const TEXT_MODELS = [
-  { value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash (Terbaru!)' },
-  { value: 'gemini-3.6-pro', label: 'Gemini 3.6 Pro (Baru!)' },
-  { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash (Stabil / Direkomendasikan)' },
-  { value: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (Stabil)' },
-  { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)' },
-  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Lama, Stabil)' },
-  { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (Lama)' },
-];
-
-const IMAGE_MODELS = [
-  { value: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image (Stabil / Direkomendasikan)' },
-  { value: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image (Stabil / Kualitas Tinggi)' },
-  { value: 'gemini-3.1-flash-lite-image', label: 'Gemini 3.1 Flash Lite Image (Stabil / Cepat)' },
-  { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image (Preview)' },
-];
-
 function SettingsCard({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
   return (
     <Card className="border-border/50 shadow-md">
@@ -35,41 +16,6 @@ function SettingsCard({ icon, title, description, children }: { icon: ReactNode;
       </CardHeader>
       <CardContent className="space-y-4">{children}</CardContent>
     </Card>
-  );
-}
-
-export function GeminiSettingsCard(props: ConfigFormProps) {
-  const { config, setConfig } = props;
-  return (
-    <SettingsCard
-      icon={<Shield className="h-5 w-5 text-indigo-500" />}
-      title="Konfigurasi Gemini AI"
-      description="Atur API Google Gemini yang dipakai bersama untuk pembuatan konten."
-    >
-      <ConfigInput {...props} field="gemini_api_key" label="API Key" type="password" savedFlag="has_gemini_api_key" placeholder="API Key Gemini Anda" />
-      <div className="space-y-2">
-        <Label htmlFor="gemini_model">Model Teks</Label>
-        <select
-          id="gemini_model"
-          value={config.gemini_model || 'gemini-3.5-flash'}
-          onChange={(e) => setConfig({ ...config, gemini_model: e.target.value })}
-          className={SELECT_CLASS}
-        >
-          {TEXT_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
-      </div>
-      <div className="space-y-2">
-        <Label htmlFor="gemini_image_model">Model Gambar</Label>
-        <select
-          id="gemini_image_model"
-          value={config.gemini_image_model || 'gemini-3.1-flash-image'}
-          onChange={(e) => setConfig({ ...config, gemini_image_model: e.target.value })}
-          className={SELECT_CLASS}
-        >
-          {IMAGE_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
-      </div>
-    </SettingsCard>
   );
 }
 

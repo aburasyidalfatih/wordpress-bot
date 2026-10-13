@@ -8,7 +8,6 @@ from services.wp_publisher import WordPressPublisher
 from config import Config
 from database import Database
 from models import WordPressSite
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 
 db = Database(Config.DATABASE_URL)
 with db.get_session() as session:
@@ -31,11 +30,7 @@ publisher = WordPressPublisher(
     site_config['wordpress_password']
 )
 
-generator = ArticleGenerator(
-    config['gemini_api_key'],
-    config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-    config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
-)
+generator = ArticleGenerator.from_config(config)
 
 # 2 artikel terakhir yang gagal upload gambar
 articles = [

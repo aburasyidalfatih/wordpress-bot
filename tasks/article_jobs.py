@@ -7,7 +7,6 @@ from rq.exceptions import NoSuchJobError
 from rq.job import Job
 
 import core_extensions
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 from core_extensions import (
     db, logger, load_config, send_telegram_notification, post_to_telegram_channel,
     post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
@@ -330,11 +329,7 @@ def _next_rotated_category(user_id, site_id):
 # ---------------------------------------------------------------------------
 
 def _build_generator(config):
-    return ArticleGenerator(
-        config['gemini_api_key'],
-        config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-        config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
-    )
+    return ArticleGenerator.from_config(config)
 
 
 def _recent_posts_for_links(publisher):

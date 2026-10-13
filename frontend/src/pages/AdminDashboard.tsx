@@ -7,7 +7,8 @@ import { UsersTable } from '@/components/admin/UsersTable';
 import { PendingPaymentsTable } from '@/components/admin/PendingPaymentsTable';
 import { SystemLogsCard } from '@/components/admin/SystemLogsCard';
 import { PaymentSettingsCard } from '@/components/admin/PaymentSettingsCard';
-import { GeminiSettingsCard, GoogleOAuthSettingsCard, NotificationSettingsCard } from '@/components/admin/IntegrationSettingsCards';
+import { AiSettingsCard } from '@/components/admin/AiSettingsCard';
+import { GoogleOAuthSettingsCard, NotificationSettingsCard } from '@/components/admin/IntegrationSettingsCards';
 import Monitor from './Monitor';
 
 type AdminTab = 'overview' | 'users' | 'payments' | 'monitor' | 'settings' | 'logs';
@@ -83,7 +84,7 @@ export default function AdminDashboard() {
           <div className="grid gap-6 md:grid-cols-2">
             <PaymentSettingsCard {...configProps} />
             <div className="space-y-6">
-              <GeminiSettingsCard {...configProps} />
+              <AiSettingsCard {...configProps} />
               <GoogleOAuthSettingsCard {...configProps} />
               <NotificationSettingsCard {...configProps} />
               <div className="flex justify-end">

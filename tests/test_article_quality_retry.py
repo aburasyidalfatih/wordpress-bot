@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from services.ai_providers import GeminiText
 from services.article_generator import ArticleGenerator, ArticleQualityError
 
 
@@ -16,10 +17,10 @@ def response(extra=''):
 
 class ArticleQualityRetryTests(unittest.TestCase):
     def generator(self, responses):
-        generator = ArticleGenerator.__new__(ArticleGenerator)
-        generator.model = 'test-model'
-        generator.client = SimpleNamespace(models=SimpleNamespace(
+        client = SimpleNamespace(models=SimpleNamespace(
             generate_content=Mock(side_effect=responses)))
+        generator = ArticleGenerator(GeminiText(None, 'test-model', client=client))
+        generator.client = client  # the fake SDK client, for call assertions
         return generator
 
     def test_valid_article_needs_only_one_request(self):
