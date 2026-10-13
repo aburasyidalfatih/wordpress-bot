@@ -32,6 +32,11 @@ try:
 except ImportError:
     YouTubeTranscriptApi = None
 
+try:
+    from rq import get_current_job
+except ImportError:
+    get_current_job = None
+
 logger = logging.getLogger(__name__)
 
 # Google Trends seasonality lookup doubles the request rate per category. Enable
@@ -353,10 +358,6 @@ class SEOResearch:
             logger.warning(f"Seasonality lookup failed for '{keyword}': {e}")
             return None
 
-    def get_trend_score(self, keyword, language='id'):
-        """Backward-compatible score accessor; zero means unavailable, never fake average."""
-        return self.get_trend_analysis(keyword, language).get('score') or 0
-
     def _scrape_competitor(self, url, title):
         """Fetch one competitor page and extract its structure.
 
@@ -472,10 +473,6 @@ class SEOResearch:
         self._mark_source('social', 'real' if insights else 'unavailable', count=len(insights))
         return insights
 
-    def _get_fallback_social(self, keyword, language='id'):
-        """Kept for compatibility; fabricated social evidence is intentionally disabled."""
-        return []
-
     def get_youtube_insights(self, keyword, language='id'):
         """Find top YouTube video and get transcript summary"""
         insights = []
@@ -491,7 +488,6 @@ class SEOResearch:
 
             for res in results:
                 url = res.get('href', '')
-                import re
                 match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
                 if match:
                     video_id = match.group(1)
@@ -650,11 +646,7 @@ class SEOResearch:
         logger.info(f"Advanced Researching category: {category_name} with language={language}")
         self.source_status = {}
 
-        try:
-            from rq import get_current_job
-            job = get_current_job()
-        except ImportError:
-            job = None
+        job = get_current_job() if get_current_job else None
 
         def update_progress(prog, msg):
             if job:
@@ -662,7 +654,8 @@ class SEOResearch:
                 job.meta['message'] = msg
                 job.save_meta()
 
-        update_progress(30, f'Gathering evidence for {category_name}...')
+        # Shown to the user by the research job status endpoint.
+        update_progress(30, f'Mengumpulkan bukti untuk {category_name}...')
         collected = self._run_providers(
             independent={
                 'suggestions': lambda: self.get_keyword_suggestions(category_name, limit=10, language=language),
@@ -678,7 +671,7 @@ class SEOResearch:
             },
             label=f" for {category_name}",
         )
-        update_progress(90, f'Scoring evidence for {category_name}...')
+        update_progress(90, f'Menilai bukti untuk {category_name}...')
 
         suggestions = collected.get('suggestions') or []
         trend_analysis = collected.get('trend_analysis') or {'score': None, 'status': 'unavailable'}
@@ -690,7 +683,7 @@ class SEOResearch:
         semantic_context = collected.get('wikipedia') or ''
         news_insights = collected.get('news') or []
 
-        update_progress(95, f'Scoring evidence for {category_name}...')
+        update_progress(95, f'Menilai bukti untuk {category_name}...')
         long_tail_keywords = self.build_long_tail_keywords(category_name, suggestions, questions)
 
         # Keywords produced by the offline fallback are invented, not observed. They
@@ -736,6 +729,6 @@ class SEOResearch:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     seo = SEOResearch()
-    print("Testing advanced research...")
+    logger.info("Testing advanced research...")
     res = seo.research_category("bisnis online")
-    print(json.dumps(res, indent=2))
+    logger.info(json.dumps(res, indent=2))

@@ -22,6 +22,24 @@ search_console_bp = Blueprint('search_console', __name__)
 
 OAUTH_STATE_TTL_SECONDS = 600
 OAUTH_STATE_KEY_PREFIX = 'gsc_oauth_state:'
+GOOGLE_REQUEST_FAILED = 'Permintaan ke Google Search Console gagal. Silakan coba lagi atau hubungkan ulang akun Google.'
+
+
+class _SiteSetupError(SearchConsoleError):
+    """A setup problem on our side whose (Indonesian) message is safe to show the user."""
+
+
+def _user_message(exc):
+    """Message for the UI.
+
+    SearchConsoleError messages are composed by services/search_console.py in
+    Indonesian (status code plus Google's short reason, e.g. a missing
+    permission), so they are safe and actionable to show as-is.
+    """
+    if isinstance(exc, SearchConsoleError):
+        logger.warning(f'Search Console request failed: {exc}')
+        return str(exc) or GOOGLE_REQUEST_FAILED
+    return GOOGLE_REQUEST_FAILED
 
 
 def _store_oauth_nonce(nonce, user_id, site_id):
@@ -76,9 +94,9 @@ def _site_for_user(session, user_id, site_id):
 def _client_for_site(site):
     client_id, client_secret = _google_credentials(site)
     if not client_id or not client_secret:
-        raise SearchConsoleError('Google OAuth belum dikonfigurasi untuk website ini')
+        raise _SiteSetupError('Google OAuth belum dikonfigurasi untuk website ini.')
     if not site.gsc_refresh_token:
-        raise SearchConsoleError('Search Console belum terhubung')
+        raise _SiteSetupError('Search Console belum terhubung.')
     return SearchConsoleClient(client_id, client_secret, refresh_token=site.gsc_refresh_token)
 
 
@@ -142,14 +160,14 @@ def search_console_callback():
             existing_refresh_token = site.gsc_refresh_token
             wordpress_url = site.wordpress_url
             if not client_id or not client_secret:
-                raise SearchConsoleError('Credential OAuth website tidak ditemukan.')
+                raise _SiteSetupError('Credential OAuth website tidak ditemukan.')
 
         tokens = exchange_authorization_code(
             client_id, client_secret, _redirect_uri(), code
         )
         refresh_token = tokens.get('refresh_token') or existing_refresh_token
         if not refresh_token:
-            raise SearchConsoleError('Google tidak memberikan refresh token; hubungkan ulang dengan consent.')
+            raise _SiteSetupError('Google tidak memberikan refresh token; hubungkan ulang dengan consent.')
         client = SearchConsoleClient(
             client_id, client_secret,
             refresh_token=refresh_token,
@@ -174,7 +192,10 @@ def search_console_callback():
         return _frontend_redirect('connected')
     except Exception as exc:
         logger.error(f'Search Console OAuth callback failed: {exc}')
-        message = str(exc) if isinstance(exc, SearchConsoleError) else 'Gagal menghubungkan Search Console.'
+        if isinstance(exc, SearchConsoleError):
+            message = _user_message(exc)
+        else:
+            message = 'Gagal menghubungkan Search Console.'
         return _frontend_redirect('error', message)
 
 
@@ -190,7 +211,7 @@ def list_search_console_properties(user_id, site_id):
             selected = site.gsc_property_url
         return jsonify({'success': True, 'properties': properties, 'selected_property': selected})
     except SearchConsoleError as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 400
+        return jsonify({'success': False, 'error': _user_message(exc)}), 400
 
 
 @search_console_bp.route('/api/search-console/sites/<int:site_id>/property', methods=['PUT'])
@@ -217,7 +238,7 @@ def select_search_console_property(user_id, site_id):
             site.gsc_last_error = None
         return jsonify({'success': True, 'message': 'Property Search Console tersimpan.'})
     except SearchConsoleError as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 400
+        return jsonify({'success': False, 'error': _user_message(exc)}), 400
 
 
 @search_console_bp.route('/api/search-console/sites/<int:site_id>/sync', methods=['POST'])

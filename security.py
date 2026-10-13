@@ -1,63 +1,19 @@
-import os
 import logging
 from cryptography.fernet import Fernet
-from dotenv import load_dotenv
+
+from config import load_or_create_runtime_secret
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
-# Key length for Fernet is 32 bytes URL-safe base64 encoded
+# Lazily created; the key is 32 bytes, URL-safe base64 encoded.
 _fernet_instance = None
-
-def _load_or_create_runtime_secret(env_name, filename, generator):
-    value = os.getenv(env_name)
-    if value:
-        return value
-
-    runtime_dir = os.getenv('AUTOWP_RUNTIME_DIR', 'runtime')
-    secret_file = os.getenv(f'{env_name}_FILE', os.path.join(runtime_dir, filename))
-
-    try:
-        secret_dir = os.path.dirname(secret_file)
-        if secret_dir:
-            os.makedirs(secret_dir, exist_ok=True)
-
-        if os.path.exists(secret_file):
-            with open(secret_file, 'r', encoding='utf-8') as f:
-                value = f.read().strip()
-                if value:
-                    os.environ[env_name] = value
-                    return value
-
-        value = generator()
-        try:
-            with open(secret_file, 'x', encoding='utf-8') as f:
-                f.write(value)
-            try:
-                os.chmod(secret_file, 0o600)
-            except OSError:
-                pass
-        except FileExistsError:
-            with open(secret_file, 'r', encoding='utf-8') as f:
-                existing = f.read().strip()
-                if existing:
-                    value = existing
-
-        os.environ[env_name] = value
-        return value
-    except Exception as e:
-        logger.warning(f"Failed to persist {env_name} to {secret_file}: {e}")
-        value = generator()
-        os.environ[env_name] = value
-        return value
 
 def get_fernet():
     global _fernet_instance
     if _fernet_instance is not None:
         return _fernet_instance
 
-    key = _load_or_create_runtime_secret(
+    key = load_or_create_runtime_secret(
         'FERNET_KEY',
         'fernet_key',
         lambda: Fernet.generate_key().decode()

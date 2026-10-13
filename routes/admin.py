@@ -1,15 +1,31 @@
 import math
 import os
+import threading
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
 
-from core_extensions import db, q, logger, require_admin, send_email_notification, revoke_user_tokens, bump_settings_version
+from core_extensions import (
+    db, q, logger, require_admin, send_email_notification, revoke_user_tokens, bump_settings_version,
+    load_config, save_config,
+)
 from database import Config as DBConfig
 from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
-from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from config import Config, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
 from routes.payments import fulfill_transaction
 
 admin_bp = Blueprint('admin', __name__)
+
+ENV_FILE_PATH = '.env'
+PAYMENT_TOGGLE_KEYS = ('PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED')
+# System settings the admin may edit, in the order they are processed.
+EDITABLE_SYSTEM_SETTINGS = (
+    'TRIPAY_API_KEY', 'TRIPAY_PRIVATE_KEY', 'TRIPAY_MERCHANT_CODE', 'TRIPAY_API_URL',
+    'PAYPAL_CLIENT_ID', 'PAYPAL_SECRET', 'PAYPAL_API_URL', 'PAYMENT_USD_RATE',
+    'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
+    'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SENDER_EMAIL',
+    'STARSENDER_API_KEY', 'STARSENDER_DEVICE_ID',
+    'MANUAL_BANK_NAME', 'MANUAL_BANK_ACCOUNT', 'MANUAL_BANK_HOLDER', 'ADMIN_WHATSAPP',
+) + PAYMENT_TOGGLE_KEYS
 
 SENSITIVE_ADMIN_KEYS = {
     'TRIPAY_API_KEY',
@@ -37,7 +53,7 @@ def bulk_update_year_endpoint(user_id):
     to_year = data.get('to_year')
 
     if not all([site_id, from_year, to_year]):
-        return jsonify({'success': False, 'error': 'Missing site_id, from_year, or to_year'}), 400
+        return jsonify({'success': False, 'error': 'site_id, from_year, dan to_year wajib diisi.'}), 400
 
     try:
         # Enqueue by dotted path against the shared queue. The previous version
@@ -48,10 +64,10 @@ def bulk_update_year_endpoint(user_id):
             user_id, site_id, from_year, to_year,
             job_timeout='1h'
         )
-        return jsonify({'success': True, 'message': 'Bulk update task started', 'job_id': job.id})
+        return jsonify({'success': True, 'message': 'Pembaruan tahun massal dimulai.', 'job_id': job.id})
     except Exception as e:
         logger.error(f"Failed to start bulk update task: {e}")
-        return jsonify({'success': False, 'error': 'Could not start the bulk update task'}), 500
+        return jsonify({'success': False, 'error': 'Gagal memulai pembaruan tahun massal.'}), 500
 
 
 @admin_bp.route('/api/admin/pending-payments', methods=['GET'])
@@ -95,17 +111,17 @@ def approve_payment(user_id, transaction_id):
     with db.get_session() as session:
         tx = session.query(Transaction).filter_by(id=transaction_id).first()
         if not tx:
-            return jsonify({'success': False, 'error': 'Transaction not found'}), 404
+            return jsonify({'success': False, 'error': 'Transaksi tidak ditemukan.'}), 404
 
         if tx.status != 'awaiting_approval':
-            return jsonify({'success': False, 'error': f'Transaction status is {tx.status}, cannot approve'}), 400
+            return jsonify({'success': False, 'error': f'Status transaksi {tx.status}, tidak dapat disetujui.'}), 400
 
         invoice_id = tx.invoice_id
         # Atomic: a double-clicked approve (or two admins) can only credit once.
         credits = fulfill_transaction(session, tx.id, ('awaiting_approval',))
         if credits is None:
             session.rollback()
-            return jsonify({'success': False, 'error': 'Transaction was already processed'}), 409
+            return jsonify({'success': False, 'error': 'Transaksi sudah diproses.'}), 409
         session.commit()
 
         user = session.query(User).filter_by(id=tx.user_id).first()
@@ -114,14 +130,13 @@ def approve_payment(user_id, transaction_id):
 
             # Notify user
             try:
-                import threading
                 subject = f"AutoWP Top-Up Approved - {invoice_id}"
                 body = f"Hello {user.name or 'User'},\n\nGood news! Your top-up order of {credits} credits (invoice: {invoice_id}) has been approved.\nYour credit balance is now: {user.credits}.\n\nThank you for using AutoWP!"
                 threading.Thread(target=send_email_notification, args=(user.email, subject, body)).start()
             except Exception as e:
                 logger.error(f"Error launching payment approval email thread: {e}")
 
-        return jsonify({'success': True, 'message': 'Payment approved successfully'})
+        return jsonify({'success': True, 'message': 'Pembayaran berhasil disetujui.'})
 
 @admin_bp.route('/api/admin/payments/<int:transaction_id>/reject', methods=['POST'])
 @require_admin
@@ -129,10 +144,10 @@ def reject_payment(user_id, transaction_id):
     with db.get_session() as session:
         tx = session.query(Transaction).filter_by(id=transaction_id).first()
         if not tx:
-            return jsonify({'success': False, 'error': 'Transaction not found'}), 404
+            return jsonify({'success': False, 'error': 'Transaksi tidak ditemukan.'}), 404
 
         if tx.status != 'awaiting_approval':
-            return jsonify({'success': False, 'error': f'Transaction status is {tx.status}, cannot reject'}), 400
+            return jsonify({'success': False, 'error': f'Status transaksi {tx.status}, tidak dapat ditolak.'}), 400
 
         updated = session.query(Transaction).filter(
             Transaction.id == tx.id,
@@ -140,10 +155,10 @@ def reject_payment(user_id, transaction_id):
         ).update({Transaction.status: 'failed'}, synchronize_session=False)
         if updated != 1:
             session.rollback()
-            return jsonify({'success': False, 'error': 'Transaction was already processed'}), 409
+            return jsonify({'success': False, 'error': 'Transaksi sudah diproses.'}), 409
         session.commit()
         logger.info(f"Admin {user_id} rejected payment for {tx.invoice_id}")
-        return jsonify({'success': True, 'message': 'Payment rejected'})
+        return jsonify({'success': True, 'message': 'Pembayaran ditolak.'})
 
 @admin_bp.route('/api/admin/users', methods=['GET'])
 @require_admin
@@ -171,30 +186,30 @@ def update_user(user_id, target_user_id):
     with db.get_session() as session:
         user = session.query(User).filter_by(id=target_user_id).first()
         if not user:
-            return jsonify({'success': False, 'error': 'User not found'}), 404
+            return jsonify({'success': False, 'error': 'Pengguna tidak ditemukan.'}), 404
 
         if 'name' in data:
             user.name = str(data['name']).strip()
         if 'role' in data:
             if data['role'] not in ('admin', 'user'):
-                return jsonify({'success': False, 'error': 'Invalid role'}), 400
+                return jsonify({'success': False, 'error': 'Role tidak valid.'}), 400
             # Enforce that you cannot demote yourself
             if target_user_id == user_id and data['role'] != 'admin':
-                return jsonify({'success': False, 'error': 'You cannot remove your own admin status'}), 400
+                return jsonify({'success': False, 'error': 'Anda tidak dapat mencabut status admin Anda sendiri.'}), 400
             user.role = data['role']
         if 'tier' in data:
             if data['tier'] not in ('free', 'pro'):
-                return jsonify({'success': False, 'error': 'Invalid tier'}), 400
+                return jsonify({'success': False, 'error': 'Tier tidak valid.'}), 400
             user.tier = data['tier']
         if 'credits' in data:
             try:
                 user.credits = max(0, int(data['credits']))
             except (TypeError, ValueError):
-                return jsonify({'success': False, 'error': 'Invalid credits value'}), 400
+                return jsonify({'success': False, 'error': 'Nilai kredit tidak valid.'}), 400
         suspended = False
         if 'is_active' in data:
             if target_user_id == user_id and not data['is_active']:
-                return jsonify({'success': False, 'error': 'You cannot suspend yourself'}), 400
+                return jsonify({'success': False, 'error': 'Anda tidak dapat menangguhkan akun Anda sendiri.'}), 400
             suspended = bool(user.is_active) and not bool(data['is_active'])
             user.is_active = bool(data['is_active'])
 
@@ -203,18 +218,18 @@ def update_user(user_id, target_user_id):
             # Kill existing sessions; re-activation still requires a fresh login.
             revoke_user_tokens(target_user_id)
         logger.info(f"Admin {user_id} updated User {target_user_id}")
-        return jsonify({'success': True, 'message': 'User updated successfully'})
+        return jsonify({'success': True, 'message': 'Pengguna berhasil diperbarui.'})
 
 @admin_bp.route('/api/admin/users/<int:target_user_id>', methods=['DELETE'])
 @require_admin
 def delete_user(user_id, target_user_id):
     if target_user_id == user_id:
-        return jsonify({'success': False, 'error': 'You cannot delete yourself'}), 400
+        return jsonify({'success': False, 'error': 'Anda tidak dapat menghapus akun Anda sendiri.'}), 400
 
     with db.get_session() as session:
         user = session.query(User).filter_by(id=target_user_id).first()
         if not user:
-            return jsonify({'success': False, 'error': 'User not found'}), 404
+            return jsonify({'success': False, 'error': 'Pengguna tidak ditemukan.'}), 404
 
         # Cascade delete user data
         session.query(DBConfig).filter_by(user_id=target_user_id).delete()
@@ -227,7 +242,7 @@ def delete_user(user_id, target_user_id):
 
         session.commit()
         logger.info(f"Admin {user_id} deleted User {target_user_id}")
-        return jsonify({'success': True, 'message': 'User deleted successfully'})
+        return jsonify({'success': True, 'message': 'Pengguna berhasil dihapus.'})
 
 @admin_bp.route('/api/admin/stats', methods=['GET'])
 @require_admin
@@ -269,7 +284,7 @@ def get_system_logs(user_id):
     limit = int(request.args.get('limit', 500))
     log_file = 'bot.log'
     if not os.path.exists(log_file):
-        return jsonify({'success': True, 'logs': ['Log file not found.']})
+        return jsonify({'success': True, 'logs': ['File log tidak ditemukan.']})
 
     try:
         with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -278,13 +293,12 @@ def get_system_logs(user_id):
             last_lines = lines[-limit:]
             return jsonify({'success': True, 'logs': last_lines})
     except Exception as e:
-        return jsonify({'success': False, 'error': f"Could not read logs: {e}"}), 500
+        logger.error(f"Could not read {log_file}: {e}")
+        return jsonify({'success': False, 'error': 'Gagal membaca file log.'}), 500
 
 @admin_bp.route('/api/admin/config', methods=['GET'])
 @require_admin
 def get_admin_config(user_id):
-    from config import Config
-    from core_extensions import load_config
     db_config = load_config(user_id)
 
     system_settings = {}
@@ -293,7 +307,7 @@ def get_admin_config(user_id):
     except Exception as e:
         logger.error(f"Error loading system settings in get_admin_config: {e}")
 
-    # Helper helper to convert string booleans
+    # Stored settings are strings; convert them back to their types.
     def is_enabled(key, default_val):
         if key in system_settings:
             return system_settings[key].lower() == 'true'
@@ -305,7 +319,7 @@ def get_admin_config(user_id):
             try:
                 return float(system_settings[key])
             except ValueError:
-                pass
+                pass  # unparsable stored value: fall back to the default
         return default_val
 
     # Helper to convert int
@@ -314,7 +328,7 @@ def get_admin_config(user_id):
             try:
                 return int(system_settings[key])
             except ValueError:
-                pass
+                pass  # unparsable stored value: fall back to the default
         return default_val
 
     config_response = {
@@ -360,24 +374,20 @@ def get_admin_config(user_id):
     })
 
 
-@admin_bp.route('/api/admin/config', methods=['PUT'])
-@require_admin
-def update_admin_config(user_id):
-    from config import Config
-    from core_extensions import save_config
-    data = request.get_json(silent=True) or {}
+def _parse_usd_rate(data):
+    """Validated PAYMENT_USD_RATE from the request: (rate_or_None, error_response_or_None)."""
+    if 'PAYMENT_USD_RATE' not in data:
+        return None, None
+    try:
+        usd_rate = float(str(data['PAYMENT_USD_RATE']).strip())
+    except (TypeError, ValueError):
+        usd_rate = None
+    if usd_rate is None or not math.isfinite(usd_rate) or usd_rate <= 0:
+        return None, (jsonify({'success': False, 'error': 'PAYMENT_USD_RATE harus berupa angka lebih dari 0.'}), 400)
+    return usd_rate, None
 
-    # Validate before saving anything: every PayPal invoice divides by this rate.
-    usd_rate = None
-    if 'PAYMENT_USD_RATE' in data:
-        try:
-            usd_rate = float(str(data['PAYMENT_USD_RATE']).strip())
-        except (TypeError, ValueError):
-            usd_rate = None
-        if usd_rate is None or not math.isfinite(usd_rate) or usd_rate <= 0:
-            return jsonify({'success': False, 'error': 'PAYMENT_USD_RATE must be a number greater than 0'}), 400
 
-    # Save Gemini DB configs
+def _save_gemini_config(user_id, data):
     gemini_data = {}
     if 'gemini_api_key' in data and str(data.get('gemini_api_key') or '').strip():
         gemini_data['gemini_api_key'] = data['gemini_api_key']
@@ -385,40 +395,78 @@ def update_admin_config(user_id):
         gemini_data['gemini_model'] = data['gemini_model']
     if 'gemini_image_model' in data:
         gemini_data['gemini_image_model'] = data['gemini_image_model']
-
     if gemini_data:
         save_config(user_id, gemini_data)
 
-    keys = [
-        'TRIPAY_API_KEY', 'TRIPAY_PRIVATE_KEY', 'TRIPAY_MERCHANT_CODE', 'TRIPAY_API_URL',
-        'PAYPAL_CLIENT_ID', 'PAYPAL_SECRET', 'PAYPAL_API_URL', 'PAYMENT_USD_RATE',
-        'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
-        'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SENDER_EMAIL',
-        'STARSENDER_API_KEY', 'STARSENDER_DEVICE_ID',
-        'MANUAL_BANK_NAME', 'MANUAL_BANK_ACCOUNT', 'MANUAL_BANK_HOLDER', 'ADMIN_WHATSAPP',
-        'PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED'
-    ]
 
+def _system_setting_updates(data, usd_rate):
+    """Normalize the editable system settings present in the request.
+
+    A blank secret means "keep the stored value" and is skipped.
+    """
     updates = {}
-    for k in keys:
-        if k in data:
-            val = data[k]
-            if k in SENSITIVE_ADMIN_KEYS and not str(val or '').strip():
-                continue
-            if k == 'PAYMENT_USD_RATE':
-                val = usd_rate
-            elif k == 'SMTP_PORT':
-                try:
-                    val = int(str(val).strip())
-                except ValueError:
-                    val = 587
-            elif k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
-                val = 'true' if val is True or str(val).lower() == 'true' else 'false'
-            else:
-                val = str(val).strip()
-            updates[k] = val
+    for k in EDITABLE_SYSTEM_SETTINGS:
+        if k not in data:
+            continue
+        val = data[k]
+        if k in SENSITIVE_ADMIN_KEYS and not str(val or '').strip():
+            continue
+        if k == 'PAYMENT_USD_RATE':
+            val = usd_rate
+        elif k == 'SMTP_PORT':
+            try:
+                val = int(str(val).strip())
+            except ValueError:
+                val = 587
+        elif k in PAYMENT_TOGGLE_KEYS:
+            val = 'true' if val is True or str(val).lower() == 'true' else 'false'
+        else:
+            val = str(val).strip()
+        updates[k] = val
+    return updates
 
-    # Save to PostgreSQL database system_settings table
+
+def _read_env_file(env_path):
+    env_vars = {}
+    if not os.path.exists(env_path):
+        return env_vars
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except Exception as e:
+        logger.error(f"Error reading .env: {e}")
+        return env_vars
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            key, value = line.split('=', 1)
+            env_vars[key.strip()] = value.strip()
+    return env_vars
+
+
+def _apply_to_process(updates):
+    """Make the new values effective in this process immediately."""
+    for k, v in updates.items():
+        os.environ[k] = str(v)
+        if k in PAYMENT_TOGGLE_KEYS:
+            setattr(Config, k, v == 'true')
+        else:
+            setattr(Config, k, v)
+
+
+@admin_bp.route('/api/admin/config', methods=['PUT'])
+@require_admin
+def update_admin_config(user_id):
+    data = request.get_json(silent=True) or {}
+
+    # Validate before saving anything: every PayPal invoice divides by this rate.
+    usd_rate, rate_error = _parse_usd_rate(data)
+    if rate_error:
+        return rate_error
+
+    _save_gemini_config(user_id, data)
+    updates = _system_setting_updates(data, usd_rate)
+
     try:
         db.save_system_settings(updates)
         # Other gunicorn workers / RQ workers re-apply settings when this changes.
@@ -426,39 +474,17 @@ def update_admin_config(user_id):
     except Exception as e:
         logger.error(f"Failed to save system settings to DB: {e}")
 
-    env_path = '.env'
-
-    lines = []
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except Exception as e:
-            logger.error(f"Error reading .env: {e}")
-
-    env_vars = {}
-    for line in lines:
-        line = line.strip()
-        if line and not line.startswith('#') and '=' in line:
-            parts = line.split('=', 1)
-            if len(parts) == 2:
-                env_vars[parts[0].strip()] = parts[1].strip()
-
-    for k, v in updates.items():
-        env_vars[k] = str(v)
-        os.environ[k] = str(v)
-        if k in ['PAYMENT_TRIPAY_ENABLED', 'PAYMENT_PAYPAL_ENABLED', 'PAYMENT_MANUAL_ENABLED']:
-            setattr(Config, k, v == 'true')
-        else:
-            setattr(Config, k, v)
+    env_vars = _read_env_file(ENV_FILE_PATH)
+    env_vars.update({k: str(v) for k, v in updates.items()})
+    _apply_to_process(updates)
 
     try:
-        with open(env_path, 'w', encoding='utf-8') as f:
+        with open(ENV_FILE_PATH, 'w', encoding='utf-8') as f:
             for k, v in sorted(env_vars.items()):
                 f.write(f"{k}={v}\n")
     except Exception as e:
         logger.error(f"Error writing to .env: {e}")
-        return jsonify({'success': False, 'error': f"Failed to save to env: {e}"}), 500
+        return jsonify({'success': False, 'error': 'Gagal menyimpan konfigurasi ke file .env.'}), 500
 
     logger.info(f"Admin {user_id} updated system settings in .env and memory")
-    return jsonify({'success': True, 'message': 'Configurations updated successfully'})
+    return jsonify({'success': True, 'message': 'Konfigurasi berhasil diperbarui.'})

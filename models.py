@@ -1,8 +1,9 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, JSON, Float, Index, ForeignKey, UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from datetime import datetime
 import logging
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from security import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
@@ -47,12 +48,10 @@ class Config(Base):
 
     @property
     def gemini_api_key(self):
-        from security import decrypt_value
         return decrypt_value(self._gemini_api_key)
 
     @gemini_api_key.setter
     def gemini_api_key(self, value):
-        from security import encrypt_value
         self._gemini_api_key = encrypt_value(value)
 
 class WordPressSite(Base):
@@ -123,44 +122,36 @@ class WordPressSite(Base):
 
     @property
     def wordpress_password(self):
-        from security import decrypt_value
         return decrypt_value(self._wordpress_password)
 
     @wordpress_password.setter
     def wordpress_password(self, value):
-        from security import encrypt_value
         self._wordpress_password = encrypt_value(value)
 
     @property
     def telegram_bot_token(self):
-        from security import decrypt_value
         return decrypt_value(self._telegram_bot_token)
 
     @telegram_bot_token.setter
     def telegram_bot_token(self, value):
-        from security import encrypt_value
         self._telegram_bot_token = encrypt_value(value)
 
     @property
     def facebook_access_token(self):
-        from security import decrypt_value
         return decrypt_value(self._facebook_access_token)
 
     @facebook_access_token.setter
     def facebook_access_token(self, value):
-        from security import encrypt_value
         self._facebook_access_token = encrypt_value(value)
 
     @property
     def pinterest_access_token(self):
-        from security import decrypt_value
         if not self._pinterest_access_token:
             return None
         return decrypt_value(self._pinterest_access_token)
 
     @pinterest_access_token.setter
     def pinterest_access_token(self, value):
-        from security import encrypt_value
         if not value:
             self._pinterest_access_token = None
             return
@@ -168,72 +159,58 @@ class WordPressSite(Base):
 
     @property
     def twitter_api_key(self):
-        from security import decrypt_value
         return decrypt_value(self._twitter_api_key)
 
     @twitter_api_key.setter
     def twitter_api_key(self, value):
-        from security import encrypt_value
         self._twitter_api_key = encrypt_value(value)
 
     @property
     def twitter_api_secret(self):
-        from security import decrypt_value
         return decrypt_value(self._twitter_api_secret)
 
     @twitter_api_secret.setter
     def twitter_api_secret(self, value):
-        from security import encrypt_value
         self._twitter_api_secret = encrypt_value(value)
 
     @property
     def twitter_access_token(self):
-        from security import decrypt_value
         return decrypt_value(self._twitter_access_token)
 
     @twitter_access_token.setter
     def twitter_access_token(self, value):
-        from security import encrypt_value
         self._twitter_access_token = encrypt_value(value)
 
     @property
     def twitter_access_secret(self):
-        from security import decrypt_value
         return decrypt_value(self._twitter_access_secret)
 
     @twitter_access_secret.setter
     def twitter_access_secret(self, value):
-        from security import encrypt_value
         self._twitter_access_secret = encrypt_value(value)
 
     @property
     def threads_access_token(self):
-        from security import decrypt_value
         return decrypt_value(self._threads_access_token)
 
     @threads_access_token.setter
     def threads_access_token(self, value):
-        from security import encrypt_value
         self._threads_access_token = encrypt_value(value)
 
     @property
     def gsc_refresh_token(self):
-        from security import decrypt_value
         return decrypt_value(self._gsc_refresh_token)
 
     @gsc_refresh_token.setter
     def gsc_refresh_token(self, value):
-        from security import encrypt_value
         self._gsc_refresh_token = encrypt_value(value) if value else None
 
     @property
     def gsc_client_secret(self):
-        from security import decrypt_value
         return decrypt_value(self._gsc_client_secret)
 
     @gsc_client_secret.setter
     def gsc_client_secret(self, value):
-        from security import encrypt_value
         self._gsc_client_secret = encrypt_value(value) if value else None
 
 

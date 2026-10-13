@@ -48,7 +48,7 @@ class ArticleQualityRetryTests(unittest.TestCase):
         with self.assertRaises(ArticleQualityError) as caught:
             generator.generate_checked_article('Sekolah')
         self.assertEqual(caught.exception.article_title, 'Panduan Sekolah')
-        self.assertIn('after 2 attempts', str(caught.exception))
+        self.assertIn('setelah 2 percobaan', str(caught.exception))
         self.assertEqual(generator.client.models.generate_content.call_count, 2)
 
     def test_transport_failure_does_not_trigger_quality_retry(self):

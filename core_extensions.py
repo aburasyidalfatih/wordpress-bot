@@ -1,12 +1,17 @@
+import base64
 import html as html_module
 import os
+import re
 import secrets
+import smtplib
 import sys
 import logging
 import threading
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
 from functools import wraps
 from time import time
@@ -15,8 +20,10 @@ import requests
 from flask import request, jsonify
 from redis import Redis
 from rq import Queue
+from sqlalchemy import text
 
 from database import Database
+from models import User
 from ml_optimizer import ContentOptimizer
 from trending_research import TrendingResearch
 from config import Config, DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
@@ -70,7 +77,6 @@ def _cache_put(cache, key, value):
 def _get_admin_user_id():
     """Return the id of the admin account, or None if there is no admin."""
     try:
-        from models import User
         with db.get_session() as session:
             admin = session.query(User).filter_by(role='admin').order_by(User.id).first()
             return admin.id if admin else None
@@ -186,7 +192,6 @@ def load_system_settings():
 
 
 def _read_settings_version():
-    from sqlalchemy import text
     with db.get_session() as session:
         return session.execute(
             text("SELECT value FROM system_settings WHERE key = :k"),
@@ -310,7 +315,6 @@ def _user_auth_state(user_id):
     if entry and time() - entry['timestamp'] < USER_AUTH_CACHE_TTL_SECONDS:
         return entry['data']
 
-    from models import User
     with db.get_session() as session:
         row = session.query(User.is_active, User.role).filter(User.id == user_id).first()
     state = None
@@ -356,6 +360,16 @@ def authenticate_token(token):
     return user_id
 
 
+def set_auth_cookie(response, token):
+    """Store a login token in the httponly cookie the frontend authenticates with."""
+    response.set_cookie(
+        'auth_token', token, httponly=True, samesite='Lax',
+        secure=os.environ.get('FLASK_ENV') != 'development',
+        max_age=int(ACCESS_TOKEN_TTL.total_seconds()),
+    )
+    return response
+
+
 def get_request_token():
     token = request.cookies.get('auth_token')
     auth_header = request.headers.get('Authorization')
@@ -372,15 +386,15 @@ def require_jwt(f):
 
         logger.debug(f"JWT Check for path: {request.path}, token_present: {bool(token)}")
         if not token:
-            return jsonify({'success': False, 'error': 'Missing or invalid token'}), 401
+            return jsonify({'success': False, 'error': 'Sesi tidak valid. Silakan masuk kembali.'}), 401
 
         try:
             user_id = authenticate_token(token)
         except Exception as e:
             logger.error(f'JWT user lookup failed: {e}')
-            return jsonify({'success': False, 'error': 'Authentication temporarily unavailable'}), 503
+            return jsonify({'success': False, 'error': 'Layanan autentikasi sedang tidak tersedia. Silakan coba lagi sebentar lagi.'}), 503
         if not user_id:
-            return jsonify({'success': False, 'error': 'Invalid or expired token'}), 401
+            return jsonify({'success': False, 'error': 'Sesi tidak valid atau sudah kedaluwarsa. Silakan masuk kembali.'}), 401
 
         return f(user_id, *args, **kwargs)
 
@@ -391,15 +405,50 @@ def require_admin(f):
     @wraps(f)
     @require_jwt
     def decorated_function(user_id, *args, **kwargs):
-        from models import User
         with db.get_session() as session:
             user = session.query(User).filter_by(id=user_id).first()
             if not user or user.role != 'admin':
-                return jsonify({'success': False, 'error': 'Admin privilege required'}), 403
+                return jsonify({'success': False, 'error': 'Hanya admin yang dapat mengakses fitur ini.'}), 403
         return f(user_id, *args, **kwargs)
     return decorated_function
 
 # Social media posting helpers
+HTML_TAG_RE = re.compile('<[^<]+?>')
+OG_IMAGE_RE = re.compile(r'<meta property="og:image" content="([^"]+)"')
+FACEBOOK_GRAPH_URL = "https://graph.facebook.com/v18.0"
+FACEBOOK_MAX_PARAGRAPHS = 3
+
+
+def _strip_tags(value):
+    return HTML_TAG_RE.sub('', value)
+
+
+def _rendered(value):
+    """WordPress REST fields come as {'rendered': ...}; generated articles as plain strings."""
+    if isinstance(value, dict):
+        return value.get('rendered', '')
+    return value
+
+
+def _hashtag(article):
+    keyword = article.get('focus_keyword', '').replace(' ', '').title()
+    return f"#{keyword}" if keyword else ""
+
+
+def _fetch_og_image(post_url):
+    """Return the featured image URL a published post advertises, if any."""
+    if not post_url:
+        return None
+    try:
+        resp = requests.get(post_url, timeout=5)
+        match = OG_IMAGE_RE.search(resp.text)
+        return match.group(1) if match else None
+    except Exception as e:
+        # The post is still shared, just without a picture.
+        logger.warning(f"Could not read og:image from {post_url}: {e}")
+        return None
+
+
 def send_telegram_notification(config, message):
     """Send notification to Telegram"""
     if not config.get('telegram_enabled'):
@@ -441,19 +490,16 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
         channel_id = f"@{channel_id}"
 
     try:
-        import re
         title = html_module.escape(article.get('title', ''))
         excerpt = article.get('excerpt', '')
-        excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:400]
+        excerpt_clean = _strip_tags(excerpt).strip()[:400]
         language = config.get('language', 'id')
         read_more_text = "Read the full article:" if language == 'en' else "Baca artikel lengkap"
-
-        keyword = article.get('focus_keyword', '').replace(' ', '').title()
-        hashtags = f"#{keyword}" if keyword else ""
+        hashtags = _hashtag(article)
 
         message = f"""📰 <b>{title}</b>\n\n{excerpt_clean}...\n\n👉 <a href="{post_url}">{read_more_text}</a>\n\n{hashtags}"""
 
-        # M9: Truncate caption to Telegram's 1024-char limit for photo captions
+        # Telegram caps photo captions at 1024 characters.
         if len(message) > 1024:
             message = message[:1021] + '...'
 
@@ -486,6 +532,56 @@ def post_to_telegram_channel(config, article, post_url, image_data=None):
         logger.error(f"Telegram channel post error: {e}")
         return False
 
+
+def _facebook_paragraphs(article):
+    """Up to three substantial paragraphs (about three sentences each) of plain text."""
+    content = _rendered(article.get('content', ''))
+    content_clean = html_module.unescape(_strip_tags(content))
+    content_clean = re.sub(r'\s+', ' ', content_clean).strip()
+    sentences = re.split(r'(?<=[.!?])\s+', content_clean)
+
+    paragraphs = []
+    current_para = []
+    for sentence in sentences:
+        if len(sentence.strip()) < 20:  # Skip very short sentences
+            continue
+        current_para.append(sentence.strip())
+
+        if len(current_para) >= 3:
+            para_text = ' '.join(current_para)
+            if len(para_text) > 100:  # Only add if substantial
+                paragraphs.append(para_text)
+                current_para = []
+            if len(paragraphs) >= FACEBOOK_MAX_PARAGRAPHS:
+                break
+
+    if current_para and len(paragraphs) < FACEBOOK_MAX_PARAGRAPHS:
+        paragraphs.append(' '.join(current_para))
+
+    text_block = '\n\n'.join(paragraphs[:FACEBOOK_MAX_PARAGRAPHS])
+    if not text_block:
+        excerpt = article.get('excerpt', '')
+        text_block = html_module.unescape(_strip_tags(excerpt).strip()[:500])
+    return text_block
+
+
+def _comment_link_on_facebook(post_id, post_url, access_token, language):
+    """The article link goes in a comment rather than the post itself."""
+    try:
+        read_more_text = "Read the full article:" if language == 'en' else "Baca artikel lengkapnya:"
+        comment_response = requests.post(
+            f"{FACEBOOK_GRAPH_URL}/{post_id}/comments",
+            data={'access_token': access_token, 'message': f"📖 {read_more_text}\n{post_url}"},
+            timeout=10
+        )
+        if comment_response.status_code == 200:
+            logger.info("Facebook comment with link posted successfully")
+        else:
+            logger.warning(f"Facebook comment failed: {comment_response.text}")
+    except Exception as e:
+        logger.error(f"Facebook comment error: {e}")
+
+
 def post_to_facebook_page(config, article, post_url, image_data=None):
     """Post article to Facebook Page with image and engaging long caption"""
     if not config.get('facebook_enabled'):
@@ -500,120 +596,32 @@ def post_to_facebook_page(config, article, post_url, image_data=None):
         return False
 
     try:
-        import re
-        import html
+        # Just the opening paragraphs + hashtags (no title, no link).
+        message = f"{_facebook_paragraphs(article).strip()}\n\n{_hashtag(article)}"
 
-        # Get content - handle both dict and string
-        content = article.get('content', '')
-        if isinstance(content, dict):
-            content = content.get('rendered', '')
-
-        # Remove HTML tags
-        content_clean = re.sub('<[^<]+?>', '', content)
-        # Decode HTML entities (&#8216; -> ')
-        content_clean = html.unescape(content_clean)
-        # Remove extra whitespace
-        content_clean = re.sub(r'\s+', ' ', content_clean).strip()
-
-        # Split by sentence to get proper paragraphs
-        sentences = re.split(r'(?<=[.!?])\s+', content_clean)
-
-        # Build 3 paragraphs (3-4 sentences each)
-        paragraphs = []
-        current_para = []
-        sentence_count = 0
-
-        for sentence in sentences:
-            if len(sentence.strip()) < 20:  # Skip very short sentences
-                continue
-            current_para.append(sentence.strip())
-            sentence_count += 1
-
-            # Complete paragraph after 3-4 sentences
-            if sentence_count >= 3:
-                para_text = ' '.join(current_para)
-                if len(para_text) > 100:  # Only add if substantial
-                    paragraphs.append(para_text)
-                    current_para = []
-                    sentence_count = 0
-
-                if len(paragraphs) >= 3:  # Stop after 3 paragraphs
-                    break
-
-        # If we have remaining sentences, add as last paragraph
-        if current_para and len(paragraphs) < 3:
-            paragraphs.append(' '.join(current_para))
-
-        # Take only first 3 paragraphs
-        first_3_paragraphs = '\n\n'.join(paragraphs[:3])
-
-        # If no paragraphs found, use excerpt
-        if not first_3_paragraphs:
-            excerpt = article.get('excerpt', '')
-            first_3_paragraphs = html.unescape(re.sub('<[^<]+?>', '', excerpt).strip()[:500])
-
-        keyword = article.get('focus_keyword', '').replace(' ', '').title()
-        hashtags = f"#{keyword}" if keyword else ""
-
-        # Build message: Just 3 paragraphs + hashtags (NO title, NO link)
-        message = f"{first_3_paragraphs.strip()}\n\n{hashtags}"
-
-        # Get image URL from WordPress post
-        image_url = None
-        if post_url:
-            try:
-                resp = requests.get(post_url, timeout=5)
-                img_match = re.search(r'<meta property="og:image" content="([^"]+)"', resp.text)
-                if img_match:
-                    image_url = img_match.group(1)
-            except Exception:
-                pass
-
-        # Post with photo
-        post_id = None
+        image_url = _fetch_og_image(post_url)
         if image_url:
-            url = f"https://graph.facebook.com/v18.0/{page_id}/photos"
-            data = {
-                'access_token': access_token,
-                'message': message,
-                'url': image_url
-            }
-            response = requests.post(url, data=data, timeout=30)
+            response = requests.post(
+                f"{FACEBOOK_GRAPH_URL}/{page_id}/photos",
+                data={'access_token': access_token, 'message': message, 'url': image_url},
+                timeout=30
+            )
         else:
-            # Fallback to feed post without link
-            url = f"https://graph.facebook.com/v18.0/{page_id}/feed"
-            data = {
-                'access_token': access_token,
-                'message': message
-            }
-            response = requests.post(url, data=data, timeout=10)
+            response = requests.post(
+                f"{FACEBOOK_GRAPH_URL}/{page_id}/feed",
+                data={'access_token': access_token, 'message': message},
+                timeout=10
+            )
 
-        if response.status_code == 200:
-            post_id = response.json().get('id')
-            logger.info(f"Facebook post successful to Page ID: {page_id}, Post ID: {post_id}")
-
-            # Post link as comment
-            if post_id and post_url:
-                try:
-                    language = config.get('language', 'id')
-                    read_more_text = "Read the full article:" if language == 'en' else "Baca artikel lengkapnya:"
-                    comment_url = f"https://graph.facebook.com/v18.0/{post_id}/comments"
-                    comment_data = {
-                        'access_token': access_token,
-                        'message': f"📖 {read_more_text}\n{post_url}"
-                    }
-                    comment_response = requests.post(comment_url, data=comment_data, timeout=10)
-                    if comment_response.status_code == 200:
-                        logger.info("Facebook comment with link posted successfully")
-                    else:
-                        logger.warning(f"Facebook comment failed: {comment_response.text}")
-                except Exception as e:
-                    logger.error(f"Facebook comment error: {e}")
-
-            return True
-        else:
+        if response.status_code != 200:
             logger.error(f"Facebook post failed: {response.status_code} - {response.text}")
             return False
+
+        post_id = response.json().get('id')
+        logger.info(f"Facebook post successful to Page ID: {page_id}, Post ID: {post_id}")
+        if post_id and post_url:
+            _comment_link_on_facebook(post_id, post_url, access_token, config.get('language', 'id'))
+        return True
     except Exception as e:
         logger.error(f"Facebook post error: {e}")
         return False
@@ -636,31 +644,15 @@ def post_to_pinterest(config, article, post_url, image_data=None):
         return False
 
     try:
-        import html
-        import base64
+        title = html_module.unescape(_rendered(article.get('title', '')))
 
-        # Get content - handle both dict and string
-        content = article.get('content', '')
-        if isinstance(content, dict):
-            content = content.get('rendered', '')
-
-        title = article.get('title', '')
-        if isinstance(title, dict):
-            title = title.get('rendered', '')
-
-        title = html.unescape(title)
-
-        # We can extract a description from excerpt or just use the title
-        description = html.unescape(article.get('excerpt', title))
-        # Remove HTML from description
-        import re
+        # Use the excerpt as description, falling back to the title.
+        description = html_module.unescape(article.get('excerpt', title))
         description = re.sub('<[^<]+>', '', description).strip()
         if len(description) > 490:
             description = description[:490] + '...'
 
-        # Encode image to base64
-        img_bytes = image_data.getvalue()
-        base64_img = base64.b64encode(img_bytes).decode('utf-8')
+        base64_img = base64.b64encode(image_data.getvalue()).decode('utf-8')
 
         url = "https://api.pinterest.com/v5/pins"
         headers = {
@@ -684,8 +676,7 @@ def post_to_pinterest(config, article, post_url, image_data=None):
         response = requests.post(url, headers=headers, json=payload, timeout=30)
 
         if response.status_code in (200, 201):
-            pin_data = response.json()
-            pin_id = pin_data.get('id')
+            pin_id = response.json().get('id')
             logger.info(f"Pinterest post successful to Board ID: {board_id}, Pin ID: {pin_id}")
             return True
         else:
@@ -710,8 +701,9 @@ def post_to_twitter(config, article, post_url, image_data=None):
         return False
 
     try:
+        # Imported lazily: tweepy is only needed by sites that post to X, and a
+        # missing install must not stop the web app from starting.
         import tweepy
-        import re
 
         client = tweepy.Client(
             consumer_key=api_key,
@@ -722,10 +714,8 @@ def post_to_twitter(config, article, post_url, image_data=None):
 
         title = article.get('title', '')
         excerpt = article.get('excerpt', '')
-        excerpt_clean = re.sub('<[^<]+?>', '', excerpt).strip()[:200]
-
-        keyword = article.get('focus_keyword', '').replace(' ', '').title()
-        hashtags = f"#{keyword}" if keyword else ""
+        excerpt_clean = _strip_tags(excerpt).strip()[:200]
+        hashtags = _hashtag(article)
 
         tweet = f"{title}\n\n{excerpt_clean}...\n\n{post_url}\n\n{hashtags}"
 
@@ -751,51 +741,29 @@ def post_to_threads(config, article, post_url, image_data=None):
         return False
 
     try:
-        import re
-        import html
-
-        # Get content - handle both dict and string
-        content = article.get('content', '')
-        if isinstance(content, dict):
-            content = content.get('rendered', '')
-
-        # Get excerpt or fallback to first paragraph
         excerpt = article.get('excerpt', '')
         if excerpt:
-            content_clean = html.unescape(re.sub('<[^<]+?>', '', excerpt)).strip()
-            first_paragraph = content_clean
+            first_paragraph = html_module.unescape(_strip_tags(excerpt)).strip()
         else:
-            # Fallback
-            content_clean = re.sub('<[^<]+?>', '', content)
-            content_clean = html.unescape(content_clean)
+            content = _rendered(article.get('content', ''))
+            content_clean = html_module.unescape(_strip_tags(content))
             content_clean = re.sub(r'\s+', ' ', content_clean).strip()
             sentences = re.split(r'(?<=[.!?])\s+', content_clean)
             first_para_sentences = [s.strip() for s in sentences[:4] if len(s.strip()) > 20]
             first_paragraph = ' '.join(first_para_sentences[:3])
 
-        keyword = article.get('focus_keyword', '').replace(' ', '').title()
-        hashtags = f"#{keyword}" if keyword else ""
-
+        hashtags = _hashtag(article)
         language = config.get('language', 'id')
         read_more_text = "Read more:" if language == 'en' else "Baca selengkapnya:"
 
         # Build text: engaging excerpt + link + dynamic hashtags
-        text = f"{first_paragraph}\n\n📖 {read_more_text}\n{post_url}\n\n{hashtags}"
+        post_text = f"{first_paragraph}\n\n📖 {read_more_text}\n{post_url}\n\n{hashtags}"
 
         # Limit to 500 chars (Threads limit)
-        if len(text) > 500:
-            text = first_paragraph[:430] + f"...\n\n📖 {post_url}\n\n{hashtags}"
+        if len(post_text) > 500:
+            post_text = first_paragraph[:430] + f"...\n\n📖 {post_url}\n\n{hashtags}"
 
-        # Get image URL from WordPress post
-        image_url = None
-        if post_url:
-            try:
-                resp = requests.get(post_url, timeout=5)
-                img_match = re.search(r'<meta property="og:image" content="([^"]+)"', resp.text)
-                if img_match:
-                    image_url = img_match.group(1)
-            except Exception:
-                pass
+        image_url = _fetch_og_image(post_url)
 
         # Step 1: Create container
         url = f"https://graph.threads.net/v1.0/{user_id}/threads"
@@ -803,13 +771,13 @@ def post_to_threads(config, article, post_url, image_data=None):
             post_data = {
                 'media_type': 'IMAGE',
                 'image_url': image_url,
-                'text': text,
+                'text': post_text,
                 'access_token': access_token
             }
         else:
             post_data = {
                 'media_type': 'TEXT',
-                'text': text,
+                'text': post_text,
                 'access_token': access_token
             }
 
@@ -840,11 +808,6 @@ def post_to_threads(config, article, post_url, image_data=None):
 
 def send_email_notification(to_email, subject, body_text):
     """Send an email notification using SMTP Mailketing"""
-    from config import Config
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-
     if not Config.SMTP_HOST or not Config.SMTP_USER or not Config.SMTP_PASSWORD:
         logger.info("SMTP settings not configured. Skipping email notification.")
         return False
@@ -869,8 +832,6 @@ def send_email_notification(to_email, subject, body_text):
 
 def send_whatsapp_notification(to_number, message):
     """Send WhatsApp notification using Starsender WA Gateway"""
-    from config import Config
-
     if not Config.STARSENDER_API_KEY or not Config.STARSENDER_DEVICE_ID:
         logger.info("Starsender WA Gateway settings not configured. Skipping WhatsApp notification.")
         return False

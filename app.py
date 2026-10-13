@@ -1,16 +1,14 @@
-from flask import Flask, request, send_from_directory, jsonify
-from werkzeug.middleware.proxy_fix import ProxyFix
+import atexit
 import os
 import signal
-import atexit
+
+from flask import Flask, request, send_from_directory, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
 from core_extensions import db, logger, load_system_settings, refresh_system_settings_if_changed, decode_access_token
-
-# ---- Rate Limiting ----
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
 from routes.auth import auth_bp
 from routes.queue import queue_bp
 from routes.research import research_bp
@@ -19,10 +17,11 @@ from routes.settings import settings_bp
 from routes.monitor import monitor_bp
 from routes.sites import sites_bp
 from routes.prompts import prompts_bp
-from routes.payments import payments_bp, tripay_webhook
+from routes.payments import payments_bp, tripay_webhook, get_payment_settings, tripay_is_mock, paypal_is_mock
 from routes.admin import admin_bp
 from routes.search_console import search_console_bp
 
+# ---- Rate Limiting ----
 # RATELIMIT_STORAGE_URI can be set via env var to point to Redis
 _rate_limit_uri = os.getenv('RATELIMIT_STORAGE_URI', Config.REDIS_URL)
 
@@ -38,7 +37,7 @@ def _rate_limit_key():
             if user_id:
                 return f"user:{user_id}"
     except Exception:
-        pass
+        pass  # missing/invalid/expired token: limit by client IP instead
     return get_remote_address()
 
 limiter = Limiter(
@@ -63,8 +62,6 @@ def _warn_on_sandbox_payment_urls():
     Both gateway URLs default to sandbox, so a deployment that sets real API keys
     but forgets the URL would silently transact against sandbox.
     """
-    from routes.payments import get_payment_settings, tripay_is_mock, paypal_is_mock
-
     settings = get_payment_settings()
 
     if not tripay_is_mock(settings) and 'sandbox' in (settings['TRIPAY_API_URL'] or '').lower():
@@ -132,9 +129,8 @@ def refresh_settings_from_other_workers():
 @app.errorhandler(413)
 def request_too_large(e):
     limit_mb = (app.config.get('MAX_CONTENT_LENGTH') or 0) // (1024 * 1024)
-    return jsonify({'success': False, 'error': f'Request is too large (max {limit_mb} MB).'}), 413
+    return jsonify({'success': False, 'error': f'Ukuran permintaan terlalu besar (maksimal {limit_mb} MB).'}), 413
 
-# Background tasks & workers retained in app namespace for RQ compatibility
 
 def shutdown():
     """Graceful shutdown"""
@@ -160,8 +156,8 @@ def serve_frontend(path):
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frontend', 'dist')
     if path != "" and os.path.exists(os.path.join(frontend_dir, path)):
         return send_from_directory(frontend_dir, path)
-    else:
-        return send_from_directory(frontend_dir, 'index.html')
+    # Client-side routes (e.g. /billing) are handled by the SPA.
+    return send_from_directory(frontend_dir, 'index.html')
 
 
 # Uploaded receipts that may be displayed inline; anything else is forced to download.

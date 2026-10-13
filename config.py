@@ -1,6 +1,9 @@
+import logging
 import os
 import secrets
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -20,7 +23,13 @@ def _require_postgres_database_url():
 
     return value
 
-def _load_or_create_runtime_secret(env_name, filename, generator):
+def load_or_create_runtime_secret(env_name, filename, generator):
+    """Return a secret from the environment, else from a runtime file, else a new one.
+
+    A newly generated secret is persisted (0600) so it survives restarts and is
+    shared by every process using the same runtime directory. If the file cannot
+    be written the secret is still returned, but only lives as long as the process.
+    """
     value = os.getenv(env_name)
     if value:
         return value
@@ -47,7 +56,7 @@ def _load_or_create_runtime_secret(env_name, filename, generator):
             try:
                 os.chmod(secret_file, 0o600)
             except OSError:
-                pass
+                pass  # e.g. Windows / filesystems without POSIX permissions
         except FileExistsError:
             with open(secret_file, 'r', encoding='utf-8') as f:
                 existing = f.read().strip()
@@ -56,7 +65,8 @@ def _load_or_create_runtime_secret(env_name, filename, generator):
 
         os.environ[env_name] = value
         return value
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to persist {env_name} to {secret_file}: {e}")
         value = generator()
         os.environ[env_name] = value
         return value
@@ -76,7 +86,7 @@ class Config:
     # Gemini (mirrors the module-level constants above)
     GEMINI_MODEL = DEFAULT_GEMINI_MODEL
     GEMINI_IMAGE_MODEL = DEFAULT_GEMINI_IMAGE_MODEL
-    SECRET_KEY = _load_or_create_runtime_secret(
+    SECRET_KEY = load_or_create_runtime_secret(
         'SECRET_KEY',
         'secret_key',
         lambda: secrets.token_urlsafe(48)

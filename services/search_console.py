@@ -12,7 +12,8 @@ GSC_API_BASE = 'https://www.googleapis.com/webmasters/v3'
 
 
 class SearchConsoleError(RuntimeError):
-    pass
+    """Search Console / OAuth failure. The sync job stores the message in
+    gsc_last_error, which the UI shows, so it is written in Indonesian."""
 
 
 def build_authorization_url(client_id, redirect_uri, state):
@@ -38,10 +39,10 @@ def exchange_authorization_code(client_id, client_secret, redirect_uri, code):
         'grant_type': 'authorization_code',
     }, timeout=20)
     if not response.ok:
-        raise SearchConsoleError(f'Google OAuth token exchange failed ({response.status_code})')
+        raise SearchConsoleError(f'Pertukaran token Google OAuth gagal ({response.status_code})')
     payload = response.json()
     if not payload.get('access_token'):
-        raise SearchConsoleError('Google OAuth did not return an access token')
+        raise SearchConsoleError('Google OAuth tidak mengembalikan access token')
     return payload
 
 
@@ -56,7 +57,7 @@ class SearchConsoleClient:
         if self._access_token:
             return self._access_token
         if not self.refresh_token:
-            raise SearchConsoleError('Search Console refresh token is unavailable')
+            raise SearchConsoleError('Refresh token Search Console tidak tersedia')
         response = requests.post(GOOGLE_TOKEN_URL, data={
             'client_id': self.client_id,
             'client_secret': self.client_secret,
@@ -64,10 +65,10 @@ class SearchConsoleClient:
             'grant_type': 'refresh_token',
         }, timeout=20)
         if not response.ok:
-            raise SearchConsoleError(f'Google OAuth refresh failed ({response.status_code})')
+            raise SearchConsoleError(f'Pembaruan token Google OAuth gagal ({response.status_code})')
         self._access_token = response.json().get('access_token')
         if not self._access_token:
-            raise SearchConsoleError('Google OAuth refresh returned no access token')
+            raise SearchConsoleError('Pembaruan token Google OAuth tidak mengembalikan access token')
         return self._access_token
 
     def _request(self, method, url, **kwargs):
@@ -78,10 +79,10 @@ class SearchConsoleClient:
             detail = ''
             try:
                 detail = response.json().get('error', {}).get('message', '')
-            except Exception:
-                pass
+            except (ValueError, AttributeError):
+                pass  # the error body is optional detail; the status code is reported below
             raise SearchConsoleError(
-                f'Search Console API failed ({response.status_code})'
+                f'Permintaan API Search Console gagal ({response.status_code})'
                 + (f': {detail[:200]}' if detail else '')
             )
         return response.json()

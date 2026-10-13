@@ -107,28 +107,3 @@ class ContentOptimizer:
         )
 
         return optimized
-
-    def predict_engagement(self, category_name, user_id, site_id=None):
-        """Predict expected engagement for a category"""
-        performance = self.db.get_category_performance(user_id, site_id=site_id)
-
-        if not performance:
-            return {
-                'predicted_views': 0,
-                'predicted_engagement': 0,
-                'confidence': 'low'
-            }
-
-        for cat in performance:
-            if cat['category'] == category_name:
-                return {
-                    'predicted_views': cat['total_views'] / max(cat['total_posts'], 1),
-                    'predicted_engagement': cat['avg_engagement'],
-                    'confidence': 'high' if cat['total_posts'] > 5 else 'medium'
-                }
-
-        return {
-            'predicted_views': 0,
-            'predicted_engagement': 0,
-            'confidence': 'low'
-        }

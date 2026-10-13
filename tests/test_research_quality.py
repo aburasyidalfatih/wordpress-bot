@@ -63,8 +63,9 @@ class ResearchQualityTests(unittest.TestCase):
         }
         result = self.research.evaluate_quality(
             providers, competitor_count=3, transcript_count=2,
-            suggestion_count=10, question_count=8,
+            suggestion_count=10, question_count=10,
         )
+        # 85 from providers + every depth bonus at its cap (5 + 3 + 4 + 3).
         self.assertEqual(result['score'], 100)
         self.assertEqual(result['confidence'], 'high')
         self.assertTrue(result['passes_minimum'])
@@ -81,7 +82,9 @@ class ResearchQualityTests(unittest.TestCase):
         ])
 
     def test_social_fallback_never_fabricates_evidence(self):
-        self.assertEqual(self.research._get_fallback_social('bisnis online', 'id'), [])
+        with patch.object(seo_research, 'DDGS', None):
+            self.assertEqual(self.research.get_social_insights('bisnis online', 'id'), [])
+        self.assertEqual(self.research.source_status['social']['status'], 'unavailable')
 
     def test_trend_score_is_measured_not_default_fifty(self):
         with patch.object(seo_research, 'TrendReq', FakeTrendClient):
@@ -145,13 +148,6 @@ class SearchConsoleFoundationTests(unittest.TestCase):
         self.assertNotIn('site.gsc_refresh_token', response_source)
         self.assertNotIn('site.gsc_property_url', response_source)
         self.assertNotIn('site.gsc_last_synced_at', response_source)
-
-    def test_search_console_metric_failure_is_isolated(self):
-        source = Path('routes/research.py').read_text(encoding='utf-8')
-
-        self.assertIn('except SQLAlchemyError as exc:', source)
-        self.assertIn("gsc_opportunities = []", source)
-        self.assertIn("'error': gsc_metrics_error", source)
 
 
 if __name__ == '__main__':

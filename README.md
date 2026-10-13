@@ -42,10 +42,12 @@ Tiga proses aplikasi berjalan dari image yang sama:
 autowp/
 ├── app.py                  # Entry point Flask: blueprint, security headers, SPA serving
 ├── config.py               # Config + konstanta default model Gemini
-├── core_extensions.py      # Singleton (db, queue, logger), decorator auth, helper sosmed
-├── database.py             # Wrapper SQLAlchemy + migrasi (advisory-locked)
+├── core_extensions.py      # Singleton (db, queue, logger), auth JWT, helper sosmed
+├── database.py             # Wrapper SQLAlchemy, migrasi (advisory-locked), helper kredit
 ├── models.py               # Model SQLAlchemy
-├── security.py             # Enkripsi Fernet + CSRF
+├── security.py             # Enkripsi Fernet
+├── rate_limit.py           # Counter Redis (login gagal, kuota helper AI)
+├── urllib3_compat.py       # Patch kompatibilitas urllib3 untuk pytrends
 ├── dispatcher.py           # Scheduler auto-post + reaper item nyangkut
 ├── ml_optimizer.py         # Reorder kategori berdasarkan engagement
 ├── seo_research.py         # SEO research (DuckDuckGo, YouTube, scraping)
@@ -53,28 +55,38 @@ autowp/
 ├── routes/                 # Blueprint API
 │   ├── auth.py             # Google OAuth + login, JWT
 │   ├── dashboard.py        # Statistik & riwayat
-│   ├── sites.py            # CRUD website WordPress
+│   ├── sites.py            # CRUD website WordPress (+ validasi input)
 │   ├── queue.py            # Antrean konten
-│   ├── research.py         # Trending topics
+│   ├── research.py         # Riset & judul AI
 │   ├── prompts.py          # Custom AI prompt
 │   ├── settings.py         # Setting user
 │   ├── monitor.py          # System health
+│   ├── search_console.py   # OAuth & sinkronisasi Google Search Console
 │   ├── payments.py         # Tripay, PayPal, transfer manual
 │   └── admin.py            # Panel admin
 ├── services/
 │   ├── article_generator.py# Generate artikel & gambar via Gemini
+│   ├── article_prompts.py  # Template prompt artikel & gambar
+│   ├── quality_gate.py     # Validasi kualitas artikel sebelum publish
+│   ├── content_planner.py  # Peluang konten dari Search Console
+│   ├── search_console.py   # Klien Google Search Console
+│   ├── url_safety.py       # Validasi URL publik (anti-SSRF)
 │   └── wp_publisher.py     # Publish ke WordPress REST API
 ├── tasks/
 │   ├── article_jobs.py     # Job RQ: generate_and_post, regenerate
-│   └── research_jobs.py    # Job RQ: research
+│   ├── research_jobs.py    # Job RQ: research
+│   └── gsc_jobs.py         # Job RQ: sinkronisasi Search Console
 ├── frontend/               # React 19 + Vite + Tailwind 4 + shadcn
 │   └── src/
-│       ├── pages/          # Dashboard, Sites, Queue, Research, Billing, Admin, ...
-│       ├── components/     # Layout, ErrorBoundary, ui/
+│       ├── pages/          # Halaman (tipis): Dashboard, Sites, Queue, Research, ...
+│       ├── components/     # Komponen per area (sites/, queue/, research/, ...) + ui/
+│       ├── hooks/          # Data fetching & state per halaman
 │       ├── contexts/       # SiteContext
-│       └── lib/            # api.ts, types.ts, utils.ts
+│       └── lib/            # api.ts (apiFetch), types.ts, utils.ts
+├── tests/                  # pytest (SQLite in-memory + stub, tanpa layanan eksternal)
 ├── scripts/                # Utilitas CLI & shell operasional
 ├── docs/                   # Panduan setup per platform
+├── .github/workflows/      # CI: ruff + pytest, tsc + eslint + build frontend
 ├── Dockerfile              # Multi-stage: build frontend → runtime Python
 └── docker-compose.yml      # web, worker, scheduler, postgres, redis
 ```
@@ -224,9 +236,14 @@ docker compose exec -T postgres pg_dump -U autowp autowpdb > backup_$(date +%Y%m
 - Semua kredensial pihak ketiga (password WordPress, token sosmed, API key Gemini)
   dienkripsi Fernet di level property SQLAlchemy. `encrypt_value` menolak menyimpan
   plaintext kalau enkripsi gagal.
-- Auth JWT (cookie `httponly` + header Bearer), Google token diverifikasi `aud`
-  dan `email_verified`.
-- Rate limiting per user (fallback IP) via Flask-Limiter + Redis.
+- Auth JWT (cookie `httponly` + header Bearer). Token dicabut saat logout (per
+  perangkat), ganti password, atau user dinonaktifkan. Google token diverifikasi
+  `aud`, `iss`, dan `email_verified`; login Google ditolak bila `GOOGLE_CLIENT_ID` kosong.
+- Rate limiting per user (fallback IP asli via `ProxyFix`, atur `TRUSTED_PROXY_COUNT`)
+  dengan Flask-Limiter + Redis, plus counter `rate_limit.py` untuk login gagal & helper AI.
+- URL WordPress divalidasi harus alamat publik (anti-SSRF), redirect dicek ulang.
+- Perubahan saldo kredit selalu berupa satu statement SQL atomik
+  (`database.debit_credits` / `add_credits`).
 - Security headers + CSP, container berjalan sebagai non-root user.
 - Webhook Tripay diverifikasi HMAC-SHA256 dengan `compare_digest`.
 
@@ -264,6 +281,18 @@ python app.py                    # http://localhost:5005
 # Frontend
 cd frontend && npm install && npm run dev
 ```
+
+Sebelum push, jalankan pengecekan yang sama dengan CI:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest -q
+cd frontend && npx tsc --noEmit -p tsconfig.app.json && npx eslint src && npm run build
+```
+
+Konvensi: pesan untuk pengguna (respons API, toast, notifikasi Telegram) memakai
+Bahasa Indonesia; log dan prompt ke Gemini tidak diterjemahkan.
 
 ## Deployment
 

@@ -1,6 +1,12 @@
+import time
+
 from flask import Blueprint, request, jsonify
-from core_extensions import db, redis_conn, logger, load_config, require_jwt
+
+import rate_limit
+from core_extensions import db, logger, load_config, require_jwt
 from config import DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_IMAGE_MODEL
+from models import User, WordPressSite
+from services.article_generator import ArticleGenerator
 
 prompts_bp = Blueprint('prompts', __name__)
 
@@ -9,75 +15,9 @@ MAX_OPTIMIZE_PROMPT_CHARS = 12000  # default article prompt is ~5000 chars
 # may run on the admin's Gemini key, so cap how often one user can call them.
 AI_HELPER_RATE_LIMIT = 20
 AI_HELPER_RATE_WINDOW_SECONDS = 3600
+OPTIMIZE_MAX_RETRIES = 3
 
-
-def check_ai_helper_quota(user_id, bucket='ai_helper', limit=None):
-    """Gate uncharged Gemini helper calls.
-
-    Returns None when the call may proceed, otherwise a (response, status)
-    tuple to return from the route. Users with their own Gemini key pay for
-    the calls themselves and are not limited.
-    """
-    try:
-        own_key = (db.get_config(user_id) or {}).get('gemini_api_key')
-    except Exception as exc:
-        logger.error(f'Could not load config for AI helper quota (user {user_id}): {exc}')
-        own_key = None
-    if not own_key:
-        # Without their own key the call is paid by the admin key; only users
-        # with credits may use it.
-        from models import User
-        with db.get_session() as session:
-            user = session.query(User).filter_by(id=user_id).first()
-            credits = (user.credits or 0) if user else 0
-        if credits <= 0:
-            return jsonify({
-                'success': False,
-                'error': 'Kredit tidak mencukupi. Isi kredit atau atur API Key Gemini Anda sendiri di Settings.'
-            }), 402
-    else:
-        return None
-
-    if redis_conn is None:
-        return None
-    limit = limit or AI_HELPER_RATE_LIMIT
-    key = f'ratelimit:{bucket}:{user_id}'
-    try:
-        count = redis_conn.incr(key)
-        if count == 1 or redis_conn.ttl(key) < 0:
-            redis_conn.expire(key, AI_HELPER_RATE_WINDOW_SECONDS)
-        if count > limit:
-            retry_sec = max(redis_conn.ttl(key), 1)
-            return jsonify({
-                'success': False,
-                'error': f'Terlalu banyak permintaan AI. Coba lagi dalam {retry_sec // 60 + 1} menit.'
-            }), 429
-    except Exception as exc:
-        # Redis trouble must not take the feature offline.
-        logger.error(f'AI helper rate limit check failed: {exc}')
-    return None
-
-@prompts_bp.route('/api/prompts')
-@require_jwt
-def api_prompts(user_id):
-    site_id = request.args.get('site_id', type=int)
-
-    if not site_id:
-        return jsonify({'success': False, 'error': 'site_id is required'}), 400
-
-    with db.get_session() as session:
-        from models import WordPressSite
-        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-        if not site:
-            return jsonify({'success': False, 'error': 'Site not found'}), 404
-
-        return jsonify({
-            'success': True,
-            'config': {
-                'article_prompt': site.article_prompt,
-                'image_prompt': site.image_prompt
-            },
-            'default_article_prompt': """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic}
+DEFAULT_ARTICLE_PROMPT = """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic}
 {existing_titles}{research_note}{seo_section}{category_desc_text}{internal_links_text}
 TARGET AUDIENCE: {target_audience}
 
@@ -166,8 +106,9 @@ FORMAT OUTPUT (Gunakan XML-Tags berikut):
 <TITLE>Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)</TITLE>
 <META_DESCRIPTION>Meta description 150-160 karakter dengan CTA dan keyword</META_DESCRIPTION>
 <CONTENT>Konten HTML lengkap 2000-2500 kata</CONTENT>
-<FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>""",
-            'default_image_prompt': """Create a professional featured image for this article about {topic}.
+<FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>"""
+
+DEFAULT_IMAGE_PROMPT = """Create a professional featured image for this article about {topic}.
 
 Article Title: "{title}"
 
@@ -181,103 +122,16 @@ Design Requirements:
 - Suitable as blog header/featured image
 
 Style: Modern, professional, suitable for educational blog featured image."""
-        })
 
-@prompts_bp.route('/api/save-prompts', methods=['POST'])
-@require_jwt
-def save_prompts(user_id):
-    site_id = request.form.get('site_id', type=int)
+XML_FORMAT_MARKER = "FORMAT OUTPUT (Gunakan XML-Tags berikut):"
+FORMAT_MARKER = "FORMAT OUTPUT"
 
-    if not site_id:
-        return jsonify({'success': False, 'error': 'site_id is required'}), 400
+OPTIMIZER_LANG_INSTRUCTION_EN = "6. PENTING: Terjemahkan SELURUH isi teks prompt hasil revisi ke dalam Bahasa Inggris (English), termasuk semua instruksi, pedoman gaya penulisan, peringatan, dan contoh hook. KECUALI variabel placeholder seperti {topic} dll yang harus tetap sama. (Khusus Image Prompt, wajib dalam Bahasa Inggris karena model AI gambar hanya mendukung Bahasa Inggris)."
+OPTIMIZER_LANG_INSTRUCTION_ID = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
+OPTIMIZER_FORMAT_INSTRUCTION_ARTICLE = "5. PERINGATAN: Bagian 'FORMAT OUTPUT' telah dipisahkan oleh sistem. Anda HANYA bertugas merevisi isi template bagian atasnya saja. JANGAN membuat blok format (JSON/XML) atau menyebutkan FORMAT OUTPUT sama sekali dalam respon Anda."
+OPTIMIZER_FORMAT_INSTRUCTION_OTHER = "5. PERINGATAN FORMAT OUTPUT: JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON atau XML. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt gambar. JANGAN MENAMBAHKAN instruksi format apapun di akhir prompt."
 
-    article_prompt = request.form.get('article_prompt')
-    image_prompt = request.form.get('image_prompt')
-
-    with db.get_session() as session:
-        from models import WordPressSite
-        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-        if not site:
-            return jsonify({'success': False, 'error': 'Site not found'}), 404
-
-        site.article_prompt = article_prompt
-        site.image_prompt = image_prompt
-        session.commit()
-
-    return jsonify({'success': True, 'message': 'Prompts saved!'})
-
-@prompts_bp.route('/api/optimize-prompt', methods=['POST'])
-@require_jwt
-def api_optimize_prompt(user_id):
-    data = request.get_json(silent=True) or {}
-    site_id = data.get('site_id')
-    prompt_type = data.get('prompt_type', 'article')
-    current_prompt = data.get('current_prompt')
-
-    if not site_id or not current_prompt or not isinstance(current_prompt, str):
-        return jsonify({'success': False, 'error': 'site_id and current_prompt are required'}), 400
-    if len(current_prompt) > MAX_OPTIMIZE_PROMPT_CHARS:
-        return jsonify({'success': False, 'error': f'Prompt terlalu panjang (maksimal {MAX_OPTIMIZE_PROMPT_CHARS} karakter).'}), 400
-
-    with db.get_session() as session:
-        from models import WordPressSite
-        if not session.query(WordPressSite.id).filter_by(id=site_id, user_id=user_id).first():
-            return jsonify({'success': False, 'error': 'Site not found'}), 404
-
-    quota_error = check_ai_helper_quota(user_id)
-    if quota_error:
-        return quota_error
-
-    xml_format_part = ""
-    if "FORMAT OUTPUT (Gunakan XML-Tags berikut):" in current_prompt:
-        parts = current_prompt.split("FORMAT OUTPUT (Gunakan XML-Tags berikut):")
-        current_prompt = parts[0].strip()
-        if prompt_type != 'image':
-            xml_format_part = "\n\nFORMAT OUTPUT (Gunakan XML-Tags berikut):" + parts[1]
-    elif "FORMAT OUTPUT" in current_prompt:
-        parts = current_prompt.split("FORMAT OUTPUT")
-        current_prompt = parts[0].strip()
-        if prompt_type != 'image':
-            xml_format_part = "\n\nFORMAT OUTPUT" + parts[1]
-
-    config = load_config(user_id) or {}
-    try:
-        with db.get_session() as session:
-            from models import WordPressSite
-            site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-            if not site:
-                return jsonify({'success': False, 'error': 'Site not found'}), 404
-
-            site_name = site.site_name or ''
-            site_url = getattr(site, 'wordpress_url', '') or ''
-
-            cats = site.categories or []
-            categories = ", ".join([c.get('name', '') if isinstance(c, dict) else str(c) for c in cats])
-
-            from services.article_generator import ArticleGenerator
-
-            api_key = config.get('gemini_api_key')
-            if not api_key:
-                return jsonify({'success': False, 'error': 'API Key Gemini belum diatur di menu Settings.'}), 400
-
-            generator = ArticleGenerator(
-                api_key,
-                config.get('gemini_model', DEFAULT_GEMINI_MODEL),
-                config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
-            )
-
-            language = site.language or 'id'
-            if language == 'en' or prompt_type == 'image':
-                lang_instruction = "6. PENTING: Terjemahkan SELURUH isi teks prompt hasil revisi ke dalam Bahasa Inggris (English), termasuk semua instruksi, pedoman gaya penulisan, peringatan, dan contoh hook. KECUALI variabel placeholder seperti {topic} dll yang harus tetap sama. (Khusus Image Prompt, wajib dalam Bahasa Inggris karena model AI gambar hanya mendukung Bahasa Inggris)."
-            else:
-                lang_instruction = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
-
-            if prompt_type == 'article':
-                format_instruction = "5. PERINGATAN: Bagian 'FORMAT OUTPUT' telah dipisahkan oleh sistem. Anda HANYA bertugas merevisi isi template bagian atasnya saja. JANGAN membuat blok format (JSON/XML) atau menyebutkan FORMAT OUTPUT sama sekali dalam respon Anda."
-            else:
-                format_instruction = "5. PERINGATAN FORMAT OUTPUT: JANGAN membungkus hasil tulisan Anda ini ke dalam bentuk JSON atau XML. Output Anda harus berupa TEKS BIASA (Plain Text) yang berisi keseluruhan template prompt gambar. JANGAN MENAMBAHKAN instruksi format apapun di akhir prompt."
-
-            sys_prompt = f"""Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna.
+OPTIMIZER_SYSTEM_PROMPT = """Anda adalah ahli Prompt Engineering. Tugas Anda adalah menyesuaikan/merevisi Prompt Template yang diberikan agar spesifik dan relevan dengan niche website pengguna.
 
 Informasi Website Pengguna:
 - Nama Website: {site_name}
@@ -292,51 +146,208 @@ Instruksi Revisi (SANGAT PENTING):
 {format_instruction}
 {lang_instruction}"""
 
-            import time
-            max_retries = 3
-            response = None
 
-            for attempt in range(max_retries):
-                try:
-                    response = generator.client.models.generate_content(
-                        model=generator.model,
-                        contents=[
-                            sys_prompt,
-                            f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}"
-                        ]
-                    )
-                    break # Success!
-                except Exception as e:
-                    # Specifically handle 503 or 500 errors by retrying
-                    if "503" in str(e) or "500" in str(e) or "Unavailable" in str(e):
-                        if attempt < max_retries - 1:
-                            time.sleep(2 * (attempt + 1))  # Exponential backoff: 2s, 4s
-                            continue
-                    # If it's a different error or we ran out of retries, throw it
-                    raise e
+def check_ai_helper_quota(user_id, bucket='ai_helper', limit=None):
+    """Gate uncharged Gemini helper calls.
 
-            if not response or not hasattr(response, 'text') or not response.text:
-                return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 400
+    Returns None when the call may proceed, otherwise a (response, status)
+    tuple to return from the route. Users with their own Gemini key pay for
+    the calls themselves and are not limited.
+    """
+    try:
+        own_key = (db.get_config(user_id) or {}).get('gemini_api_key')
+    except Exception as exc:
+        logger.error(f'Could not load config for AI helper quota (user {user_id}): {exc}')
+        own_key = None
+    if own_key:
+        return None
 
-            optimized_prompt = response.text.strip()
-            # Clean markdown codeblocks if any
-            if optimized_prompt.startswith('```'):
-                lines = optimized_prompt.split('\n')
-                if len(lines) > 2:
-                    optimized_prompt = '\n'.join(lines[1:-1]).strip()
+    # Without their own key the call is paid by the admin key; only users
+    # with credits may use it.
+    with db.get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        credits = (user.credits or 0) if user else 0
+    if credits <= 0:
+        return jsonify({
+            'success': False,
+            'error': 'Kredit tidak mencukupi. Isi kredit atau atur API Key Gemini Anda sendiri di Settings.'
+        }), 402
 
-            # Re-attach the exact XML format part
-            if xml_format_part:
-                optimized_prompt = optimized_prompt + xml_format_part
+    allowed, retry_sec = rate_limit.hit(
+        f'ratelimit:{bucket}:{user_id}', limit or AI_HELPER_RATE_LIMIT, AI_HELPER_RATE_WINDOW_SECONDS
+    )
+    if not allowed:
+        return jsonify({
+            'success': False,
+            'error': f'Terlalu banyak permintaan AI. Coba lagi dalam {retry_sec // 60 + 1} menit.'
+        }), 429
+    return None
 
-            return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
+
+@prompts_bp.route('/api/prompts')
+@require_jwt
+def api_prompts(user_id):
+    site_id = request.args.get('site_id', type=int)
+
+    if not site_id:
+        return jsonify({'success': False, 'error': 'site_id wajib diisi.'}), 400
+
+    with db.get_session() as session:
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
+
+        return jsonify({
+            'success': True,
+            'config': {
+                'article_prompt': site.article_prompt,
+                'image_prompt': site.image_prompt
+            },
+            'default_article_prompt': DEFAULT_ARTICLE_PROMPT,
+            'default_image_prompt': DEFAULT_IMAGE_PROMPT,
+        })
+
+
+@prompts_bp.route('/api/save-prompts', methods=['POST'])
+@require_jwt
+def save_prompts(user_id):
+    site_id = request.form.get('site_id', type=int)
+
+    if not site_id:
+        return jsonify({'success': False, 'error': 'site_id wajib diisi.'}), 400
+
+    article_prompt = request.form.get('article_prompt')
+    image_prompt = request.form.get('image_prompt')
+
+    with db.get_session() as session:
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
+
+        site.article_prompt = article_prompt
+        site.image_prompt = image_prompt
+        session.commit()
+
+    return jsonify({'success': True, 'message': 'Prompt berhasil disimpan!'})
+
+
+def _split_output_format(prompt, prompt_type):
+    """Separate the OUTPUT FORMAT section so the AI cannot rewrite it.
+
+    Returns (prompt_without_format, format_section_to_reattach). Image prompts
+    drop the section entirely.
+    """
+    for marker in (XML_FORMAT_MARKER, FORMAT_MARKER):
+        if marker in prompt:
+            parts = prompt.split(marker)
+            format_part = "\n\n" + marker + parts[1] if prompt_type != 'image' else ""
+            return parts[0].strip(), format_part
+    return prompt, ""
+
+
+def _optimizer_system_prompt(site, prompt_type):
+    categories = ", ".join(
+        c.get('name', '') if isinstance(c, dict) else str(c) for c in (site.categories or [])
+    )
+    language = site.language or 'id'
+    if language == 'en' or prompt_type == 'image':
+        lang_instruction = OPTIMIZER_LANG_INSTRUCTION_EN
+    else:
+        lang_instruction = OPTIMIZER_LANG_INSTRUCTION_ID
+    if prompt_type == 'article':
+        format_instruction = OPTIMIZER_FORMAT_INSTRUCTION_ARTICLE
+    else:
+        format_instruction = OPTIMIZER_FORMAT_INSTRUCTION_OTHER
+    return OPTIMIZER_SYSTEM_PROMPT.format(
+        site_name=site.site_name or '',
+        site_url=getattr(site, 'wordpress_url', '') or '',
+        categories=categories,
+        format_instruction=format_instruction,
+        lang_instruction=lang_instruction,
+    )
+
+
+def _generate_with_retry(generator, contents):
+    """Call Gemini, retrying transient 500/503 errors with a growing pause."""
+    for attempt in range(OPTIMIZE_MAX_RETRIES):
+        try:
+            return generator.client.models.generate_content(model=generator.model, contents=contents)
+        except Exception as e:
+            transient = "503" in str(e) or "500" in str(e) or "Unavailable" in str(e)
+            if transient and attempt < OPTIMIZE_MAX_RETRIES - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+    return None
+
+
+def _strip_code_fence(text):
+    if text.startswith('```'):
+        lines = text.split('\n')
+        if len(lines) > 2:
+            return '\n'.join(lines[1:-1]).strip()
+    return text
+
+
+def _optimize_error_message(error):
+    error_msg = str(error)
+    if "503" in error_msg or "Unavailable" in error_msg or "high demand" in error_msg.lower():
+        return "Server AI Google Gemini sedang mengalami beban tinggi (Kapasitas Penuh). Silakan tunggu sebentar dan coba klik lagi."
+    if "API Key" in error_msg or "403" in error_msg:
+        return "API Key Gemini tidak valid atau tidak memiliki izin akses."
+    return "Gagal mengoptimasi prompt. Silakan coba lagi."
+
+
+@prompts_bp.route('/api/optimize-prompt', methods=['POST'])
+@require_jwt
+def api_optimize_prompt(user_id):
+    data = request.get_json(silent=True) or {}
+    site_id = data.get('site_id')
+    prompt_type = data.get('prompt_type', 'article')
+    current_prompt = data.get('current_prompt')
+
+    if not site_id or not current_prompt or not isinstance(current_prompt, str):
+        return jsonify({'success': False, 'error': 'site_id dan current_prompt wajib diisi.'}), 400
+    if len(current_prompt) > MAX_OPTIMIZE_PROMPT_CHARS:
+        return jsonify({'success': False, 'error': f'Prompt terlalu panjang (maksimal {MAX_OPTIMIZE_PROMPT_CHARS} karakter).'}), 400
+
+    with db.get_session() as session:
+        if not session.query(WordPressSite.id).filter_by(id=site_id, user_id=user_id).first():
+            return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
+
+    quota_error = check_ai_helper_quota(user_id)
+    if quota_error:
+        return quota_error
+
+    current_prompt, xml_format_part = _split_output_format(current_prompt, prompt_type)
+
+    config = load_config(user_id) or {}
+    try:
+        with db.get_session() as session:
+            site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+            if not site:
+                return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
+
+            api_key = config.get('gemini_api_key')
+            if not api_key:
+                return jsonify({'success': False, 'error': 'API Key Gemini belum diatur di menu Settings.'}), 400
+
+            sys_prompt = _optimizer_system_prompt(site, prompt_type)
+
+        generator = ArticleGenerator(
+            api_key,
+            config.get('gemini_model', DEFAULT_GEMINI_MODEL),
+            config.get('gemini_image_model', DEFAULT_GEMINI_IMAGE_MODEL)
+        )
+        response = _generate_with_retry(
+            generator, [sys_prompt, f"PROMPT ASLI YANG HARUS DIREVISI:\n{current_prompt}"]
+        )
+        if not response or not getattr(response, 'text', None):
+            return jsonify({'success': False, 'error': 'Tidak ada respon valid dari Gemini AI.'}), 400
+
+        # Re-attach the exact OUTPUT FORMAT section the user wrote.
+        optimized_prompt = _strip_code_fence(response.text.strip()) + xml_format_part
+        return jsonify({'success': True, 'optimized_prompt': optimized_prompt})
     except Exception as e:
         logger.error(f"Optimize prompt error: {e}")
-        error_msg = str(e)
-        if "503" in error_msg or "Unavailable" in error_msg or "high demand" in error_msg.lower():
-            error_msg = "Server AI Google Gemini sedang mengalami beban tinggi (Kapasitas Penuh). Silakan tunggu sebentar dan coba klik lagi."
-        elif "API Key" in error_msg or "403" in error_msg:
-            error_msg = "API Key Gemini tidak valid atau tidak memiliki izin akses."
-        else:
-            error_msg = "Gagal mengoptimasi prompt. Silakan coba lagi."
-        return jsonify({'success': False, 'error': error_msg}), 400
+        return jsonify({'success': False, 'error': _optimize_error_message(e)}), 400

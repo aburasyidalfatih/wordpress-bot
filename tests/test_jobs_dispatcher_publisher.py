@@ -176,7 +176,7 @@ class UrlSafetyTests(unittest.TestCase):
                 patch.object(wp_publisher.requests, 'request') as req:
             publisher = WordPressPublisher('http://redis:6379', 'a', 'b')
             self.assertEqual(publisher.create_post('t', '<p>c</p>')[0], False)
-            self.assertEqual(publisher.get_posts(), (False, 'Refusing to contact WordPress site: internal', 0))
+            self.assertEqual(publisher.get_posts(), (False, 'Menolak menghubungi situs WordPress: internal', 0))
             self.assertEqual(publisher.get_recent_posts(), [])
         req.assert_not_called()
 

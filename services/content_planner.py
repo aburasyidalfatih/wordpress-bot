@@ -14,6 +14,8 @@ import re
 import logging
 from collections import Counter
 
+from models import SearchConsoleMetric
+
 logger = logging.getLogger(__name__)
 
 # A Search Console sync stores up to 5000 rows per period, so a site can hold
@@ -36,8 +38,6 @@ def load_search_metrics(session, user_id, site_id):
     Returns (current_rows, previous_rows) as plain dicts. Filtering and limiting
     happen in SQL rather than in Python.
     """
-    from models import SearchConsoleMetric
-
     def rows_for(label):
         records = session.query(
             SearchConsoleMetric.query, SearchConsoleMetric.page,

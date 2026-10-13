@@ -1,17 +1,21 @@
-import os
 from flask import Blueprint, request, jsonify, make_response
+from werkzeug.security import generate_password_hash
+
 from core_extensions import (
     db, load_config, save_config, require_jwt, require_admin,
-    issue_access_token, revoke_user_tokens,
+    issue_access_token, revoke_user_tokens, set_auth_cookie,
 )
 from config import DEFAULT_GEMINI_MODEL
+from models import User
 
 settings_bp = Blueprint('settings', __name__)
+
+MIN_PASSWORD_LENGTH = 8
+
 
 @settings_bp.route('/api/settings')
 @require_jwt
 def api_settings(user_id):
-    from models import User
     is_admin = False
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
@@ -25,6 +29,7 @@ def api_settings(user_id):
         config['gemini_api_key'] = ''
 
     return jsonify({'config': config})
+
 
 @settings_bp.route("/save-config", methods=["POST"])
 @require_admin
@@ -43,18 +48,16 @@ def save_config_route(user_id):
     # Save the config under the current user (which is the admin)
     save_config(user_id, config)
 
-    # Return JSON success response
-    return jsonify({'success': True, 'message': 'Configuration saved!'})
+    return jsonify({'success': True, 'message': 'Konfigurasi berhasil disimpan.'})
+
 
 @settings_bp.route('/api/profile', methods=['GET', 'POST'])
 @require_jwt
 def api_profile(user_id):
-    from models import User
-    from werkzeug.security import generate_password_hash
     with db.get_session() as session:
         user = session.query(User).filter_by(id=user_id).first()
         if not user:
-            return jsonify({'success': False, 'error': 'User not found'}), 404
+            return jsonify({'success': False, 'error': 'Pengguna tidak ditemukan.'}), 404
 
         if request.method == 'GET':
             return jsonify({
@@ -77,21 +80,20 @@ def api_profile(user_id):
         if name is not None:
             user.name = str(name).strip()[:100]
         if email is not None and email != user.email:
-            return jsonify({'success': False, 'error': 'Email cannot be changed from profile settings'}), 400
+            return jsonify({'success': False, 'error': 'Email tidak dapat diubah dari pengaturan profil.'}), 400
 
         if password:
-            if not isinstance(password, str) or len(password) < 8:
-                return jsonify({'success': False, 'error': 'Password must be at least 8 characters'}), 400
+            if not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH:
+                return jsonify({'success': False, 'error': f'Kata sandi minimal {MIN_PASSWORD_LENGTH} karakter.'}), 400
             user.password_hash = generate_password_hash(password)
 
         session.commit()
 
     if not password:
-        return jsonify({'success': True, 'message': 'Profile updated successfully'})
+        return jsonify({'success': True, 'message': 'Profil berhasil diperbarui.'})
 
     # Password changed: log out every other session, keep this one with a fresh token.
     revoke_user_tokens(user_id)
     token = issue_access_token(user_id)
-    resp = make_response(jsonify({'success': True, 'message': 'Profile updated successfully', 'token': token}))
-    resp.set_cookie('auth_token', token, httponly=True, samesite='Lax', secure=os.environ.get('FLASK_ENV') != 'development', max_age=7*24*60*60)
-    return resp
+    resp = make_response(jsonify({'success': True, 'message': 'Profil berhasil diperbarui.', 'token': token}))
+    return set_auth_cookie(resp, token)

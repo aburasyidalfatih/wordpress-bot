@@ -155,10 +155,9 @@ class SearchConsoleEvidenceTests(unittest.TestCase):
             {'query': 'q', 'page': '/a', 'impressions': 2, 'clicks': 0, 'position': 3},
             {'query': 'q', 'page': '/b', 'impressions': 2, 'clicks': 0, 'position': 9},
         ]
-        planner = types.SimpleNamespace(load_search_metrics=lambda *a: (rows, []))
         db = FakeDB(None)
         with patch.object(rj, 'db', db), \
-                patch.dict(sys.modules, {'services.content_planner': planner}):
+                patch.object(rj, 'load_search_metrics', lambda *a: (rows, [])):
             loaded = rj._load_search_console_queries(1, 1)
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0]['impressions'], 4)
@@ -185,7 +184,7 @@ class BulkUpdateYearTests(unittest.TestCase):
         ], 1)
         bot.update_post.return_value = (True, {})
         with patch.object(rj, 'db', FakeDB(site)), \
-                patch('services.wp_publisher.WordPressPublisher', return_value=bot), \
+                patch.object(rj, 'WordPressPublisher', return_value=bot), \
                 patch.object(rj, 'send_telegram_notification', Mock()):
             rj.bulk_update_year_task(1, 1, 2025, 2026)
         self.assertEqual(bot.get_posts.call_args.kwargs['context'], 'edit')

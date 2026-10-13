@@ -1,14 +1,19 @@
 from datetime import datetime, timedelta, timezone
 
 from services.article_generator import sanitize_filename
+from services.url_safety import validate_public_http_url
 import requests
 import base64
+import html as html_mod
 import json
 import re
+import time
 import urllib.parse
 from io import BytesIO
 import logging
+from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from urllib3.exceptions import NewConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +40,110 @@ class UnsafeURLError(requests.exceptions.InvalidURL):
 
 
 def _validate_url(url):
-    try:
-        from services.url_safety import validate_public_http_url
-    except ImportError:  # pragma: no cover - module ships with the routes change
-        logger.error("services.url_safety is unavailable; refusing outbound WordPress request.")
-        return False, 'URL safety check unavailable'
     return validate_public_http_url(url)
+
+
+def _refusal_message(error):
+    """User-facing text for a WordPress URL refused by the SSRF check."""
+    return f"Menolak menghubungi situs WordPress: {error}"
+
+
+# Placeholder markers the model sometimes emits instead of real content.
+_PLACEHOLDER_PATTERNS = [
+    r'\[FLOWCHART:.*?\]',
+    r'\[INFOGRAPHIC:.*?\]',
+    r'\[CHECKLIST:.*?\]',
+    r'\[DIAGRAM:.*?\]',
+    r'\[IMAGE:.*?\]',
+    r'\[CHART:.*?\]',
+    r'\[TABLE:.*?\]',
+]
+
+
+def _clean_content(content):
+    """Strip model artifacts (placeholders, ASCII art, JSON debris) and close broken tags."""
+    for pattern in _PLACEHOLDER_PATTERNS:
+        content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+
+    # Remove ASCII art tables
+    content = re.sub(r'<pre[^>]*>.*?[\u2500-\u257F].*?</pre>', '', content, flags=re.DOTALL)
+    content = re.sub(r'[\u2500-\u257F]', '', content)
+
+    # Remove empty paragraphs
+    content = re.sub(r'<p>\s*</p>', '', content)
+    content = re.sub(r'<p>\s*\\n\s*</p>', '', content)
+
+    # Remove JSON artifacts at the beginning
+    content = re.sub(r'^\s*\{\s*"[^"]*"\s*:', '', content)
+    content = re.sub(r'"\s*\}\s*$', '', content)
+
+    content = content.strip()
+
+    # Re-serialize through BeautifulSoup to close broken/unbalanced tags.
+    try:
+        content = str(BeautifulSoup(content, 'html.parser'))
+    except Exception as e:
+        logger.warning(f"Failed to sanitize HTML: {e}")
+    return content
+
+
+def _key_takeaways_box(key_takeaways):
+    return f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
+    <h3 style="margin-top:0; color:#0369a1;">✨ Key Takeaways</h3>
+    <ul style="margin-bottom:0;">
+        {''.join([f'<li>{k}</li>' for k in key_takeaways])}
+    </ul>
+</div>"""
+
+
+def _faq_schema(faqs):
+    """FAQPage schema, or None when no FAQ has both a question and an answer."""
+    main_entity = [
+        {
+            "@type": "Question",
+            "name": faq["question"],
+            "acceptedAnswer": {"@type": "Answer", "text": faq["answer"]},
+        }
+        for faq in faqs
+        if 'question' in faq and 'answer' in faq
+    ]
+    return {"@type": "FAQPage", "mainEntity": main_entity} if main_entity else None
+
+
+def _youtube_iframe(video_id):
+    return (
+        '\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; '
+        'height: 0; overflow: hidden; max-width: 100%;">'
+        '<iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" '
+        f'src="https://www.youtube.com/embed/{video_id}" frameborder="0" loading="lazy" '
+        'title="Related video" '
+        'allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
+        'allowfullscreen></iframe></div>\n'
+    )
+
+
+def _insert_mid_article(content, snippet):
+    """Insert snippet before the middle H2, or append it when there are fewer than one."""
+    parts = re.split(r'(<h2.*?>)', content)
+    if len(parts) < 3:
+        return content + snippet
+    mid_idx = len(parts) // 2
+    if mid_idx % 2 == 0:
+        mid_idx += 1
+    parts.insert(mid_idx, snippet)
+    return "".join(parts)
+
+
+def _seo_meta_fields(meta_description, focus_keyword):
+    """Yoast and Rank Math meta, so either SEO plugin picks it up."""
+    meta_fields = {}
+    if meta_description:
+        meta_fields['_yoast_wpseo_metadesc'] = meta_description
+        meta_fields['rank_math_description'] = meta_description
+    if focus_keyword:
+        meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
+        meta_fields['rank_math_focus_keyword'] = focus_keyword
+    return meta_fields
 
 
 class WordPressPublisher:
@@ -92,7 +195,7 @@ class WordPressPublisher:
         Raises UnsafeURLError when a URL is refused.
         """
         if check_base and not self._ensure_url_ok():
-            raise UnsafeURLError(f"Refusing to contact WordPress site: {self.url_error}")
+            raise UnsafeURLError(_refusal_message(self.url_error))
         kwargs['allow_redirects'] = False
         method = method.upper()
         response = requests.request(method, url, **kwargs)
@@ -106,7 +209,7 @@ class WordPressPublisher:
             ok, error = _validate_url(location)
             if not ok:
                 logger.error(f"Refusing redirect from {current_url} to {location}: {error}")
-                raise UnsafeURLError(f"Refusing redirect to non-public URL: {error}")
+                raise UnsafeURLError(f"Menolak redirect ke URL non-publik: {error}")
             if urllib.parse.urlsplit(location).hostname != urllib.parse.urlsplit(current_url).hostname:
                 # Never forward credentials to a different host.
                 headers = dict(kwargs.get('headers') or {})
@@ -163,7 +266,6 @@ class WordPressPublisher:
             )
             if response.status_code == 200:
                 posts = []
-                import html as html_mod
                 for p in response.json():
                     title_rendered = p.get('title', {}).get('rendered', '')
                     title_rendered = html_mod.unescape(title_rendered)
@@ -277,6 +379,7 @@ class WordPressPublisher:
             return None
 
         try:
+            # Local import: only needed by the opt-in YouTube embed.
             from duckduckgo_search import DDGS
             results = DDGS().text(f"site:youtube.com {search_term}", max_results=5) or []
         except Exception as e:
@@ -327,94 +430,44 @@ class WordPressPublisher:
             logger.error(f"Error fetching categories: {e}")
             return []
 
-    def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
+    def _structured_data_script(self, title, meta_description, focus_keyword, faqs, author_name):
+        """JSON-LD for the post.
 
-        # Remove placeholder patterns
-        placeholders = [
-            r'\[FLOWCHART:.*?\]',
-            r'\[INFOGRAPHIC:.*?\]',
-            r'\[CHECKLIST:.*?\]',
-            r'\[DIAGRAM:.*?\]',
-            r'\[IMAGE:.*?\]',
-            r'\[CHART:.*?\]',
-            r'\[TABLE:.*?\]',
-        ]
-        for pattern in placeholders:
-            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-
-        # Remove ASCII art tables
-        content = re.sub(r'<pre[^>]*>.*?[\u2500-\u257F].*?</pre>', '', content, flags=re.DOTALL)
-        content = re.sub(r'[\u2500-\u257F]', '', content)
-
-        # Remove empty paragraphs
-        content = re.sub(r'<p>\s*</p>', '', content)
-        content = re.sub(r'<p>\s*\\n\s*</p>', '', content)
-
-        # Remove JSON artifacts at the beginning
-        content = re.sub(r'^\s*\{\s*"[^"]*"\s*:', '', content)
-        content = re.sub(r'"\s*\}\s*$', '', content)
-
-        content = content.strip()
-
-        # Re-serialize through BeautifulSoup to close broken/unbalanced tags.
-        try:
-            from bs4 import BeautifulSoup
-            content = str(BeautifulSoup(content, 'html.parser'))
-        except Exception as e:
-            from core_extensions import logger
-            logger.warning(f"Failed to sanitize HTML: {e}")
-
-        # Inject Key Takeaways Box
-        if key_takeaways and isinstance(key_takeaways, list):
-            box = f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
-    <h3 style="margin-top:0; color:#0369a1;">✨ Key Takeaways</h3>
-    <ul style="margin-bottom:0;">
-        {''.join([f'<li>{k}</li>' for k in key_takeaways])}
-    </ul>
-</div>"""
-            content = box + "\n" + content
-
-        # Structured data. FAQPage rich results are heavily restricted these days, so
-        # its main value is as machine-readable Q&A for answer engines. BlogPosting is
-        # what actually carries the authorship and freshness signals.
-        graph = []
-
+        FAQPage rich results are heavily restricted these days, so its main value
+        is as machine-readable Q&A for answer engines. BlogPosting is what
+        actually carries the authorship and freshness signals.
+        """
+        organization = {"@type": "Organization", "name": self.site_name or self.url}
         blog_posting = {
             "@type": "BlogPosting",
             "headline": title[:110],
             "datePublished": datetime.now().astimezone().isoformat(),
             "dateModified": datetime.now().astimezone().isoformat(),
-            "publisher": {"@type": "Organization", "name": self.site_name or self.url},
-            "mainEntityOfPage": {"@type": "WebPage", "@id": self.url}
+            "publisher": organization,
+            "mainEntityOfPage": {"@type": "WebPage", "@id": self.url},
+            "author": {"@type": "Person", "name": author_name} if author_name else dict(organization),
         }
-        if author_name:
-            blog_posting["author"] = {"@type": "Person", "name": author_name}
-        else:
-            blog_posting["author"] = {"@type": "Organization", "name": self.site_name or self.url}
         if meta_description:
             blog_posting["description"] = meta_description
         if focus_keyword:
             blog_posting["keywords"] = focus_keyword
-        graph.append(blog_posting)
+        graph = [blog_posting]
 
         if faqs and isinstance(faqs, list):
-            faq_schema = {"@type": "FAQPage", "mainEntity": []}
-            for faq in faqs:
-                if 'question' in faq and 'answer' in faq:
-                    faq_schema["mainEntity"].append({
-                        "@type": "Question",
-                        "name": faq["question"],
-                        "acceptedAnswer": {
-                            "@type": "Answer",
-                            "text": faq["answer"]
-                        }
-                    })
-            if faq_schema["mainEntity"]:
+            faq_schema = _faq_schema(faqs)
+            if faq_schema:
                 graph.append(faq_schema)
 
         schema_payload = {"@context": "https://schema.org", "@graph": graph}
-        content += f'\n<script type="application/ld+json">{json.dumps(schema_payload, ensure_ascii=False)}</script>\n'
+        return f'\n<script type="application/ld+json">{json.dumps(schema_payload, ensure_ascii=False)}</script>\n'
 
+    def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None,
+                              excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
+        """Build the REST payload. Returns (post_data, SEO meta fields)."""
+        content = _clean_content(content)
+        if key_takeaways and isinstance(key_takeaways, list):
+            content = _key_takeaways_box(key_takeaways) + "\n" + content
+        content += self._structured_data_script(title, meta_description, focus_keyword, faqs, author_name)
 
         # YouTube auto-embed. Opt-in, and only when a result's title actually overlaps
         # the article topic — previously the first search hit was embedded blind, which
@@ -422,34 +475,14 @@ class WordPressPublisher:
         if self.enable_youtube_embed:
             video_id = self._find_relevant_video(focus_keyword or title)
             if video_id:
-                iframe = (
-                    '\n<div class="video-container" style="position: relative; padding-bottom: 56.25%; '
-                    'height: 0; overflow: hidden; max-width: 100%;">'
-                    '<iframe style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" '
-                    f'src="https://www.youtube.com/embed/{video_id}" frameborder="0" loading="lazy" '
-                    'title="Related video" '
-                    'allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
-                    'allowfullscreen></iframe></div>\n'
-                )
-                parts = re.split(r'(<h2.*?>)', content)
-                if len(parts) >= 3:
-                    mid_idx = len(parts) // 2
-                    if mid_idx % 2 == 0:
-                        mid_idx += 1
-                    parts.insert(mid_idx, iframe)
-                    content = "".join(parts)
-                else:
-                    content += iframe
-
-        clean_slug = re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
+                content = _insert_mid_article(content, _youtube_iframe(video_id))
 
         post_data = {
             'title': title,
             'content': content,
             'status': 'publish',
-            'slug': clean_slug
+            'slug': re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
         }
-
         if category_id:
             post_data['categories'] = [category_id]
         if featured_image_id:
@@ -457,17 +490,9 @@ class WordPressPublisher:
         if excerpt:
             post_data['excerpt'] = excerpt
 
-        meta_fields = {}
-        if meta_description:
-            meta_fields['_yoast_wpseo_metadesc'] = meta_description
-            meta_fields['rank_math_description'] = meta_description
-        if focus_keyword:
-            meta_fields['_yoast_wpseo_focuskw'] = focus_keyword
-            meta_fields['rank_math_focus_keyword'] = focus_keyword
-
+        meta_fields = _seo_meta_fields(meta_description, focus_keyword)
         if meta_fields:
             post_data['meta'] = meta_fields
-
         return post_data, meta_fields
 
     @staticmethod
@@ -477,10 +502,6 @@ class WordPressPublisher:
         if isinstance(exc, requests.exceptions.ConnectTimeout):
             return True
         if not isinstance(exc, requests.exceptions.ConnectionError):
-            return False
-        try:
-            from urllib3.exceptions import NewConnectionError
-        except ImportError:  # pragma: no cover
             return False
         reason = exc.args[0] if exc.args else None
         reason = getattr(reason, 'reason', reason)
@@ -493,8 +514,6 @@ class WordPressPublisher:
         attempt began, so an older article with the same title is not mistaken
         for it. Returns the post dict or None.
         """
-        import html as html_mod
-
         wanted_title = (title or '').strip()
         wanted_slug = re.sub(r'[\s_-]+', '-', re.sub(r'[^\w\s-]', '', (slug or '').lower())).strip('-')
         attempts = [
@@ -539,8 +558,6 @@ class WordPressPublisher:
         keeps the credit and does not auto-retry. Only a failure to connect at all
         (the request was provably never sent) is retried.
         """
-        import time as time_mod
-
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
         post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs, author_name)
@@ -562,14 +579,14 @@ class WordPressPublisher:
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 if self._request_never_sent(e) and attempt < 2:
                     logger.warning(f"Could not connect to WordPress (attempt {attempt + 1}/3), retrying: {e}")
-                    time_mod.sleep(2 * (attempt + 1))
+                    time.sleep(2 * (attempt + 1))
                     continue
                 if self._request_never_sent(e):
                     # The exception text is deliberately left out of the result: it
                     # can contain "connect timeout", which the caller would read as
                     # the TIMEOUT marker and keep the credit for a post never sent.
                     logger.error(f"Could not connect to WordPress to publish the post: {e}")
-                    return False, "WordPress connection failed; the post was not sent."
+                    return False, "Gagal terhubung ke WordPress; postingan tidak terkirim."
                 ambiguous_error = e
                 break
             except Exception as e:
@@ -584,14 +601,15 @@ class WordPressPublisher:
             )
             for check in range(3):
                 if check:
-                    time_mod.sleep(5)
+                    time.sleep(5)
                 found = self._find_created_post(title, post_data.get('slug'), not_before)
                 if found:
                     logger.info(f"Found post {found.get('id')} created despite the lost response.")
                     return True, found
+            # Starts with UNCONFIRMED_POST_MARKER, which is_unconfirmed_post_result checks.
             return False, (
-                f"TIMEOUT: WordPress did not confirm the post ({reason}). It may have been "
-                "published; check WordPress before retrying."
+                f"{UNCONFIRMED_POST_MARKER}: WordPress tidak mengonfirmasi postingan ({reason}). "
+                "Postingan mungkin sudah terbit; cek WordPress sebelum mencoba lagi."
             )
 
         # If post created successfully, try to update Yoast meta separately
@@ -613,7 +631,7 @@ class WordPressPublisher:
 
     def update_post_content(self, post_id, title, content, category_id=None, featured_image_id=None, meta_description=None, excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
         if not self._ensure_url_ok():
-            return False, f"Refusing to contact WordPress site: {self.url_error}"
+            return False, _refusal_message(self.url_error)
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
         post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs, author_name)
@@ -646,7 +664,7 @@ class WordPressPublisher:
         what must be written back; 'rendered' HTML is filter output (shortcodes
         expanded, auto-paragraphs) and saving it corrupts the stored post."""
         if not self._ensure_url_ok():
-            return False, f"Refusing to contact WordPress site: {self.url_error}", 0
+            return False, _refusal_message(self.url_error), 0
         headers = self._get_auth()
         params = {'page': page, 'per_page': per_page}
         if search:
@@ -667,7 +685,7 @@ class WordPressPublisher:
 
     def update_post(self, post_id, data):
         if not self._ensure_url_ok():
-            return False, f"Refusing to contact WordPress site: {self.url_error}"
+            return False, _refusal_message(self.url_error)
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
 

@@ -114,7 +114,6 @@ class AuthTestCase(unittest.TestCase):
             patch.object(core_extensions, 'db', self.db),
             patch.object(core_extensions, 'redis_conn', self.redis),
             patch.object(auth, 'db', self.db),
-            patch.object(auth, 'redis_conn', self.redis),
             patch.object(settings_routes, 'db', self.db),
         ):
             p.start()

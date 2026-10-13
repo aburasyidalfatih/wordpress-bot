@@ -7,6 +7,9 @@ except ImportError:  # pragma: no cover - older/newer RQ layouts
         pass
 
 from core_extensions import db, trending, logger, send_telegram_notification
+from models import WordPressSite
+from services.content_planner import load_search_metrics
+from services.wp_publisher import WordPressPublisher
 
 MIN_RESEARCH_QUALITY_SCORE = 35
 
@@ -53,7 +56,6 @@ def _aggregate_queries(rows):
 def _load_search_console_queries(user_id, site_id):
     """Distinct queries this site already receives impressions for. Empty when GSC is unused."""
     try:
-        from services.content_planner import load_search_metrics
         with db.get_session() as session:
             current_rows, _ = load_search_metrics(session, user_id, site_id)
         return _aggregate_queries(current_rows)
@@ -124,6 +126,209 @@ def _dedupe_categories(categories):
         unique.append(cat)
     return unique
 
+
+def _confidence_level(quality_score, real_provider_count):
+    if quality_score >= 75 and real_provider_count >= 5:
+        return 'high'
+    if quality_score >= 50 and real_provider_count >= 3:
+        return 'medium'
+    if quality_score >= MIN_RESEARCH_QUALITY_SCORE and real_provider_count >= 2:
+        return 'low'
+    return 'insufficient'
+
+
+def _score_research(seo_data, trending_data, gsc_queries, category_name):
+    """Combine SEOResearch's quality with related queries and Search Console.
+
+    Returns (source_metadata, quality_score, confidence_level). Raises
+    RuntimeError when the evidence is insufficient to write from.
+    """
+    source_metadata = seo_data.get('source_metadata', {})
+    source_metadata['trend_analysis'] = seo_data.get('trend_analysis', {})
+    quality = seo_data.get('quality', {})
+
+    related_count = sum(len((trending_data or {}).get(key, [])) for key in (
+        'trending_now', 'related_rising', 'related_top'
+    ))
+    source_metadata['google_related_queries'] = {
+        'status': 'real' if related_count else 'unavailable',
+        'count': related_count,
+        'checked_at': (trending_data or {}).get('timestamp'),
+    }
+    # Search Console is first-party evidence: real queries that really reached
+    # this site. It does not depend on scraping Google Trends or DuckDuckGo, both
+    # of which block server IPs, so it keeps a category viable when the scraped
+    # providers are unavailable.
+    gsc_matches = _search_console_evidence(gsc_queries, category_name)
+    source_metadata['search_console'] = {
+        'status': 'real' if gsc_matches else 'unavailable',
+        'count': len(gsc_matches),
+        'queries': gsc_matches[:10],
+    }
+
+    # Related queries come from pytrends, the same provider that evaluate_quality
+    # already scores as google_trends. They used to add up to 10 points and a
+    # whole extra provider on top of it, double-counting Google Trends. Now Trends
+    # counts once: only when SEOResearch's own Trends call did not already succeed.
+    trends_points, trends_providers = _google_trends_top_up(source_metadata, related_count)
+    gsc_score = min(GSC_MAX_WEIGHT, len(gsc_matches) * GSC_POINTS_PER_MATCH)
+    quality_score = min(100, int(quality.get('score', 0)) + trends_points + gsc_score)
+    real_provider_count = (int(quality.get('real_provider_count', 0))
+                           + trends_providers
+                           + (1 if gsc_matches else 0))
+    confidence_level = _confidence_level(quality_score, real_provider_count)
+    if confidence_level == 'insufficient':
+        raise RuntimeError(
+            f'Insufficient research evidence (quality={quality_score}, '
+            f'real_providers={real_provider_count})'
+        )
+    return source_metadata, quality_score, confidence_level
+
+
+def _research_category(seo, user_id, site_id, category_name, language, gsc_queries):
+    """Research one category and save it. Raises when it fails or lacks evidence."""
+    trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
+    # Derive suggestions from the same snapshot. This avoids a second Google
+    # Trends request and inconsistent results/rate limiting.
+    suggestions = trending.build_topic_suggestions(category_name, trending_data, count=10)
+
+    try:
+        seo_data = seo.research_category(category_name, language=language)
+        source_metadata, quality_score, confidence_level = _score_research(
+            seo_data, trending_data, gsc_queries, category_name
+        )
+    except Exception as e:
+        logger.error(f"SEO research error for {category_name}: {e}")
+        raise
+
+    # Fallback-generated keywords/questions are invented; store only observed
+    # evidence so the article generator never sees them.
+    keywords = seo_data.get('evidence_suggestions', seo_data.get('suggestions', []))
+    questions = seo_data.get('evidence_questions', seo_data.get('questions', []))
+    trend_score = seo_data.get('trend_score', 0)
+    logger.info(f"SEO research: {len(keywords)} keywords, {len(questions)} questions, trend score: {trend_score}")
+
+    db.save_research_data(
+        user_id=user_id,
+        site_id=site_id,
+        category=category_name,
+        trending=trending_data.get('trending_now', []) if trending_data else [],
+        rising=trending_data.get('related_rising', []) if trending_data else [],
+        top=trending_data.get('related_top', []) if trending_data else [],
+        suggestions=suggestions,
+        keywords=keywords,
+        questions=questions,
+        long_tail=seo_data.get('long_tail_keywords', []),
+        competitor_outlines=seo_data.get('competitor_outlines', []),
+        youtube_insights=seo_data.get('youtube_insights', []),
+        social_insights=seo_data.get('social_insights', []),
+        trend_score=trend_score,
+        semantic_context=seo_data.get('semantic_context', ''),
+        news_insights=seo_data.get('news_insights', []),
+        source_metadata=source_metadata,
+        quality_score=quality_score,
+        confidence_level=confidence_level,
+        is_fallback=any(
+            meta.get('status') == 'fallback'
+            for meta in source_metadata.values()
+            if isinstance(meta, dict)
+        ),
+    )
+    logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
+
+
+class _ResearchRefund:
+    """Refund bookkeeping for one deep_research_job run.
+
+    Every refund is bounded by what was charged: in total the job refunds
+    exactly the charge minus the categories researched successfully, never more,
+    however many failure paths call settle(). Scheduled runs (force=False) were
+    never charged and never refund.
+    """
+
+    def __init__(self, user_id, force, charged_credits):
+        self.user_id = user_id
+        self.force = force
+        self.charged = None
+        self.refunded = 0
+        self.successful = 0
+        if force and charged_credits is not None:
+            self.set_charged(charged_credits)
+
+    def set_charged(self, value):
+        self.charged = max(0, int(value or 0)) if self.force else 0
+
+    def settle(self):
+        """Refund whatever is still owed. Idempotent; returns the amount refunded now."""
+        charged = self.charged or 0
+        owed = max(0, charged - self.successful) - self.refunded
+        owed = min(owed, charged - self.refunded)
+        if owed <= 0:
+            return 0
+        try:
+            db.refund_user_credits(self.user_id, owed)
+            self.refunded += owed
+            logger.info(f"Refunded {owed} research credit(s) to user {self.user_id} (charged {charged}).")
+            return owed
+        except Exception as refund_err:
+            logger.error(f"Failed to refund {owed} research credit(s) to user {self.user_id}: {refund_err}")
+            return 0
+
+
+def _load_research_plan(user_id, site_id, category, force, refund):
+    """Returns (site_config, language, categories to research), or None when there is nothing to do."""
+    with db.get_session() as session:
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            logger.error(f"Site {site_id} not found")
+            return None
+
+        raw_categories = site.selected_categories or []
+        if force and refund.charged is None:
+            # Legacy enqueue without charged_credits: the route charged one credit
+            # per selected category (or one for a single category).
+            refund.set_charged(1 if category else len(raw_categories))
+
+        selected_categories = _dedupe_categories(raw_categories)
+        if category:
+            selected_categories = [cat for cat in selected_categories if cat['name'] == category]
+        if force:
+            # Never research more categories than were paid for.
+            selected_categories = selected_categories[:refund.charged or 0]
+
+        if not selected_categories:
+            logger.info(f"No categories to research for site {site.site_name}")
+            return None
+
+        site_config = {
+            'telegram_enabled': site.telegram_enabled,
+            'telegram_bot_token': site.telegram_bot_token,
+            'telegram_chat_id': site.telegram_chat_id,
+            'site_name': site.site_name
+        }
+        return site_config, site.language or 'id', selected_categories
+
+
+def _notify_research_result(site_config, category, successful_categories, failed_categories):
+    site_name = site_config['site_name']
+    if successful_categories > 0:
+        category_str = f"kategori '{category}'" if category else f"{successful_categories} kategori"
+        msg = (f"🔍 <b>Riset Selesai</b>\n\n"
+               f"🌐 <b>Website:</b> {site_name}\n"
+               f"✅ Berhasil meriset {category_str}\n"
+               f"📊 Topik trending disimpan untuk artikel berikutnya")
+        if failed_categories > 0:
+            msg += (f"\n⚠️ Gagal meriset {failed_categories} kategori "
+                    f"(kredit dikembalikan jika riset dijalankan manual).")
+        send_telegram_notification(site_config, msg)
+    else:
+        send_telegram_notification(site_config,
+                                   f"❌ <b>Riset Gagal</b>\n\n"
+                                   f"🌐 <b>Website:</b> {site_name}\n"
+                                   f"⚠️ Tidak ada kategori yang berhasil diriset. "
+                                   f"Kredit dikembalikan jika riset dijalankan manual.")
+
+
 def deep_research_job(user_id, force=True, site_id=None, category=None, charged_credits=None):
     """Deep research job to find trending topics.
 
@@ -133,79 +338,25 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
     however many failure paths run. Scheduled runs (charged_credits None,
     force=False) were never charged and never refund.
     """
-    state = {'charged': None, 'refunded': 0, 'successful': 0}
-
-    def set_charged(value):
-        state['charged'] = max(0, int(value or 0)) if force else 0
-
-    if force and charged_credits is not None:
-        set_charged(charged_credits)
-
-    def settle_refund():
-        """Refund whatever is still owed. Idempotent; returns the amount refunded now."""
-        charged = state['charged'] or 0
-        owed = max(0, charged - state['successful']) - state['refunded']
-        owed = min(owed, charged - state['refunded'])
-        if owed <= 0:
-            return 0
-        try:
-            db.refund_user_credits(user_id, owed)
-            state['refunded'] += owed
-            logger.info(f"Refunded {owed} research credit(s) to user {user_id} (charged {charged}).")
-            return owed
-        except Exception as refund_err:
-            logger.error(f"Failed to refund {owed} research credit(s) to user {user_id}: {refund_err}")
-            return 0
+    refund = _ResearchRefund(user_id, force, charged_credits)
 
     if not site_id:
         logger.error("No site_id provided for deep_research_job")
-        settle_refund()
+        refund.settle()
         return
 
-    with db.get_session() as session:
-        from models import WordPressSite
-        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
-        if not site:
-            logger.error(f"Site {site_id} not found")
-            settle_refund()
-            return
-
-        raw_categories = site.selected_categories or []
-        if force and state['charged'] is None:
-            # Legacy enqueue without charged_credits: the route charged one credit
-            # per selected category (or one for a single category).
-            set_charged(1 if category else len(raw_categories))
-
-        selected_categories = _dedupe_categories(raw_categories)
-        if category:
-            selected_categories = [cat for cat in selected_categories if cat['name'] == category]
-
-        if force:
-            # Never research more categories than were paid for.
-            selected_categories = selected_categories[:state['charged'] or 0]
-
-        if not selected_categories:
-            logger.info(f"No categories to research for site {site.site_name}")
-            settle_refund()
-            return
-
-        site_name = site.site_name
-        telegram_enabled = site.telegram_enabled
-        telegram_bot_token = site.telegram_bot_token
-        telegram_chat_id = site.telegram_chat_id
-        language = site.language or 'id'
-
-    site_config = {
-        'telegram_enabled': telegram_enabled,
-        'telegram_bot_token': telegram_bot_token,
-        'telegram_chat_id': telegram_chat_id,
-        'site_name': site_name
-    }
+    plan = _load_research_plan(user_id, site_id, category, force, refund)
+    if plan is None:
+        refund.settle()
+        return
+    site_config, language, selected_categories = plan
+    site_name = site_config['site_name']
 
     try:
         logger.info(f"Starting auto-research job for site {site_name} (language={language})")
 
-        # Import SEO research module
+        # Local import: seo_research pulls in pytrends/pandas, which are heavy
+        # and do not import in every environment.
         from seo_research import SEOResearch
         seo = SEOResearch()
 
@@ -219,139 +370,13 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                 "would keep categories viable when Trends/DuckDuckGo block this server."
             )
 
-        successful_categories = 0
         failed_categories = 0
-
         for cat in selected_categories:
             category_name = cat['name']
             logger.info(f"Researching category: {category_name} on {site_name}")
-
             try:
-                # Get trending data
-                trending_data = trending.get_trending_topics(category_name, limit=15, language=language)
-
-                # Derive suggestions from the same snapshot. This avoids a second
-                # Google Trends request and inconsistent results/rate limiting.
-                suggestions = trending.build_topic_suggestions(
-                    category_name, trending_data, count=10
-                )
-
-                # Get SEO research data
-                try:
-                    seo_data = seo.research_category(category_name, language=language)
-                    # Fallback-generated keywords/questions are invented; store only
-                    # observed evidence so the article generator never sees them.
-                    keywords = seo_data.get('evidence_suggestions', seo_data.get('suggestions', []))
-                    questions = seo_data.get('evidence_questions', seo_data.get('questions', []))
-                    competitor_outlines = seo_data.get('competitor_outlines', [])
-                    youtube_insights = seo_data.get('youtube_insights', [])
-                    social_insights = seo_data.get('social_insights', [])
-                    trend_score = seo_data.get('trend_score', 0)
-                    long_tail = seo_data.get('long_tail_keywords', [])
-                    semantic_context = seo_data.get('semantic_context', '')
-                    news_insights = seo_data.get('news_insights', [])
-                    source_metadata = seo_data.get('source_metadata', {})
-                    source_metadata['trend_analysis'] = seo_data.get('trend_analysis', {})
-                    quality = seo_data.get('quality', {})
-
-                    related_count = sum(len((trending_data or {}).get(key, [])) for key in (
-                        'trending_now', 'related_rising', 'related_top'
-                    ))
-                    source_metadata['google_related_queries'] = {
-                        'status': 'real' if related_count else 'unavailable',
-                        'count': related_count,
-                        'checked_at': (trending_data or {}).get('timestamp'),
-                    }
-                    # Search Console is first-party evidence: real queries that really
-                    # reached this site. It does not depend on scraping Google Trends
-                    # or DuckDuckGo, both of which block server IPs, so it keeps a
-                    # category viable when the scraped providers are unavailable.
-                    gsc_matches = _search_console_evidence(gsc_queries, category_name)
-                    source_metadata['search_console'] = {
-                        'status': 'real' if gsc_matches else 'unavailable',
-                        'count': len(gsc_matches),
-                        'queries': gsc_matches[:10],
-                    }
-
-                    # Related queries come from pytrends, the same provider that
-                    # evaluate_quality already scores as google_trends. They used to
-                    # add up to 10 points and a whole extra provider on top of it,
-                    # double-counting Google Trends. Now Trends counts once: only
-                    # when SEOResearch's own Trends call did not already succeed.
-                    trends_points, trends_providers = _google_trends_top_up(
-                        source_metadata, related_count
-                    )
-                    gsc_score = min(GSC_MAX_WEIGHT, len(gsc_matches) * GSC_POINTS_PER_MATCH)
-                    quality_score = min(100, int(quality.get('score', 0))
-                                        + trends_points
-                                        + gsc_score)
-                    real_provider_count = (int(quality.get('real_provider_count', 0))
-                                           + trends_providers
-                                           + (1 if gsc_matches else 0))
-                    if quality_score >= 75 and real_provider_count >= 5:
-                        confidence_level = 'high'
-                    elif quality_score >= 50 and real_provider_count >= 3:
-                        confidence_level = 'medium'
-                    elif quality_score >= MIN_RESEARCH_QUALITY_SCORE and real_provider_count >= 2:
-                        confidence_level = 'low'
-                    else:
-                        confidence_level = 'insufficient'
-
-                    if confidence_level == 'insufficient':
-                        raise RuntimeError(
-                            f'Insufficient research evidence (quality={quality_score}, '
-                            f'real_providers={real_provider_count})'
-                        )
-
-                    logger.info(f"SEO research: {len(keywords)} keywords, {len(questions)} questions, trend score: {trend_score}")
-                except Exception as e:
-                    logger.error(f"SEO research error for {category_name}: {e}")
-                    keywords = []
-                    questions = []
-                    competitor_outlines = []
-                    youtube_insights = []
-                    social_insights = []
-                    trend_score = 0
-                    long_tail = []
-                    semantic_context = ''
-                    news_insights = []
-                    source_metadata = {}
-                    quality_score = 0
-                    confidence_level = 'insufficient'
-                    raise
-
-                # Save to database with SEO data
-                db.save_research_data(
-                    user_id=user_id,
-                    site_id=site_id,
-                    category=category_name,
-                    trending=trending_data.get('trending_now', []) if trending_data else [],
-                    rising=trending_data.get('related_rising', []) if trending_data else [],
-                    top=trending_data.get('related_top', []) if trending_data else [],
-                    suggestions=suggestions,
-                    keywords=keywords,
-                    questions=questions,
-                    long_tail=long_tail,
-                    competitor_outlines=competitor_outlines,
-                    youtube_insights=youtube_insights,
-                    social_insights=social_insights,
-                    trend_score=trend_score,
-                    semantic_context=semantic_context,
-                    news_insights=news_insights,
-                    source_metadata=source_metadata,
-                    quality_score=quality_score,
-                    confidence_level=confidence_level,
-                    is_fallback=any(
-                        meta.get('status') == 'fallback'
-                        for meta in source_metadata.values()
-                        if isinstance(meta, dict)
-                    ),
-                )
-
-                logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
-                successful_categories += 1
-                state['successful'] = successful_categories
-
+                _research_category(seo, user_id, site_id, category_name, language, gsc_queries)
+                refund.successful += 1
             except BaseTimeoutException:
                 # RQ's death penalty raises inside the job and is an Exception
                 # subclass, so the per-category handler below used to swallow it and
@@ -359,7 +384,7 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
                 # refunds every category that was not completed.
                 logger.error(
                     f"Research job hit its time limit while processing '{category_name}'. "
-                    f"Completed {successful_categories} categories."
+                    f"Completed {refund.successful} categories."
                 )
                 raise
             except Exception as cat_error:
@@ -368,31 +393,15 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
 
         # Refund every charged credit that did not produce research: failed
         # categories, and any surplus charged for duplicate category entries.
-        settle_refund()
+        refund.settle()
 
         # Expose a machine-readable outcome to the job status endpoint.
         result = {
-            'successful_categories': successful_categories,
+            'successful_categories': refund.successful,
             'failed_categories': failed_categories,
-            'refunded_credits': state['refunded'],
+            'refunded_credits': refund.refunded,
         }
-
-        # Send notification
-        if successful_categories > 0:
-            category_str = f"category '{category}'" if category else f"{successful_categories} categories"
-            msg = (f"🔍 <b>Research Completed</b>\n\n"
-                   f"🌐 <b>Website:</b> {site_name}\n"
-                   f"✅ Researched {category_str}\n"
-                   f"📊 Trending topics saved for tomorrow's articles")
-            if failed_categories > 0:
-                msg += f"\n⚠️ Failed to research {failed_categories} categories (credits refunded if manual)."
-
-            send_telegram_notification(site_config, msg)
-        else:
-            send_telegram_notification(site_config,
-                f"❌ <b>Research Failed</b>\n\n"
-                f"🌐 <b>Website:</b> {site_name}\n"
-                f"⚠️ Failed to research any categories. Credits refunded if manual.")
+        _notify_research_result(site_config, category, refund.successful, failed_categories)
         return result
 
     except Exception as e:
@@ -400,13 +409,13 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
         # Refund whatever was charged and not yet researched or refunded. Bounded
         # by charged_credits, so a failure after the normal refund (for example in
         # the notification) cannot refund a second time.
-        settle_refund()
+        refund.settle()
 
         try:
             send_telegram_notification(site_config,
-                f"❌ <b>Research System Error</b>\n\n"
-                f"🌐 <b>Website:</b> {site_name}\n"
-                f"Error: {str(e)[:150]}")
+                                       f"❌ <b>Kesalahan Sistem Riset</b>\n\n"
+                                       f"🌐 <b>Website:</b> {site_name}\n"
+                                       f"Error: {str(e)[:150]}")
         except Exception as notify_err:
             logger.error(f"Failed to send research error notification: {notify_err}")
 
@@ -415,7 +424,6 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
     """Background task to bulk update year in WordPress posts"""
     logger.info(f"Starting bulk update year from {from_year} to {to_year} for site_id {site_id}")
     try:
-        from models import WordPressSite
         with db.get_session() as session:
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
             if not site:
@@ -429,7 +437,6 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
                 'site_name': site.site_name
             }
 
-        from services.wp_publisher import WordPressPublisher
         bot = WordPressPublisher(
             site_config['wordpress_url'],
             site_config['wordpress_username'],
@@ -491,5 +498,3 @@ def bulk_update_year_task(user_id, site_id, from_year, to_year):
 
     except Exception as e:
         logger.error(f"Error in bulk_update_year_task: {e}", exc_info=True)
-
-

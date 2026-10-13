@@ -10,9 +10,9 @@ from rq import Queue
 from rq.exceptions import NoSuchJobError
 from rq.job import Job
 from rq.registry import StartedJobRegistry, ScheduledJobRegistry, DeferredJobRegistry
-from sqlalchemy import or_, text
-from database import Database
-from models import WordPressSite, User
+from sqlalchemy import or_
+from database import Database, add_credits
+from models import ContentQueue, WordPressSite, User
 from config import Config
 
 # Setup logging
@@ -105,8 +105,6 @@ def reset_stuck_queue_items():
     job settles the reservation under the same lock and clears credit_held, so
     the two can never both refund it.
     """
-    from models import ContentQueue
-
     try:
         # Moves jobs whose worker died (expired entries) to failed, so their
         # status stops reading 'started'.
@@ -161,10 +159,7 @@ def reset_stuck_queue_items():
                     f"'pending'{' and refunding its reserved credit' if refund else ''}."
                 )
                 if refund:
-                    session.execute(
-                        text("UPDATE users SET credits = COALESCE(credits, 0) + 1 WHERE id = :uid"),
-                        {'uid': item.user_id}
-                    )
+                    add_credits(session, item.user_id, 1)
                 item.status = 'pending'
                 item.posting_started_at = None
                 item.job_id = None
@@ -178,135 +173,153 @@ def reset_stuck_queue_items():
         logger.info(f"Reset {reset_count} stuck queue item(s).")
 
 
+def _schedule_gsc_sync(site):
+    """Enqueue the daily Search Console sync for a site when it is due.
+
+    Search Console intelligence is read-only and does not consume credits, so
+    snapshots stay fresh even when auto-post is paused or the user's article
+    credits are exhausted. Errors are logged here: a Redis or GSC failure used
+    to abort the site's iteration and silently skip its auto-post.
+    """
+    site_id = site.id
+    try:
+        if not (site.gsc_refresh_token and site.gsc_property_url):
+            return
+        sync_due = (
+            not site.gsc_last_synced_at
+            or datetime.now() - site.gsc_last_synced_at >= timedelta(hours=24)
+        )
+        if not sync_due:
+            return
+        gsc_lock = f"scheduler:gsc_sync:{site_id}"
+        if not redis_conn.set(gsc_lock, "1", nx=True, ex=6 * 3600):
+            return
+        try:
+            q.enqueue(
+                'tasks.gsc_jobs.sync_search_console_job',
+                site.user_id,
+                site_id,
+                job_timeout='10m'
+            )
+            logger.info(f"Enqueued daily Search Console sync for site_id={site_id}")
+        except Exception:
+            redis_conn.delete(gsc_lock)
+            raise
+    except Exception as gsc_err:
+        logger.error(f"Error scheduling Search Console sync for site_id={site_id}: {gsc_err}")
+
+
+def _has_credits(site, user):
+    """False (logged at most once an hour per site) when the owner has no credits."""
+    if user and (user.credits or 0) > 0:
+        return True
+    lock_key_log = f"scheduler:log_credit_warning:{site.id}"
+    if not redis_conn.get(lock_key_log):
+        logger.info(f"Skipping auto-post for site_id={site.id}: user_id={site.user_id} has insufficient credits.")
+        redis_conn.setex(lock_key_log, 3600, "1")
+    return False
+
+
+def _site_timezone(site):
+    """Returns (tz name, ZoneInfo), falling back to Asia/Jakarta for an invalid name."""
+    tz_name = site.timezone or 'Asia/Jakarta'
+    try:
+        return tz_name, ZoneInfo(tz_name)
+    except Exception as e:
+        logger.error(f"Invalid timezone '{tz_name}' for site_id={site.id}, falling back to Asia/Jakarta: {e}")
+        return tz_name, ZoneInfo('Asia/Jakarta')
+
+
+def _claim_next_queue_item(session, site, job_id):
+    """Flip the oldest pending queue item to 'posting' for job_id. Returns it, or None."""
+    queue_item = session.query(ContentQueue).filter_by(
+        user_id=site.user_id,
+        site_id=site.id,
+        status='pending'
+    ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
+    if queue_item:
+        queue_item.status = 'posting'  # Mark as posting to prevent duplicate pickup
+        # Baseline only; the job resets it when it starts.
+        queue_item.posting_started_at = datetime.now()
+        queue_item.job_id = job_id
+        queue_item.credit_held = False
+        session.commit()
+    return queue_item
+
+
+def _dispatch_auto_post(session, site):
+    """Enqueue this hour's generate_and_post for a site, once per scheduled hour."""
+    user_id = site.user_id
+    site_id = site.id
+    tz_name, tz = _site_timezone(site)
+    now_site = datetime.now(tz)
+    current_hour = now_site.hour
+
+    schedule_hours = site.schedule_hours or '0,6,12,18'
+    hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
+    if current_hour not in hours_list:
+        return
+
+    lock_key = f"scheduler:last_run_post:{site_id}:{now_site.strftime('%Y-%m-%d %H')}"
+    if not redis_conn.set(lock_key, "1", nx=True, ex=7200):
+        return
+    delay_minutes = random.randint(0, 50)
+
+    # The scheduler does not reserve credit; the job reserves it itself once it
+    # has claimed the item. Recording the job id up front lets the stuck-item
+    # sweep see that the (delayed) job is still scheduled.
+    job_id = str(uuid.uuid4())
+    queue_item = _claim_next_queue_item(session, site, job_id)
+    item_id = queue_item.id if queue_item else None
+
+    logger.info(
+        f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} "
+        f"(delayed by {delay_minutes}m, hour={current_hour} in {tz_name})"
+    )
+    try:
+        q.enqueue_in(
+            timedelta(minutes=delay_minutes),
+            'tasks.article_jobs.generate_and_post',
+            user_id,
+            item_id,
+            site_id,
+            job_timeout=GENERATE_AND_POST_JOB_TIMEOUT,
+            job_id=job_id
+        )
+    except Exception:
+        # Rollback: release lock and revert queue item status
+        redis_conn.delete(lock_key)
+        if queue_item:
+            queue_item.status = 'pending'
+            queue_item.posting_started_at = None
+            queue_item.job_id = None
+            session.commit()
+        raise
+
+
 def dispatch_jobs():
     with db.get_session() as session:
-        # Get all active WordPress sites
         sites = session.query(WordPressSite).filter_by(is_active=True).all()
         if not sites:
             return
 
         # Batch load users to prevent N+1 queries
-        user_ids = list(set([site.user_id for site in sites]))
-        users = session.query(User).filter(User.id.in_(user_ids)).all()
-        users_dict = {user.id: user for user in users}
+        user_ids = list({site.user_id for site in sites})
+        users_dict = {user.id: user for user in session.query(User).filter(User.id.in_(user_ids)).all()}
 
         for site in sites:
             try:
-                user_id = site.user_id
-                site_id = site.id
-                user = users_dict.get(user_id)
-
-                # Search Console intelligence is read-only and does not consume
-                # credits. Keep snapshots fresh even when auto-post is paused or
-                # the user's article credits are exhausted. It has its own
-                # try/except: a Redis or GSC failure here used to abort the
-                # site's iteration and silently skip its auto-post.
-                try:
-                    if site.gsc_refresh_token and site.gsc_property_url:
-                        sync_due = (
-                            not site.gsc_last_synced_at
-                            or datetime.now() - site.gsc_last_synced_at >= timedelta(hours=24)
-                        )
-                        if sync_due:
-                            gsc_lock = f"scheduler:gsc_sync:{site_id}"
-                            if redis_conn.set(gsc_lock, "1", nx=True, ex=6 * 3600):
-                                try:
-                                    q.enqueue(
-                                        'tasks.gsc_jobs.sync_search_console_job',
-                                        user_id,
-                                        site_id,
-                                        job_timeout='10m'
-                                    )
-                                    logger.info(f"Enqueued daily Search Console sync for site_id={site_id}")
-                                except Exception:
-                                    redis_conn.delete(gsc_lock)
-                                    raise
-                except Exception as gsc_err:
-                    logger.error(f"Error scheduling Search Console sync for site_id={site_id}: {gsc_err}")
-
-                # Check user credits
-                if not user or (user.credits or 0) <= 0:
-                    # Log only once every hour to avoid spamming the log
-                    lock_key_log = f"scheduler:log_credit_warning:{site_id}"
-                    has_logged = redis_conn.get(lock_key_log)
-                    if not has_logged:
-                        logger.info(f"Skipping auto-post for site_id={site_id}: user_id={user_id} has insufficient credits.")
-                        redis_conn.setex(lock_key_log, 3600, "1")
+                _schedule_gsc_sync(site)
+                if not _has_credits(site, users_dict.get(site.user_id)):
                     continue
-
-                tz_name = site.timezone or 'Asia/Jakarta'
-                try:
-                    tz = ZoneInfo(tz_name)
-                except Exception as e:
-                    logger.error(f"Invalid timezone '{tz_name}' for site_id={site_id}, falling back to Asia/Jakarta: {e}")
-                    tz = ZoneInfo('Asia/Jakarta')
-
-                now_site = datetime.now(tz)
-                current_hour = now_site.hour
-                current_hour_str = now_site.strftime("%Y-%m-%d %H")
-
-                # 1. Check auto post
                 if site.auto_post and site.selected_categories:
-                    schedule_hours = site.schedule_hours or '0,6,12,18'
                     try:
-                        hours_list = [int(h.strip()) for h in schedule_hours.split(',') if h.strip().isdigit()]
-                        if current_hour in hours_list:
-                            lock_key = f"scheduler:last_run_post:{site_id}:{current_hour_str}"
-                            lock_set = redis_conn.set(lock_key, "1", nx=True, ex=7200)
-                            if not lock_set:
-                                continue
-                            delay_minutes = random.randint(0, 50)
-
-                            # Check if there is a pending item in ContentQueue (pick oldest pending)
-                            from models import ContentQueue
-                            queue_item = session.query(ContentQueue).filter_by(
-                                user_id=user_id,
-                                site_id=site_id,
-                                status='pending'
-                            ).order_by(ContentQueue.created_at.asc()).with_for_update(skip_locked=True).first()
-
-                            item_id = None
-                            # The scheduler does not reserve credit; the job reserves
-                            # it itself once it has claimed the item. Recording the
-                            # job id up front lets the stuck-item sweep see that the
-                            # (delayed) job is still scheduled.
-                            job_id = str(uuid.uuid4())
-                            if queue_item:
-                                item_id = queue_item.id
-                                queue_item.status = 'posting' # Mark as posting to prevent duplicate pickup
-                                # Baseline only; the job resets it when it starts.
-                                queue_item.posting_started_at = datetime.now()
-                                queue_item.job_id = job_id
-                                queue_item.credit_held = False
-                                session.commit()
-
-                            logger.info(f"Enqueueing generate_and_post for user_id={user_id}, site_id={site_id}, item_id={item_id} (delayed by {delay_minutes}m, hour={current_hour} in {tz_name})")
-                            try:
-                                q.enqueue_in(
-                                    timedelta(minutes=delay_minutes),
-                                    'tasks.article_jobs.generate_and_post',
-                                    user_id,
-                                    item_id,
-                                    site_id,
-                                    job_timeout=GENERATE_AND_POST_JOB_TIMEOUT,
-                                    job_id=job_id
-                                )
-                            except Exception:
-                                # Rollback: release lock and revert queue item status
-                                redis_conn.delete(lock_key)
-                                if queue_item:
-                                    queue_item.status = 'pending'
-                                    queue_item.posting_started_at = None
-                                    queue_item.job_id = None
-                                    session.commit()
-                                raise
+                        _dispatch_auto_post(session, site)
                     except Exception as e:
-                        logger.error(f"Error checking auto post schedule for site_id={site_id}: {e}")
+                        logger.error(f"Error checking auto post schedule for site_id={site.id}: {e}")
             except Exception as loop_err:
                 logger.error(f"Error processing site_id={site.id}: {loop_err}")
-                continue
 
-            # Auto research scheduler check removed since manual research is used instead.
 
 if __name__ == '__main__':
     logger.info("Dispatcher started.")

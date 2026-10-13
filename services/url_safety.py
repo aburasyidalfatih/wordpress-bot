@@ -83,7 +83,7 @@ def validate_public_http_url(url, resolve=True):
     try:
         literal_ip = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        pass  # not an IP literal, so a hostname
 
     if literal_ip is not None:
         if not is_public_ip(literal_ip):

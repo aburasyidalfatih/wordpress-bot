@@ -12,6 +12,7 @@ Failures are split into two kinds:
 
 import re
 import logging
+from urllib.parse import urlparse
 
 from services.article_generator import strip_html
 
@@ -143,10 +144,9 @@ def check_article(article, focus_keyword=None, allowed_link_urls=None):
 
 def _same_site(href, allowed_urls):
     """True when href shares a host with one of the allowed URLs."""
-    from urllib.parse import urlparse
     try:
         host = urlparse(href).netloc
-    except Exception:
+    except (ValueError, TypeError, AttributeError):  # malformed or non-string URL: not ours
         return False
     if not host:
         return False
@@ -154,7 +154,7 @@ def _same_site(href, allowed_urls):
         try:
             if urlparse(url).netloc == host:
                 return True
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             continue
     return False
 

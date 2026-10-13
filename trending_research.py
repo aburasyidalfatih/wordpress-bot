@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 
 class TrendingResearch:
     def __init__(self):
-        self.pytrends = None
+        # One client per language; dropped after a failure so the next call
+        # fetches fresh cookies.
+        self._pytrends_cache = {}
 
     def _get_pytrends(self, language='id'):
         if TrendReq is None:
             raise RuntimeError('pytrends provider is not installed')
         hl = 'en-US' if language == 'en' else 'id-ID'
         tz = 360 if language == 'en' else 420
-        if not hasattr(self, '_pytrends_cache'):
-            self._pytrends_cache = {}
         if language not in self._pytrends_cache:
             self._pytrends_cache[language] = TrendReq(hl=hl, tz=tz, timeout=(10, 25))
         return self._pytrends_cache[language]
@@ -54,8 +54,7 @@ class TrendingResearch:
                         results['related_top'] = related[category_name]['top'].head(limit)['query'].tolist()
             except Exception as e:
                 logger.warning(f"Could not get related queries: {e}")
-                if hasattr(self, '_pytrends_cache') and language in self._pytrends_cache:
-                    del self._pytrends_cache[language] # Reset so it tries to get new cookies next time
+                self._pytrends_cache.pop(language, None)
 
             # Try to get trending searches (general country trends)
             try:
@@ -70,8 +69,7 @@ class TrendingResearch:
                     ][:limit]
             except Exception as e:
                 logger.warning(f"Could not get trending searches: {e}")
-                if hasattr(self, '_pytrends_cache') and language in self._pytrends_cache:
-                    del self._pytrends_cache[language]
+                self._pytrends_cache.pop(language, None)
 
             return results
         except Exception as e:
@@ -115,37 +113,6 @@ class TrendingResearch:
                 if len(suggestions) >= count:
                     return suggestions
         return suggestions
-
-    def get_interest_over_time(self, keywords, language='id'):
-        """Get interest over time for keywords"""
-        try:
-            geo = 'US' if language == 'en' else 'ID'
-            pytrends = self._get_pytrends(language)
-            pytrends.build_payload(keywords, timeframe='today 3-m', geo=geo)
-            time.sleep(5)
-            data = pytrends.interest_over_time()
-
-            if data.empty:
-                return None
-
-            results = []
-            for keyword in keywords:
-                if keyword in data.columns:
-                    avg_interest = data[keyword].mean()
-                    current_interest = data[keyword].iloc[-1]
-                    trend = 'rising' if current_interest > avg_interest else 'falling'
-
-                    results.append({
-                        'keyword': keyword,
-                        'current_interest': int(current_interest),
-                        'avg_interest': int(avg_interest),
-                        'trend': trend
-                    })
-
-            return results
-        except Exception as e:
-            logger.error(f"Interest over time error: {e}")
-            return None
 
     def suggest_article_topics(self, category_name, count=5, language='id'):
         """Suggest article topics based on trending data"""
