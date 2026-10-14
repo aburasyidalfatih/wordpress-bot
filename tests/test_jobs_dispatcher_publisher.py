@@ -95,8 +95,11 @@ class StuckQueueSweepTests(unittest.TestCase):
         with self.db.get_session() as s:
             self.assertEqual(s.get(User, 1).credits, 2)
 
-    def test_job_timeout_is_25_minutes(self):
-        self.assertEqual(dispatcher.GENERATE_AND_POST_JOB_TIMEOUT, '25m')
+    def test_job_timeout_fits_the_quality_pipeline_and_the_sweep(self):
+        # Brief, article, assessment, rewrite, re-assessment and fact-check
+        # need up to 45 minutes; the stuck sweep must not reset a running job.
+        self.assertEqual(dispatcher.GENERATE_AND_POST_JOB_TIMEOUT, '45m')
+        self.assertLess(45, dispatcher.STUCK_POSTING_TIMEOUT_MINUTES)
 
 
 def response(status, body=None, headers=None):

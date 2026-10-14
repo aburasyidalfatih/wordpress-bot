@@ -8,6 +8,7 @@ from models import ContentQueue, ResearchData, User, WordPressSite
 from services.ai_providers import AIProviderError
 from services.article_generator import ArticleQualityError
 from services.article_review import ReviewResult
+from test_article_quality_support import quality_stub_patches
 from test_research_backend_support import load_with_stubbed_core, make_db
 
 jobs, _core = load_with_stubbed_core('tasks.article_jobs')
@@ -48,6 +49,7 @@ class PipelineTestCase(unittest.TestCase):
             patch.object(jobs, '_current_job', lambda: None),
             patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok'))),
         ]
+        patches += quality_stub_patches(jobs)
         for p in patches:
             p.start()
             self.addCleanup(p.stop)

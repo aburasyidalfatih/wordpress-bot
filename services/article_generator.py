@@ -14,6 +14,12 @@ from services.ai_providers import (
 )
 from services.article_prompts import build_article_prompt, build_image_prompts, build_system_instruction
 
+try:
+    from rq.timeouts import JobTimeoutException
+except ImportError:  # pragma: no cover - rq is a runtime dependency
+    class JobTimeoutException(Exception):
+        """Stand-in so the except clauses below stay valid without rq."""
+
 logger = logging.getLogger(__name__)
 
 # A 2000-2500 word HTML article plus meta, FAQs and takeaways does not fit in 8k
@@ -294,8 +300,19 @@ class ArticleGenerator:
         reraise=True
     )
     def generate_article(self, topic, existing_titles=None, custom_topic=None, seo_data=None, avoid_similar=False,
-                         custom_prompt=None, site_name=None, internal_links_context=None, **kwargs):
+                         custom_prompt=None, site_name=None, internal_links_context=None, content_brief=None,
+                         revision_request=None, **kwargs):
+        """Write one article.
+
+        content_brief: the rendered writing brief (services.content_brief),
+        placed after the research in the prompt. revision_request: a rewrite
+        request (previous draft plus editor instructions, see
+        services.article_quality) appended to the otherwise unchanged prompt.
+        """
         language = kwargs.get('language') or 'id'
+        prompt_options = {}
+        if content_brief:
+            prompt_options['content_brief'] = content_brief
         prompt, evidence_policy, allowed_link_urls = build_article_prompt(
             topic,
             existing_titles=existing_titles,
@@ -309,7 +326,10 @@ class ArticleGenerator:
             language=language,
             category_desc=kwargs.get('category_desc'),
             quality_feedback=kwargs.get('quality_feedback'),
+            **prompt_options,
         )
+        if revision_request:
+            prompt += revision_request
         result = self._request_article(prompt, evidence_policy)
         if result.truncated:
             _raise_truncated()
@@ -342,6 +362,8 @@ class ArticleGenerator:
             image = self.image
             label = f"{PROVIDER_LABELS.get(image.provider, image.provider)} image"
             return self._run_image_attempts(prompts, image.attempt, label, deadline)
+        except JobTimeoutException:
+            raise  # the RQ job ran out of time: never disguise it as an image failure
         except Exception as e:
             logger.error(f"Error generating featured image: {e}", exc_info=True)
             provider = getattr(self._image, 'provider', None)
@@ -365,6 +387,8 @@ class ArticleGenerator:
                     return _to_webp(image_bytes)
                 last_summary = summary
                 logger.warning(f"{label} attempt '{attempt_name}' returned no image. {summary}")
+            except JobTimeoutException:
+                raise
             except Exception as attempt_err:
                 last_error = attempt_err
                 logger.warning(f"{label} attempt '{attempt_name}' failed: {attempt_err}", exc_info=True)

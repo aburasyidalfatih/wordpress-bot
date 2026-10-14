@@ -26,6 +26,7 @@ if 'core_extensions' not in sys.modules:
         setattr(_stub, _name, Mock())
     sys.modules['core_extensions'] = _stub
 
+from test_article_quality_support import quality_stub_patches  # noqa: E402
 import tasks.article_jobs as jobs  # noqa: E402
 from services.article_review import ReviewResult  # noqa: E402
 from database import Database  # noqa: E402
@@ -81,6 +82,7 @@ class GenerateAndPostCreditTests(unittest.TestCase):
             patch.object(jobs, '_rq_job_is_alive', Mock(return_value=False)),
             patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok'))),
         ]
+        patches += quality_stub_patches(jobs)
         for p in patches:
             p.start()
             self.addCleanup(p.stop)

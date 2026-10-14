@@ -14,7 +14,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from threading import Lock
+from urllib.parse import urlsplit
 
+from services.topic_similarity import significant_tokens
 from trending_research import trends_locale, trends_session
 
 try:
@@ -82,8 +84,18 @@ YOUTUBE_VIDEO_ID_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MARKDOWN_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\([^)]*\)')
-_MARKDOWN_LINK_RE = re.compile(r'\[([^\]]*)\]\([^)]*\)')
+# Markdown links/images. Both parts are bounded and the link text may not
+# contain '[', which keeps matching linear on hostile input: the unbounded
+# `\[([^\]]*)\]\(` took over a minute on a 100 KB line of '['. The target allows
+# one level of parentheses (Wikipedia URLs) and spaces (Jina's `(url "title")`).
+_MARKDOWN_TARGET = r'\(((?:[^()\n]|\([^()\n]{0,200}\)){0,500})\)'
+_MARKDOWN_IMAGE_RE = re.compile(r'!\[([^\[\]\n]{0,300})\]' + _MARKDOWN_TARGET)
+_MARKDOWN_LINK_RE = re.compile(r'\[([^\[\]\n]{0,300})\]' + _MARKDOWN_TARGET)
+
+# Fetched pages are capped before any parsing, and so are single lines: every
+# regex below is then bounded no matter what a page contains.
+MAX_PAGE_CONTENT_CHARS = 300_000
+MAX_LINE_CHARS = 5000
 
 # Site chrome that Jina Reader renders as headings. Compared against the heading
 # lowercased with punctuation and comment counts removed. EXACT entries must be
@@ -183,16 +195,461 @@ def transcript_excerpt(snippets, window_seconds=TRANSCRIPT_WINDOW_SECONDS, max_c
     return excerpt
 
 
+# ---------------------------------------------------------------------------
+# Key passages: what a fetched page actually says about the topic. Headings
+# alone told the writer which subtopics a competitor covers but none of its
+# facts, so articles came out generic. These are the few paragraphs, lists or
+# table rows of a page that are most about the topic, with site chrome removed.
+# ---------------------------------------------------------------------------
+
+KEY_PASSAGE_LIMIT = 5
+KEY_PASSAGE_MAX_CHARS = 600
+KEY_PASSAGES_PAGE_MAX_CHARS = 2500
+# Shorter blocks are captions, buttons, bylines and menu entries, not content.
+KEY_PASSAGE_MIN_CHARS = 80
+KEY_PASSAGE_MIN_WORDS = 10
+# A partial passage shorter than this is not worth keeping under the page cap.
+_MIN_PARTIAL_PASSAGE_CHARS = 200
+# Blocks longer than this are article text even when they mention a word such
+# as "newsletter" or "cookie"; the boilerplate patterns only apply below it.
+_BOILERPLATE_BLOCK_MAX_CHARS = 400
+
+# Jina Reader puts "Title:", "URL Source:" and "Published Time:" lines before
+# this marker; the page itself follows it.
+_JINA_CONTENT_MARKER = 'Markdown Content:'
+_JINA_HEADER_MAX_CHARS = 3000
+_JINA_TITLE_RE = re.compile(r'^Title:[ \t]*(.{1,500})$', re.MULTILINE)
+_JINA_SOURCE_RE = re.compile(r'^URL Source:[ \t]*(\S{1,2000})', re.MULTILINE)
+# Closing hashes ("## Title ##") are stripped separately: a lazy body followed
+# by `\s*#*\s*$` backtracks quadratically on a long run of spaces.
+_ATX_HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s+(.*)$')
+_ATX_CLOSING_RE = re.compile(r'\s#+$')
+_SETEXT_UNDERLINE_RE = re.compile(r'^\s{0,3}(?:={2,}|-{2,})\s*$')
+_FENCE_RE = re.compile(r'^\s*(?:```|~~~)')
+_HORIZONTAL_RULE_RE = re.compile(r'^\s*([-*_])(?:\s*\1){2,}\s*$')
+_TABLE_SEPARATOR_RE = re.compile(r'^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$')
+_BULLET_ITEM_RE = re.compile(r'^\s*[-*+•]\s+')
+_NUMBERED_ITEM_RE = re.compile(r'^\s*\d{1,2}[.)]\s+')
+_BLOCKQUOTE_RE = re.compile(r'^\s*(?:>\s?)+')
+_BARE_URL_RE = re.compile(r'(?:https?://|www\.)\S+', re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r'<[^<>\n]{0,200}>')
+_EMPHASIS_RE = re.compile(r'\*\*|__|`|\*')
+_SENTENCE_END_RE = re.compile(r'[.!?]["\')\]]?(?=\s|$)')
+
+# Whole lines that are page furniture: "Baca juga: ...", bylines, photo credits.
+_BOILERPLATE_LINE_RE = re.compile(
+    r'^(?:baca juga|baca selengkapnya|baca berita|simak juga|cek juga|lihat juga|read also|'
+    r'read more|see also|also read|advertisement|iklan|scroll to continue|gulir untuk|'
+    r'share (?:this|on)\b|share\s*:|bagikan(?:\s+(?:ini|ke|di|artikel)\b|\s*:)|'
+    r'(?:tags?|label|kategori|categor(?:y|ies)|editor|penulis|reporter|pewarta|'
+    r'foto|photo|image|gambar)\s*:|written by|posted by|published by|ditulis oleh|'
+    r'diposting oleh|diterbitkan oleh|sumber gambar)',
+    re.IGNORECASE,
+)
+# Short blocks containing any of these are cookie notices, comment forms,
+# newsletter boxes, author bios, related-post widgets or footers.
+_BOILERPLATE_BLOCK_RE = re.compile(
+    r'cookies?\b|\bkuki\b|privacy policy|kebijakan privasi|terms of (?:service|use)|'
+    r'syarat dan ketentuan|all rights reserved|hak cipta|copyright|©|subscribe|'
+    r'berlangganan|newsletter|leave a (?:reply|comment)|tinggalkan (?:balasan|komentar)|'
+    r'email address will not be published|email anda tidak akan dipublikasikan|'
+    r'required fields are marked|\b\d+\s+(?:comments?|komentar)\b|no comments|'
+    r'belum ada komentar|tulis komentar|kirim komentar|add a comment|post a comment|'
+    r'about the author|tentang penulis|related (?:posts?|articles?|news)|artikel terkait|'
+    r'berita terkait|you (?:may|might) also like|follow us|ikuti kami|'
+    r'download (?:the |our )?app|unduh aplikasi|google news|whatsapp channel|saluran whatsapp',
+    re.IGNORECASE,
+)
+# Concrete content: a definition, or a figure with a unit or currency.
+_DEFINITION_RE = re.compile(
+    r'\b(?:adalah|merupakan|yaitu|yakni|ialah|didefinisikan|diartikan|is (?:a|an|the)|'
+    r'refers to|means|defined as)\b',
+    re.IGNORECASE,
+)
+_FIGURE_RE = re.compile(r'\d\s*%|\bRp\.?\s*\d|\$\s*\d|\b(?:USD|IDR|persen|percent)\b', re.IGNORECASE)
+
+
+def _strip_inline_markdown(line):
+    """Plain text of one markdown line: no images, link targets, URLs or emphasis."""
+    text = _MARKDOWN_IMAGE_RE.sub(' ', str(line or ''))
+    text = _MARKDOWN_LINK_RE.sub(r'\1', text)
+    text = _BARE_URL_RE.sub(' ', text)
+    text = _HTML_TAG_RE.sub(' ', text)
+    text = _EMPHASIS_RE.sub('', text)
+    return ' '.join(text.split())
+
+
+def _is_link_line(line):
+    """True for navigation: a line that is only links/images, or mostly link text."""
+    without_images = _MARKDOWN_IMAGE_RE.sub(' ', line)
+    links = [match.group(1) for match in _MARKDOWN_LINK_RE.finditer(without_images)]
+    has_media = bool(links) or without_images != line or bool(_BARE_URL_RE.search(line))
+    if not has_media:
+        return False
+    rest = _BARE_URL_RE.sub(' ', _MARKDOWN_LINK_RE.sub(' ', without_images))
+    rest_chars = len(re.sub(r'[\W_]+', '', rest))
+    if rest_chars < 3:
+        return True
+    link_chars = sum(len(re.sub(r'[\W_]+', '', text)) for text in links)
+    return len(links) >= 2 and link_chars > 2 * rest_chars
+
+
+def _page_blocks(content):
+    """(heading, lines) for each paragraph, list or table of a markdown page.
+
+    Headings (ATX or setext) are not blocks themselves; each block carries the
+    heading it sits under. Code blocks and horizontal rules are dropped.
+    """
+    text = str(content or '')[:MAX_PAGE_CONTENT_CHARS]
+    marker = text.find(_JINA_CONTENT_MARKER)
+    if marker != -1:
+        text = text[marker + len(_JINA_CONTENT_MARKER):]
+    heading, block, in_fence = '', [], False
+    for raw in text.replace('\r\n', '\n').replace('\r', '\n').split('\n'):
+        # Over-long lines (minified markup, PDF text without breaks) are cut,
+        # which bounds the work every per-line regex can do.
+        raw = raw[:MAX_LINE_CHARS]
+        if _FENCE_RE.match(raw):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        line = raw.strip()
+        if not line:
+            if block:
+                yield heading, block
+                block = []
+            continue
+        atx = _ATX_HEADING_RE.match(line)
+        if atx:
+            if block:
+                yield heading, block
+                block = []
+            heading = _strip_inline_markdown(_ATX_CLOSING_RE.sub('', atx.group(1).rstrip()))
+            continue
+        if _SETEXT_UNDERLINE_RE.match(line) and len(block) >= 1 and not _TABLE_SEPARATOR_RE.match(block[-1]):
+            # "Heading\n-------": the previous line was a heading.
+            title_line = block.pop()
+            if block:
+                yield heading, block
+                block = []
+            heading = _strip_inline_markdown(title_line)
+            continue
+        if _HORIZONTAL_RULE_RE.match(line):
+            if block:
+                yield heading, block
+                block = []
+            continue
+        block.append(line)
+    if block:
+        yield heading, block
+
+
+def _block_text(lines):
+    """Clean a block's lines into one passage string ('' when nothing is left)."""
+    parts = []
+    for line in lines:
+        if _TABLE_SEPARATOR_RE.match(line) or _is_link_line(line):
+            continue
+        line = _BLOCKQUOTE_RE.sub('', line)
+        is_table_row = line.startswith('|')
+        is_bullet = bool(_BULLET_ITEM_RE.match(line))
+        if is_bullet:
+            line = _BULLET_ITEM_RE.sub('', line)
+        if is_table_row:
+            line = ' | '.join(cell.strip() for cell in line.strip().strip('|').split('|') if cell.strip())
+        text = _strip_inline_markdown(line)
+        if not text or _BOILERPLATE_LINE_RE.match(text):
+            continue
+        if (is_bullet or is_table_row or _NUMBERED_ITEM_RE.match(text)) and text[-1] not in '.!?:;':
+            text += ';'
+        parts.append(text)
+    text = ' '.join(parts).strip()
+    if text.endswith(';'):
+        text = text[:-1] + '.'
+    return text
+
+
+def _is_boilerplate_block(text, topic_tokens):
+    """Short blocks with a boilerplate marker, unless the marker is the topic itself
+    (an article about copyright may say "hak cipta")."""
+    if len(text) > _BOILERPLATE_BLOCK_MAX_CHARS:
+        return False
+    for match in _BOILERPLATE_BLOCK_RE.finditer(text):
+        found = match.group(0).lower()
+        if not any(token in found for token in topic_tokens):
+            return True
+    return False
+
+
+def cut_at_sentence(text, max_chars):
+    """text capped at max_chars, ending on a sentence boundary when one is close.
+
+    Falls back to a word boundary plus '...' when the last full sentence would
+    keep less than 40% of the allowance.
+    """
+    text = ' '.join(str(text or '').split())
+    if len(text) <= max_chars:
+        return text
+    window = text[:max_chars]
+    ends = [m.end() for m in _SENTENCE_END_RE.finditer(window)]
+    if ends and ends[-1] >= max_chars * .4:
+        return window[:ends[-1]].strip()
+    cut = text[:max(0, max_chars - 3)].rsplit(' ', 1)[0].rstrip(' ,;:')
+    return cut + '...' if cut else ''
+
+
+def _topic_matches(topic_tokens, text_tokens, raw_words):
+    """Topic words found in a text. Affixed Indonesian forms count too:
+    'pajak' matches 'perpajakan', 'wajib' matches 'kewajiban'."""
+    matched = set()
+    for token in topic_tokens:
+        if token in text_tokens or (len(token) >= 4 and any(token in word for word in raw_words)):
+            matched.add(token)
+    return matched
+
+
+def _score_passage(text, heading, topic_tokens, language, is_list):
+    """Relevance to the topic plus a bonus for concrete content. None = irrelevant."""
+    concrete = 0.0
+    if re.search(r'\d', text):
+        concrete += 1.5
+    if _FIGURE_RE.search(text):
+        concrete += 1.0
+    if is_list:
+        concrete += 1.5
+    if _DEFINITION_RE.search(text):
+        concrete += 1.0
+    if not topic_tokens:
+        return concrete
+    words = re.findall(r'\w+', text.lower())
+    matched = _topic_matches(topic_tokens, set(significant_tokens(text, language)), words)
+    heading_words = re.findall(r'\w+', heading.lower())
+    heading_matched = _topic_matches(topic_tokens, set(significant_tokens(heading, language)), heading_words)
+    # Under a relevant heading a block need not repeat the topic words, but it
+    # must then carry something concrete (a figure, a list, a definition).
+    if not matched and not (heading_matched and concrete >= 1.5):
+        return None
+    occurrences = sum(1 for word in words
+                      if any(word == token or (len(token) >= 4 and token in word) for token in matched))
+    return (10.0 * len(matched) / len(topic_tokens)
+            + 0.4 * min(occurrences, 6)
+            + 2.0 * len(heading_matched) / len(topic_tokens)
+            + concrete)
+
+
+def extract_key_passages(content, topic, language='id', limit=KEY_PASSAGE_LIMIT,
+                         max_chars=KEY_PASSAGE_MAX_CHARS, page_max_chars=KEY_PASSAGES_PAGE_MAX_CHARS):
+    """The page passages most relevant to topic, most relevant first.
+
+    content is a Jina Reader markdown page. Paragraphs, lists and tables are
+    cleaned of links, images and markup; navigation, cookie notices, comment
+    forms, author bios, related-post widgets and sections under such headings are
+    dropped, as are very short blocks. The rest is ranked by how many of the
+    topic's content words it contains, with a bonus for concrete content
+    (numbers, figures, steps, definitions). Each passage is cut to max_chars on a
+    sentence boundary; all passages together stay within page_max_chars.
+    """
+    topic_tokens = list(dict.fromkeys(significant_tokens(topic, language)))
+    candidates, seen = [], set()
+    for position, (heading, lines) in enumerate(_page_blocks(content)):
+        if heading and is_boilerplate_heading(heading):
+            continue
+        is_list = sum(1 for line in lines if _BULLET_ITEM_RE.match(line) or _NUMBERED_ITEM_RE.match(line)) >= 2
+        text = _block_text(lines)
+        if len(text) < KEY_PASSAGE_MIN_CHARS or len(text.split()) < KEY_PASSAGE_MIN_WORDS:
+            continue
+        if _is_boilerplate_block(text, topic_tokens):
+            continue
+        text = cut_at_sentence(text, max_chars)
+        key = text.lower()[:100]
+        if key in seen:
+            continue
+        seen.add(key)
+        score = _score_passage(text, heading, topic_tokens, language, is_list)
+        if score is not None:
+            candidates.append((-score, position, text))
+
+    passages, total = [], 0
+    for _score, _position, text in sorted(candidates)[:limit]:
+        remaining = page_max_chars - total
+        if len(text) > remaining:
+            if remaining < _MIN_PARTIAL_PASSAGE_CHARS:
+                break
+            text = cut_at_sentence(text, remaining)
+        passages.append(text)
+        total += len(text)
+    return passages
+
+
+def _jina_header(content):
+    """The header Jina Reader puts above the page. Only the part before the
+    'Markdown Content:' marker: the page body cannot forge a header line."""
+    head = str(content or '')[:_JINA_HEADER_MAX_CHARS]
+    marker = head.find(_JINA_CONTENT_MARKER)
+    return head[:marker] if marker != -1 else ''
+
+
+def page_title(content):
+    """The 'Title:' line Jina Reader puts above the page, or ''."""
+    match = _JINA_TITLE_RE.search(_jina_header(content))
+    return ' '.join(strip_markdown_links(match.group(1)).split()) if match else ''
+
+
+def page_source_url(content):
+    """The 'URL Source:' Jina Reader reports (the page it actually read, after
+    redirects) when it is an http(s) URL, else ''."""
+    match = _JINA_SOURCE_RE.search(_jina_header(content))
+    url = match.group(1) if match else ''
+    return url if url.lower().startswith(('http://', 'https://')) else ''
+
+
+def url_host(url):
+    """Lower-case host of url without 'www.' and a trailing dot, or ''."""
+    try:
+        host = urlsplit(str(url or '').strip()).hostname or ''
+    except ValueError:
+        return ''
+    return host.lower().rstrip('.').removeprefix('www.')
+
+
+def title_matches_topic(title, topic, language='id'):
+    """True when title shares a content word with topic (or topic has none)."""
+    topic_tokens = list(dict.fromkeys(significant_tokens(topic, language)))
+    if not topic_tokens:
+        return True
+    title = str(title or '')
+    words = re.findall(r'\w+', title.lower())
+    return bool(_topic_matches(topic_tokens, set(significant_tokens(title, language)), words))
+
+
+# ---------------------------------------------------------------------------
+# Spam / compromised pages. Hacked sites, including regional .go.id
+# subdomains, host gambling and pharma SEO spam; such a page must never become
+# a source, let alone an "official" one. Markers are ignored when the topic is
+# itself about them (an article on the dangers of online gambling).
+# "bandar" and "scatter" alone are ordinary words ("bandar udara", "Bandar
+# Lampung", "scatter plot"), so only their gambling combinations count.
+# ---------------------------------------------------------------------------
+
+_SPAM_MARKER_RE = re.compile(
+    r'\b(?:slot[ -]?gacor|slot[ -]?online|situs[ -]?slot|slot ?88|rtp[ -]?live|rtp[ -]?slot|maxwin|togel|'
+    r'toto[ -]?macau|judi[ -]?online|judi[ -]?bola|casino[ -]?online|kasino[ -]?online|'
+    r'bandar[ -]?(?:togel|judi|slot|bola|casino)|sbobet|poker[ -]?online|pola[ -]?scatter|'
+    r'scatter[ -]?hitam|viagra|cialis|bokep)\b',
+    re.IGNORECASE,
+)
+# A page body may mention gambling in a news sidebar; more than this many
+# markers (or any in the title or the extracted passages) means spam.
+SPAM_BODY_MARKER_LIMIT = 2
+
+
+def spam_marker_count(text, topic=''):
+    """Spam markers in text, not counting those the topic itself is about."""
+    topic_words = set(re.findall(r'[a-z0-9]+', str(topic or '').lower()))
+    count = 0
+    for match in _SPAM_MARKER_RE.finditer(str(text or '')):
+        words = re.findall(r'[a-z0-9]+', match.group(0).lower())
+        if not any(len(word) >= 4 and word in topic_words for word in words):
+            count += 1
+    return count
+
+
+def is_spam_page(content, title, topic, passages=(), body_limit=SPAM_BODY_MARKER_LIMIT):
+    """True when a fetched page looks like gambling/adult/pharma spam.
+
+    Any marker in the title or in the passages we would quote, or more than
+    body_limit markers in the page, flags it (body_limit=0: any marker at all).
+    """
+    if spam_marker_count(title, topic) or spam_marker_count(page_title(content), topic):
+        return True
+    if any(spam_marker_count(passage, topic) for passage in passages or ()):
+        return True
+    return spam_marker_count(str(content or '')[:MAX_PAGE_CONTENT_CHARS], topic) > body_limit
+
+
+# ---------------------------------------------------------------------------
+# Host exclusion: the publisher's own site must not show up as its own
+# competitor or source.
+# ---------------------------------------------------------------------------
+
+def normalize_hosts(hosts):
+    """Hostnames (or URLs) as lower-case hosts without 'www.'; None/'' dropped."""
+    if isinstance(hosts, str):
+        hosts = [hosts]
+    normalized = set()
+    for value in hosts or ():
+        value = str(value or '').strip().lower()
+        if not value:
+            continue
+        if '://' in value:
+            host = url_host(value)
+        else:
+            host = value.split('/')[0].split(':')[0].rstrip('.').removeprefix('www.')
+        if host:
+            normalized.add(host)
+    return frozenset(normalized)
+
+
+def is_excluded_url(url, excluded_hosts):
+    """True when url's host is one of excluded_hosts (normalized) or a subdomain of one."""
+    if not excluded_hosts:
+        return False
+    host = url_host(url)
+    return bool(host) and any(host == h or host.endswith('.' + h) for h in excluded_hosts)
+
+
+# ---------------------------------------------------------------------------
+# Official / primary sources: government pages whose figures (rates, fees,
+# dates, rules) outrank whatever a blog says. The host is validated, never the
+# title: "go.id.evil.com" and "example.com/go.id" are not official.
+# ---------------------------------------------------------------------------
+
+OFFICIAL_DOMAIN_SUFFIXES = {
+    'id': ('go.id',),
+    'en': ('gov',),
+}
+OFFICIAL_SOURCE_LIMIT = 3
+# More results than sources wanted: non-official hosts are dropped.
+OFFICIAL_SEARCH_RESULTS = 8
+OFFICIAL_FETCH_TIMEOUT = 15
+_HOST_RE = re.compile(r'^[a-z0-9-]+(?:\.[a-z0-9-]+)+$')
+
+
+def official_domain_suffixes(language='id'):
+    return OFFICIAL_DOMAIN_SUFFIXES['en' if language == 'en' else 'id']
+
+
+def is_official_url(url, language='id'):
+    """True when url is http(s) on a host under the language's official suffix."""
+    try:
+        parts = urlsplit(str(url or '').strip())
+        host = (parts.hostname or '').lower().rstrip('.')
+    except ValueError:
+        return False
+    if parts.scheme.lower() not in ('http', 'https') or parts.username or parts.password:
+        return False
+    if not _HOST_RE.match(host):
+        return False
+    return any(host.endswith('.' + suffix) for suffix in official_domain_suffixes(language))
+
+
 class SEOResearch:
     """Advanced Research using DDGS, Pytrends, and YouTube Transcripts"""
 
-    def __init__(self):
+    def __init__(self, exclude_hosts=None):
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         self.ddgs_available = DDGS is not None
         self.source_status = {}
         self._status_lock = Lock()
+        # Default for every exclude_hosts parameter below (see normalize_hosts).
+        self.exclude_hosts = exclude_hosts
+
+    def _excluded(self, exclude_hosts=None):
+        """Normalized hosts to exclude: the argument, else the instance default."""
+        return normalize_hosts(exclude_hosts if exclude_hosts is not None else self.exclude_hosts)
 
     def _new_ddgs(self):
         """Create a fresh DDGS client for a single call.
@@ -584,8 +1041,11 @@ class SEOResearch:
         """Content headings from a Jina Reader markdown page, minus site chrome."""
         headers = []
         seen = set()
-        for line in str(content or '').split('\n'):
+        for line in str(content or '')[:MAX_PAGE_CONTENT_CHARS].split('\n'):
             line = line.strip()
+            if len(line) > 500:
+                # Not a real heading; also keeps the regexes below bounded.
+                continue
             if line.startswith('## ') or line.startswith('### '):
                 header_text = re.sub(r'^#+\s*', '', line)
                 header_text = ' '.join(strip_markdown_links(header_text).split()).strip(' *_#')
@@ -599,29 +1059,60 @@ class SEOResearch:
                 break
         return headers
 
-    def _scrape_competitor(self, url, title):
-        """Fetch one competitor page and extract its structure.
-
-        Captures word count, full heading outline and any visible date, so callers
-        can judge how thorough and how current the competing page is.
-        """
+    @staticmethod
+    def _fetch_page_markdown(url, timeout=20, kind='competitor'):
+        """A page as markdown through Jina Reader, or None (error, 429, non-200)."""
         request_headers = {'Authorization': f'Bearer {JINA_API_KEY}'} if JINA_API_KEY else None
         try:
-            page_resp = requests.get(f"https://r.jina.ai/{url}", headers=request_headers, timeout=20)
+            page_resp = requests.get(f"https://r.jina.ai/{url}", headers=request_headers, timeout=timeout)
         except Exception as ex:
-            logger.warning(f"Failed to fetch competitor {url}: {ex}")
+            logger.warning(f"Failed to fetch {kind} {url}: {ex}")
             return None
 
         if page_resp.status_code == 429:
             logger.warning(f"Jina Reader rate-limited while fetching {url}; skipping.")
             return None
         if page_resp.status_code != 200:
-            logger.warning(f"Competitor fetch for {url} returned {page_resp.status_code}")
+            logger.warning(f"{kind.capitalize()} fetch for {url} returned {page_resp.status_code}")
+            return None
+        return (page_resp.text or '')[:MAX_PAGE_CONTENT_CHARS]
+
+    def _scrape_competitor(self, url, title, keyword=None, language='id', exclude_hosts=None):
+        """Fetch one competitor page and extract its structure and key passages.
+
+        Captures word count, full heading outline and any visible date, so callers
+        can judge how thorough and how current the competing page is, plus the
+        passages most relevant to keyword (see extract_key_passages), so the
+        writer sees what the page says and not only how it is organised.
+
+        Returns None for pages that failed to load, that redirected to an
+        excluded host, that look like spam, or that are off-topic (no relevant
+        passage and a title unrelated to keyword). When Jina reports that the
+        page was read from a different host (a redirect), that final URL is the
+        one recorded and cited.
+        """
+        content = self._fetch_page_markdown(url)
+        if content is None:
             return None
 
-        content = page_resp.text
+        final_url = page_source_url(content)
+        if final_url and url_host(final_url) and url_host(final_url) != url_host(url):
+            logger.info(f"Competitor {url} redirected to {final_url}")
+            url = final_url
+        if is_excluded_url(url, normalize_hosts(exclude_hosts)):
+            return None
+
+        topic = keyword or title
+        title = ' '.join(strip_markdown_links(title).split()) or page_title(content)
+        passages = extract_key_passages(content, topic, language)
+        if is_spam_page(content, title, topic, passages):
+            logger.warning(f"Competitor {url} looks like spam; skipped.")
+            return None
+        if not passages and not title_matches_topic(title, topic, language):
+            logger.info(f"Competitor {url} is off-topic for '{topic}'; skipped.")
+            return None
+
         headers = self.extract_outline(content)
-        title = ' '.join(strip_markdown_links(title).split())
 
         word_count = len(re.findall(r'\w+', content))
         published = None
@@ -638,33 +1129,39 @@ class SEOResearch:
             'heading_count': len(headers),
             'word_count': word_count,
             'published_hint': published,
+            'key_passages': passages,
             'retrieved_via': 'duckduckgo+jina',
         }
 
-    def analyze_competitors(self, keyword, language='id', limit=4):
+    def analyze_competitors(self, keyword, language='id', limit=4, exclude_hosts=None):
         """Scrape the top competitors via DuckDuckGo and extract their structure.
 
         Pages are fetched concurrently: previously this ran serially with a 2 second
         sleep between each, which dominated the runtime of a whole research pass.
         Results keep the search ranking order, not the order the fetches finished.
+        Pages on exclude_hosts (the publisher's own site) are skipped.
         """
+        excluded = self._excluded(exclude_hosts)
         ddgs = self._new_ddgs()
         if not ddgs:
             self._mark_source('competitors', 'unavailable', count=0)
             return []
 
+        # A couple of spare results so an excluded own-site hit does not cost a competitor.
+        max_results = limit + 2 if excluded else limit
         try:
-            results = list(ddgs.text(keyword, **self._ddg_kwargs(language, limit)) or [])
+            results = list(ddgs.text(keyword, **self._ddg_kwargs(language, max_results)) or [])
         except Exception as e:
             logger.error(f"DDGS competitor search error: {e}")
             self._mark_source('competitors', 'unavailable', count=0, reason=type(e).__name__)
             return []
 
-        targets = [(r.get('href'), r.get('title')) for r in results if r.get('href')]
+        targets = [(r.get('href'), r.get('title')) for r in results
+                   if r.get('href') and not is_excluded_url(r.get('href'), excluded)][:limit]
         scraped = [None] * len(targets)
         if targets:
             with ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
-                futures = {pool.submit(self._scrape_competitor, url, title): rank
+                futures = {pool.submit(self._scrape_competitor, url, title, keyword, language, excluded): rank
                            for rank, (url, title) in enumerate(targets)}
                 for future in as_completed(futures):
                     rank = futures[future]
@@ -677,6 +1174,85 @@ class SEOResearch:
         competitors = self._deduplicate(competitors, key=lambda item: item.get('url'))
         self._mark_source('competitors', 'real' if competitors else 'unavailable', count=len(competitors))
         return competitors
+
+    def get_official_sources(self, topic, language='id', limit=OFFICIAL_SOURCE_LIMIT, exclude_hosts=None):
+        """Government pages about topic with their key passages.
+
+        Searches DuckDuckGo restricted to the language's official domain (go.id
+        for Indonesian, .gov for English), keeps the top results whose host
+        really is under that domain, fetches them through Jina Reader and returns
+        [{'title', 'url', 'passages'}] for pages that had relevant passages.
+        A page is dropped when Jina read it from a non-official URL (a redirect
+        off the government domain) or when it shows any spam marker: hacked
+        regional .go.id sites hosting gambling spam are common.
+        Never raises: any failure means no official sources.
+        """
+        try:
+            return self._collect_official_sources(topic, language, limit, self._excluded(exclude_hosts))
+        except Exception as e:
+            logger.error(f"Official source lookup failed for '{topic}': {e}")
+            self._mark_source('official_sources', 'unavailable', count=0, reason=type(e).__name__)
+            return []
+
+    def _collect_official_sources(self, topic, language, limit, excluded=frozenset()):
+        ddgs = self._new_ddgs()
+        if not ddgs:
+            self._mark_source('official_sources', 'unavailable', count=0)
+            return []
+
+        sites = ' OR '.join(f'site:{suffix}' for suffix in official_domain_suffixes(language))
+        try:
+            results = list(ddgs.text(f'{topic} {sites}', **self._ddg_kwargs(language, OFFICIAL_SEARCH_RESULTS)) or [])
+        except Exception as e:
+            logger.error(f"DDGS official source search error: {e}")
+            self._mark_source('official_sources', 'unavailable', count=0, reason=type(e).__name__)
+            return []
+
+        targets, seen = [], set()
+        for result in results:
+            url = str(result.get('href') or '').strip()
+            if not is_official_url(url, language) or is_excluded_url(url, excluded) or url.lower() in seen:
+                continue
+            seen.add(url.lower())
+            targets.append((url, result.get('title')))
+            if len(targets) >= limit:
+                break
+
+        def fetch(url, title):
+            content = self._fetch_page_markdown(url, timeout=OFFICIAL_FETCH_TIMEOUT, kind='official source')
+            if content is None:
+                return None
+            final_url = page_source_url(content)
+            if final_url:
+                if not is_official_url(final_url, language) or is_excluded_url(final_url, excluded):
+                    logger.warning(f"Official source {url} was read from {final_url}; skipped.")
+                    return None
+                url = final_url
+            passages = extract_key_passages(content, topic, language)
+            if not passages:
+                return None
+            title = ' '.join(strip_markdown_links(title).split()) or page_title(content) or urlsplit(url).hostname
+            # Strict: any spam marker at all on a government page means it was compromised.
+            if is_spam_page(content, title, topic, passages, body_limit=0):
+                logger.warning(f"Official source {url} carries spam markers; skipped.")
+                return None
+            return {'title': title, 'url': url, 'passages': passages}
+
+        fetched = [None] * len(targets)
+        if targets:
+            with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+                futures = {pool.submit(fetch, url, title): rank for rank, (url, title) in enumerate(targets)}
+                for future in as_completed(futures):
+                    rank = futures[future]
+                    try:
+                        fetched[rank] = future.result()
+                    except Exception as ex:
+                        logger.warning(f"Official source fetch failed for {targets[rank][0]}: {ex}")
+
+        sources = [item for item in fetched if item]
+        self._mark_source('official_sources', 'real' if sources else 'unavailable',
+                          count=len(sources), candidates=len(targets))
+        return sources
 
     def get_social_insights(self, keyword, language='id'):
         """Search Quora & Reddit for real human questions"""
@@ -858,14 +1434,21 @@ class SEOResearch:
             'passes_minimum': confidence != 'insufficient',
         }
 
-    def research_topic(self, topic, category_name=None, language='id'):
+    def research_topic(self, topic, category_name=None, language='id', exclude_hosts=None):
         """Focused research for one specific article topic.
 
         research_category() researches a broad category name, which produces generic
         evidence for a specific article. This runs the same providers against the
         actual title/topic, so the article is written against evidence for what it
         is really about. Cheaper than a full category pass: no Trends, no news.
+
+        Only here, not per category, official (government) pages are looked up:
+        their figures and rules are specific to the article's topic.
+
+        exclude_hosts: hostnames (e.g. the publisher's own site) whose pages must
+        not appear as competitors or sources; subdomains are excluded too.
         """
+        excluded = self._excluded(exclude_hosts)
         logger.info(f"Topic-level research: '{topic}' (category={category_name})")
         self.source_status = {}
 
@@ -875,7 +1458,10 @@ class SEOResearch:
                 'questions': lambda: self.get_related_questions(topic, limit=8, language=language),
             },
             duckduckgo={
-                'competitors': lambda: self.analyze_competitors(topic, language=language, limit=3),
+                'competitors': lambda: self.analyze_competitors(topic, language=language, limit=3,
+                                                                exclude_hosts=excluded),
+                'official_sources': lambda: self.get_official_sources(topic, language=language,
+                                                                      exclude_hosts=excluded),
                 'social': lambda: self.get_social_insights(topic, language=language),
             },
             label=f" for '{topic}'",
@@ -892,14 +1478,20 @@ class SEOResearch:
             'evidence_suggestions': evidence_suggestions,
             'evidence_questions': evidence_questions,
             'competitor_outlines': collected.get('competitors') or [],
+            'official_sources': collected.get('official_sources') or [],
             'social_insights': collected.get('social') or [],
             'long_tail_keywords': self.build_long_tail_keywords(topic, evidence_suggestions, evidence_questions),
             'source_metadata': self.source_status,
             'timestamp': datetime.now(timezone.utc).isoformat(),
         }
 
-    def research_category(self, category_name, language='id'):
-        """Deep Research a category including competitors, social, and youtube"""
+    def research_category(self, category_name, language='id', exclude_hosts=None):
+        """Deep Research a category including competitors, social, and youtube.
+
+        exclude_hosts: hostnames (e.g. the publisher's own site) whose pages must
+        not appear as competitors or news sources; subdomains are excluded too.
+        """
+        excluded = self._excluded(exclude_hosts)
         logger.info(f"Advanced Researching category: {category_name} with language={language}")
         self.source_status = {}
 
@@ -921,7 +1513,8 @@ class SEOResearch:
                 'wikipedia': lambda: self.get_wikipedia_context(category_name, language=language),
             },
             duckduckgo={
-                'competitors': lambda: self.analyze_competitors(category_name, language=language),
+                'competitors': lambda: self.analyze_competitors(category_name, language=language,
+                                                                exclude_hosts=excluded),
                 'social': lambda: self.get_social_insights(category_name, language=language),
                 'youtube': lambda: self.get_youtube_insights(category_name, language=language),
                 'news': lambda: self.get_latest_news(category_name, limit=3, language=language),
@@ -938,7 +1531,8 @@ class SEOResearch:
         youtube_insights = collected.get('youtube') or []
         questions = collected.get('questions') or []
         semantic_context = collected.get('wikipedia') or ''
-        news_insights = collected.get('news') or []
+        news_insights = [item for item in collected.get('news') or []
+                         if not (isinstance(item, dict) and is_excluded_url(item.get('url'), excluded))]
 
         update_progress(95, f'Menilai bukti untuk {category_name}...')
 

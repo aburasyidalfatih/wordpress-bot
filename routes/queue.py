@@ -12,9 +12,15 @@ from core_extensions import db, q, redis_conn, logger, load_config, require_jwt,
 from database import debit_credits, add_credits
 from models import ContentQueue, PostLog, WordPressSite
 from services.article_generator import ArticleGenerator
+from services.job_locks import claim_lock, regeneration_lock_key, release_lock
 from services.url_safety import validate_public_http_url
 
 queue_bp = Blueprint('queue', __name__)
+
+# RQ timeout of the article generation / regeneration jobs: research, writing
+# brief, article, helpfulness assessment and rewrite, fact-check and image.
+# Keep in sync with GENERATE_AND_POST_JOB_TIMEOUT in dispatcher.py.
+ARTICLE_JOB_TIMEOUT = '45m'
 
 MAX_REORDER_IDS = 1000
 
@@ -285,7 +291,7 @@ def post_queue_api(user_id, item_id):
     try:
         q.enqueue(
             'tasks.article_jobs.generate_and_post', user_id,
-            item_id=item_id, credit_pre_reserved=True, job_timeout='25m', job_id=job_id
+            item_id=item_id, credit_pre_reserved=True, job_timeout=ARTICLE_JOB_TIMEOUT, job_id=job_id
         )
     except Exception as e:
         _release_posting_claim(user_id, item_id, job_id)
@@ -294,8 +300,50 @@ def post_queue_api(user_id, item_id):
     return jsonify({'success': True})
 
 
-def _enqueue_paid_regeneration(user_id, log_id, task, job_timeout, missing_post_error):
-    """Shared flow of the regenerate-image / regenerate-article endpoints."""
+# The lock ("job_id|epoch", services.job_locks) is taken just before the job is
+# enqueued. It must outlive the time the job may wait in the queue behind other
+# long article jobs; when the job starts it shortens the TTL to just above
+# ARTICLE_JOB_TIMEOUT, and it deletes the lock when it ends. A lock older than
+# job_locks.LOCK_GRACE_SECONDS whose job no longer exists is taken over.
+REGENERATION_LOCK_TTL_SECONDS = 6 * 3600
+REGENERATION_BUSY_ERROR = 'Artikel ini sedang dibuat ulang. Tunggu hingga prosesnya selesai.'
+
+
+def _job_may_still_run(job_id):
+    """True while job_id is queued or running. Unknown counts as running, so a
+    Redis hiccup never lets a second regeneration through."""
+    try:
+        status = Job.fetch(job_id, connection=redis_conn).get_status(refresh=True)
+    except NoSuchJobError:
+        return False
+    except Exception as e:
+        logger.warning(f"Could not check job {job_id}: {e}")
+        return True
+    return str(getattr(status, 'value', status) or '') in {'queued', 'started', 'scheduled', 'deferred', 'created'}
+
+
+def _take_regeneration_lock(log_id, job_id):
+    """Atomically claim the post log for one regeneration. False when another
+    regeneration of it is queued, running, or was requested moments ago."""
+    return claim_lock(redis_conn, regeneration_lock_key(log_id), job_id, REGENERATION_LOCK_TTL_SECONDS,
+                      is_alive=_job_may_still_run)
+
+
+def _release_regeneration_lock(log_id, job_id):
+    try:
+        release_lock(redis_conn, regeneration_lock_key(log_id), job_id)
+    except Exception as e:
+        logger.warning(f"Could not release the regeneration lock of log {log_id}: {e}")
+
+
+def _enqueue_paid_regeneration(user_id, log_id, task, job_timeout, missing_post_error, exclusive=False):
+    """Shared flow of the regenerate-image / regenerate-article endpoints.
+
+    exclusive=True allows one queued or running job per post log (article
+    regeneration takes many minutes; a second click would charge twice and two
+    jobs would overwrite the same post). The response carries the job id so the
+    UI can follow it through /api/job-status.
+    """
     with db.get_session() as session:
         log = session.query(PostLog).filter_by(id=log_id, user_id=user_id).first()
         if not log:
@@ -303,17 +351,30 @@ def _enqueue_paid_regeneration(user_id, log_id, task, job_timeout, missing_post_
         if not log.post_id:
             return _error(missing_post_error, 400)
 
+    job_id = f"regenerate-{log_id}-{uuid.uuid4().hex}"
+    if exclusive:
+        try:
+            if not _take_regeneration_lock(log_id, job_id):
+                return _error(REGENERATION_BUSY_ERROR, 409)
+        except Exception as e:
+            logger.error(f"Regeneration lock for log {log_id} unavailable: {e}")
+            return _error('Gagal memasukkan tugas ke antrean. Silakan coba lagi.', 500)
+
     # Reserve the credit before enqueueing; the job settles it.
     if not db.reserve_user_credits(user_id, 1):
+        if exclusive:
+            _release_regeneration_lock(log_id, job_id)
         return jsonify({'success': False, 'error': 'Kredit tidak mencukupi.'}), 402
 
     try:
-        q.enqueue(task, user_id, log_id, job_timeout=job_timeout)
+        q.enqueue(task, user_id, log_id, job_timeout=job_timeout, job_id=job_id)
     except Exception as e:
         db.refund_user_credits(user_id, 1)
+        if exclusive:
+            _release_regeneration_lock(log_id, job_id)
         logger.error(f"Enqueue of {task} failed for log {log_id}: {e}")
         return jsonify({'success': False, 'error': 'Gagal memasukkan tugas ke antrean. Silakan coba lagi.'}), 500
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'job_id': job_id})
 
 
 @queue_bp.route('/api/queue/history/regenerate-image/<int:log_id>', methods=['POST'])
@@ -329,8 +390,9 @@ def regenerate_image_api(user_id, log_id):
 @require_jwt
 def regenerate_article_api(user_id, log_id):
     return _enqueue_paid_regeneration(
-        user_id, log_id, 'tasks.article_jobs.regenerate_article_job', '25m',
-        'Artikel tidak dapat dibuat ulang: artikel ini tidak memiliki ID post WordPress.'
+        user_id, log_id, 'tasks.article_jobs.regenerate_article_job', ARTICLE_JOB_TIMEOUT,
+        'Artikel tidak dapat dibuat ulang: artikel ini tidak memiliki ID post WordPress.',
+        exclusive=True,
     )
 
 
@@ -409,7 +471,7 @@ def manual_post(user_id):
     try:
         q.enqueue(
             'tasks.article_jobs.generate_and_post', user_id,
-            site_id=site_id, credit_pre_reserved=True, manual=True, job_timeout='25m'
+            site_id=site_id, credit_pre_reserved=True, manual=True, job_timeout=ARTICLE_JOB_TIMEOUT
         )
         return jsonify({'success': True, 'message': 'Artikel dijadwalkan untuk diposting'})
     except Exception as e:

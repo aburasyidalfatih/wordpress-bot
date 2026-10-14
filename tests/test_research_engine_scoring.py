@@ -319,7 +319,7 @@ class CompetitorOutlineTests(unittest.TestCase):
             {'href': 'https://c.test/3', 'title': 'Third'},
         ]
 
-        def scrape(url, title):
+        def scrape(url, title, *_args):
             # The top result finishes last.
             import time as _time
             _time.sleep({'First': .2, 'Second': .1, 'Third': 0}[title])

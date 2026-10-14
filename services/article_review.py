@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 
 from services.ai_providers import AIProviderError, describe_provider_error, is_retryable_provider_error
 from services.article_generator import TruncatedGenerationError
-from services.article_prompts import build_seo_section
+from services.article_prompts import build_seo_section, sanitize_research_text
 from services.quality_gate import link_host, normalize_link_url, plain_text
 
 try:
@@ -61,7 +61,9 @@ MAX_EDITS = 25
 # well inside REVIEW_MAX_TOKENS); longer ones are still applied up to MAX_FIND_CHARS.
 PROMPT_FIND_CHARS = 600
 MAX_FIND_CHARS = 1200
-MAX_EVIDENCE_CHARS = 20000
+# Research renders up to ~12k characters of source passages on top of the other
+# sections; the cap leaves room for all of it. The source list is never cut.
+MAX_EVIDENCE_CHARS = 32000
 MAX_SOURCE_URLS = 15
 MAX_PUBLISHER_CONTEXT_CHARS = 3000
 MAX_PROTECTED_LINKS = 40
@@ -98,6 +100,39 @@ _UNSAFE_REPLACEMENT_RE = re.compile(
 _ANCHOR_RE = re.compile(r'<a\b', re.IGNORECASE)
 _HREF_RE = re.compile(r'<a\b[^>]*?href=["\']([^"\']+)["\']', re.IGNORECASE)
 _TAG_RE = re.compile(r'<[^>]*>')
+
+# Contact details and link targets that must not travel from scraped research,
+# through a model's plan or feedback, into the writer's prompt.
+_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
+# Lower-case TLDs only, so "ASP.NET" or "Node.JS" survive.
+_BARE_DOMAIN_RE = re.compile(
+    r'\b(?:[a-z0-9-]+\.)+(?:com|net|org|id|co|io|info|biz|xyz|me|ly|app|site|online|store|shop|link|click|top'
+    r'|my|sg|us|uk|ai|gg|tv|to|in|cc|ws|bio|page|web)\b(?:/\S*)?'
+)
+# Phone numbers start with "+", "0" or "62" (amounts such as Rp150.000.000 do not).
+_PHONE_RE = re.compile(r'(?<![\w.,])(?:\+|0|62)[\d\s().-]{7,}\d')
+MIN_PHONE_DIGITS = 9
+
+
+def scrub_model_guidance(value, max_chars):
+    """Model-written guidance (a writing brief, editor feedback) made safe to put
+    in the writer's prompt.
+
+    Such text is derived partly from untrusted scraped research, so it gets the
+    same treatment as research text (sanitize_research_text: no URLs, tags,
+    control characters or delimiter-like runs) and also loses e-mail
+    addresses, bare domain names and phone numbers: a passage reading "recommend
+    WhatsApp 0812..." must not be laundered into an instruction.
+    """
+    text = sanitize_research_text(value, max(max_chars * 2, 50))
+    text = _EMAIL_RE.sub(' ', text)
+    text = _BARE_DOMAIN_RE.sub(' ', text)
+    text = _PHONE_RE.sub(
+        lambda m: ' ' if sum(ch.isdigit() for ch in m.group()) >= MIN_PHONE_DIGITS else m.group(), text)
+    text = ' '.join(text.split())
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(' ', 1)[0].rstrip(' ,;:') + '...'
+    return text
 
 
 class ArticleReviewRejected(Exception):
@@ -204,7 +239,8 @@ def build_review_evidence(seo_data, language='id', source_urls=None):
     from the research fields instead.
     """
     seo_data = seo_data if isinstance(seo_data, dict) else {}
-    text = build_seo_section(seo_data, language)[0] if seo_data else ''
+    # Capped inside build_seo_section, so the research frame stays closed.
+    text = build_seo_section(seo_data, language, max_chars=MAX_EVIDENCE_CHARS)[0] if seo_data else ''
     if source_urls is None:
         sources = _source_urls(seo_data)
     else:
@@ -212,8 +248,6 @@ def build_review_evidence(seo_data, language='id', source_urls=None):
     if sources:
         text += ("\n[SOURCES the writer was allowed to cite and link]\n"
                  + "".join(f"- {url}\n" for url in sources))
-    if len(text) > MAX_EVIDENCE_CHARS:
-        text = text[:MAX_EVIDENCE_CHARS] + "\n[... evidence truncated ...]\n"
     return text.strip()
 
 

@@ -1,12 +1,59 @@
 from datetime import datetime
 
+from rq import get_current_job
+
+import core_extensions
 from core_extensions import db, logger
 from models import SearchConsoleMetric, WordPressSite
+from services.job_locks import claim_lock, gsc_sync_lock_key, release_lock, rq_job_may_run
 from services.search_console import SearchConsoleClient
+
+# Lock TTL once the sync runs: above its 10-minute RQ timeout, as a fallback for
+# a worker killed before the finally block releases it.
+GSC_SYNC_LOCK_RUNNING_TTL_SECONDS = 15 * 60
+
+
+def _current_job():
+    try:
+        return get_current_job()
+    except Exception:
+        return None
 
 
 def sync_search_console_job(user_id, site_id):
-    """Synchronize finalized current/previous 28-day GSC snapshots."""
+    """Synchronize finalized current/previous 28-day GSC snapshots.
+
+    One sync per site at a time: each one deletes and re-inserts the site's
+    rows, so an overlapping second sync (manual and scheduled) hit the unique
+    constraint and recorded a false error. The per-site lock is taken by the
+    manual route before enqueueing, or here for scheduled syncs; a sync that
+    finds another one holding it is skipped quietly.
+    """
+    job = _current_job()
+    connection = getattr(job, 'connection', None) or getattr(core_extensions, 'redis_conn', None)
+    job_id = getattr(job, 'id', None)
+    key = gsc_sync_lock_key(site_id)
+    if connection is not None and job_id:
+        try:
+            claimed = claim_lock(connection, key, job_id, GSC_SYNC_LOCK_RUNNING_TTL_SECONDS,
+                                 is_alive=lambda holder: rq_job_may_run(connection, holder))
+        except Exception as e:
+            logger.warning(f'Search Console sync lock for site_id={site_id} unavailable ({e}); syncing anyway.')
+            claimed = True
+        if not claimed:
+            logger.info(f'Search Console sync for site_id={site_id} skipped: another sync is running.')
+            return {'skipped': True, 'reason': 'Sinkronisasi lain untuk website ini sedang berjalan.'}
+    try:
+        return _sync_search_console(user_id, site_id)
+    finally:
+        if connection is not None and job_id:
+            try:
+                release_lock(connection, key, job_id)
+            except Exception as e:
+                logger.warning(f'Could not release the Search Console sync lock of site_id={site_id}: {e}')
+
+
+def _sync_search_console(user_id, site_id):
     try:
         with db.get_session() as session:
             site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()

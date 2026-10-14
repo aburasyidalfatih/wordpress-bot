@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 import secrets
+import uuid
 
 import jwt
 from flask import Blueprint, jsonify, redirect, request
@@ -8,6 +9,7 @@ from flask import Blueprint, jsonify, redirect, request
 from config import Config
 from core_extensions import db, q, redis_conn, logger, require_jwt
 from models import SearchConsoleMetric, WordPressSite
+from services.job_locks import claim_lock, gsc_sync_lock_key, release_lock, rq_job_may_run
 from services.search_console import (
     SearchConsoleClient,
     SearchConsoleError,
@@ -22,6 +24,9 @@ search_console_bp = Blueprint('search_console', __name__)
 
 OAUTH_STATE_TTL_SECONDS = 600
 OAUTH_STATE_KEY_PREFIX = 'gsc_oauth_state:'
+# A manual sync's lock is taken at enqueue and must outlive its wait in the
+# default queue behind long article jobs; the job shortens it once it runs.
+GSC_SYNC_LOCK_QUEUED_TTL_SECONDS = 6 * 3600
 GOOGLE_REQUEST_FAILED = 'Permintaan ke Google Search Console gagal. Silakan coba lagi atau hubungkan ulang akun Google.'
 
 
@@ -250,7 +255,27 @@ def sync_search_console(user_id, site_id):
             return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
         if not site.gsc_refresh_token or not site.gsc_property_url:
             return jsonify({'success': False, 'error': 'Hubungkan akun dan pilih property terlebih dahulu.'}), 400
-    job = q.enqueue('tasks.gsc_jobs.sync_search_console_job', user_id, site_id, job_timeout='10m')
+    # One sync per site at a time (each replaces the site's rows). The lock is
+    # taken for the job before it is enqueued; the job holds and releases it.
+    job_id = f"gsc-sync-{site_id}-{uuid.uuid4().hex}"
+    lock_key = gsc_sync_lock_key(site_id)
+    try:
+        claimed = claim_lock(redis_conn, lock_key, job_id, GSC_SYNC_LOCK_QUEUED_TTL_SECONDS,
+                             is_alive=lambda holder: rq_job_may_run(redis_conn, holder))
+    except Exception as exc:
+        logger.error(f'Search Console sync lock for site {site_id} unavailable: {exc}')
+        return jsonify({'success': False, 'error': 'Gagal memulai sinkronisasi. Silakan coba lagi.'}), 500
+    if not claimed:
+        return jsonify({'success': False,
+                        'error': 'Sinkronisasi Search Console untuk website ini sedang berjalan. '
+                                 'Tunggu hingga selesai.'}), 409
+    try:
+        job = q.enqueue('tasks.gsc_jobs.sync_search_console_job', user_id, site_id, job_timeout='10m',
+                        job_id=job_id)
+    except Exception as exc:
+        release_lock(redis_conn, lock_key, job_id)
+        logger.error(f'Search Console sync enqueue failed for site {site_id}: {exc}')
+        return jsonify({'success': False, 'error': 'Gagal memulai sinkronisasi. Silakan coba lagi.'}), 500
     return jsonify({'success': True, 'job_id': job.id, 'message': 'Sinkronisasi Search Console dimulai.'})
 
 

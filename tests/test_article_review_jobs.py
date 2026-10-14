@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from services import article_review
 from services.article_review import ArticleReviewRejected, ArticleReviewUnavailable
+from test_article_quality_support import PASSING_NOTE, quality_stub_patches
 from test_research_backend_support import load_with_stubbed_core, make_db
 
 jobs, _core = load_with_stubbed_core('tasks.article_jobs')
@@ -65,6 +66,7 @@ class ReviewJobTestCase(unittest.TestCase):
             patch.object(jobs, '_current_job', lambda: None),
             patch.object(article_review, 'RETRY_DELAY_SECONDS', 0),
         ]
+        patches += quality_stub_patches(jobs)
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -99,7 +101,7 @@ class GenerateAndPostReviewTests(ReviewJobTestCase):
         self.assertNotIn('87%', content)
         log = self.last_log()
         self.assertTrue(log.success)
-        self.assertEqual(log.result, jobs.RESULT_PUBLISHED_NO_IMAGE + ' Ditinjau AI: 1 perbaikan diterapkan.')
+        self.assertEqual(log.result, jobs.RESULT_PUBLISHED_NO_IMAGE + f' {PASSING_NOTE} Ditinjau AI: 1 perbaikan diterapkan.')
         self.assertEqual(self.credits(), 10)  # the caller's reservation is consumed
         self.assertEqual(self.topics_left(), ['Dana darurat'])
         # The edited article went through the quality gate a second time.
@@ -235,7 +237,7 @@ class ReviewContextJobTests(ReviewJobTestCase):
         self.post()
         self.assertEqual(self.publisher.create_post.call_args.args[0], 'Strategi Melunasi Utang Keluarga')
         self.assertEqual(self.last_log().result,
-                         jobs.RESULT_PUBLISHED_NO_IMAGE + ' Ditinjau AI: disetujui tanpa perbaikan isi.')
+                         jobs.RESULT_PUBLISHED_NO_IMAGE + f' {PASSING_NOTE} Ditinjau AI: disetujui tanpa perbaikan isi.')
 
     def test_truncated_review_fails_safely_with_a_clear_message(self):
         from services.article_generator import TruncatedGenerationError
@@ -277,7 +279,7 @@ class RegenerationReviewTests(ReviewJobTestCase):
         jobs.regenerate_article_job(1, 10)
         args = self.publisher.update_post_content.call_args.args
         self.assertEqual(args[1], 'Judul Lebih Jujur')
-        self.assertEqual(self.log10().result, jobs.RESULT_REGENERATED + ' Ditinjau AI: disetujui tanpa perbaikan '
+        self.assertEqual(self.log10().result, jobs.RESULT_REGENERATED + f' {PASSING_NOTE} Ditinjau AI: disetujui tanpa perbaikan '
                                                                          'isi, judul disesuaikan.')
         prompt = self.generator.generate_text.call_args.args[0]
         # The category's research and the publisher's own context reach the reviewer.

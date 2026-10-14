@@ -1,5 +1,8 @@
 import html
 import re
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime
 
 from rq import get_current_job
@@ -15,9 +18,12 @@ from database import USABLE_CONFIDENCE_LEVELS, add_credits, debit_credits, resea
 from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
 from services.ai_providers import AIProviderError
 from services.article_generator import ArticleGenerator, ArticleQualityError
+from services.article_quality import ArticleQualityRejected, RewriteFailed, improve_article
 from services.article_review import (
     ArticleReviewRejected, JobTimeoutException, build_publisher_context, build_review_evidence, review_article,
 )
+from services.content_brief import build_content_brief, format_brief_for_prompt
+from services.job_locks import claim_lock, regeneration_lock_key, release_lock
 from services.content_planner import (
     load_search_metrics, topic_candidates_from_opportunities,
     keyword_demand_map, annotate_keywords_with_demand, find_content_gaps,
@@ -56,8 +62,48 @@ RESULT_REGENERATED = "Artikel berhasil diregenerasi."
 # Research enrichment
 # ---------------------------------------------------------------------------
 
-def _merge_topic_research(seo_data, topic, category_name, language='id'):
+# Research fields holding third-party pages (dicts with a 'url' or 'link').
+SOURCE_PAGE_FIELDS = ('competitor_outlines', 'news_insights', 'official_sources', 'youtube_insights',
+                      'social_insights')
+
+
+def _site_hosts(wordpress_url):
+    """The site's own host as a list for exclude_hosts ([] when unknown)."""
+    host = link_host(wordpress_url)
+    return [host] if host else []
+
+
+def _without_own_pages(seo_data, own_hosts):
+    """seo_data without research items taken from the site's own pages.
+
+    The publisher's own articles are not competitors or sources: an own page
+    listed as a competitor skews the brief's information gain, and citing it
+    as a source is circular. Defence in depth: research is already asked to
+    exclude these hosts.
+    """
+    if not isinstance(seo_data, dict) or not own_hosts:
+        return seo_data
+
+    def own(item):
+        if not isinstance(item, dict):
+            return False
+        host = link_host(item.get('url') or item.get('link'))
+        return bool(host) and any(host == h or host.endswith('.' + h) for h in own_hosts)
+
+    filtered = dict(seo_data)
+    for key in SOURCE_PAGE_FIELDS:
+        items = seo_data.get(key)
+        if isinstance(items, list) and any(own(item) for item in items):
+            filtered[key] = [item for item in items if not own(item)]
+            logger.info(f"Dropped {len(items) - len(filtered[key])} own-site item(s) from research '{key}'.")
+    return filtered
+
+
+def _merge_topic_research(seo_data, topic, category_name, language='id', exclude_hosts=None):
     """Run topic-level research and merge it ahead of the category-level evidence.
+
+    exclude_hosts: the site's own host(s); its pages are not used as competitors
+    or sources.
 
     Returns seo_data unchanged on failure; this is an enrichment step and must not
     be able to fail an article.
@@ -66,7 +112,10 @@ def _merge_topic_research(seo_data, topic, category_name, language='id'):
         # Local import: seo_research pulls in pytrends/pandas, which are heavy
         # and do not import in every environment.
         from seo_research import SEOResearch
-        topic_data = SEOResearch().research_topic(topic, category_name, language=language)
+        topic_data = SEOResearch().research_topic(topic, category_name, language=language,
+                                                  exclude_hosts=exclude_hosts or None)
+    except JobTimeoutException:
+        raise  # the RQ job ran out of time: the job's own failure handling settles it
     except Exception as e:
         logger.warning(f"Topic-level research failed for '{topic}': {e}")
         return seo_data
@@ -94,9 +143,13 @@ def _merge_topic_research(seo_data, topic, category_name, language='id'):
     merged['social_insights'] = combine('social_insights', 6)
     # Category research stores these as 'long_tail' (see _load_category_research).
     merged['long_tail'] = combine('long_tail_keywords', 12, category_key='long_tail')
+    # Official pages (government, regulators, primary sources) found for this
+    # topic, with the passages taken from them.
+    merged['official_sources'] = combine('official_sources', 3)
     logger.info(
         f"Merged topic research for '{topic}': "
-        f"{len(merged['keywords'])} keywords, {len(merged['competitor_outlines'])} competitors"
+        f"{len(merged['keywords'])} keywords, {len(merged['competitor_outlines'])} competitors, "
+        f"{len(merged['official_sources'])} official sources"
     )
     return merged
 
@@ -139,6 +192,8 @@ def _attach_search_evidence(seo_data, user_id, site_id, category_name, topic=Non
         data['intent'] = classify_intent(topic) if topic else 'informational'
         data['intent_guidance'] = intent_guidance(data['intent'], language)
         return data
+    except JobTimeoutException:
+        raise
     except Exception as e:
         logger.warning(f"Could not attach search evidence for site {site_id}: {e}")
         return seo_data
@@ -157,6 +212,12 @@ MAX_TOPIC_CLAIMS = 3
 # Published titles compared against new topics (PostLog history of the site).
 PUBLISHED_TITLES_LIMIT = 200
 
+# Held by an article job of a site while it checks its final title and
+# publishes (several workers run article jobs concurrently).
+SITE_PUBLISH_LOCK_KEY = "article_publish_lock:{site_id}"
+SITE_PUBLISH_LOCK_TTL_SECONDS = 10 * 60
+SITE_PUBLISH_LOCK_POLL_SECONDS = 5
+
 
 class TopicTooSimilar(Exception):
     """The topic or title repeats an article the site already published (a content failure)."""
@@ -168,13 +229,14 @@ class TopicTooSimilar(Exception):
 
 
 # Failures shown in the history as a deliberate "not published", not a crash.
-EDITORIAL_FAILURES = (ArticleReviewRejected, TopicTooSimilar)
+EDITORIAL_FAILURES = (ArticleReviewRejected, ArticleQualityRejected, TopicTooSimilar)
 
 
 def _is_content_failure(error):
     """True when an article failed because of what was generated, so retrying the
-    same topic would fail the same way: quality gate and AI review rejections, a
-    topic repeating a published article, and a provider refusing the topic."""
+    same topic would fail the same way: quality gate, helpfulness and AI review
+    rejections, a topic repeating a published article, and a provider refusing
+    the topic."""
     if isinstance(error, (ArticleQualityError, QualityGateRejection) + EDITORIAL_FAILURES):
         return True
     return isinstance(error, AIProviderError) and 'menolak' in str(error).lower()
@@ -231,6 +293,8 @@ def _load_category_research(user_id, site_id, category_name):
                 f"{len(seo_data['youtube_insights'])} youtube"
             )
             return seo_data
+    except JobTimeoutException:
+        raise
     except Exception as e:
         logger.error(f"Error getting SEO data: {e}")
         return None
@@ -407,6 +471,8 @@ def _recent_posts_for_links(publisher):
         posts = list(posts or [])
         logger.info(f"Fetched {len(posts)} recent posts for internal linking.")
         return posts
+    except JobTimeoutException:
+        raise
     except Exception as e:
         logger.error(f"Failed to fetch recent posts for linking: {e}")
         return None
@@ -516,6 +582,61 @@ def _review_generated_article(generator, article, seo_data, *, language, categor
     return result
 
 
+def _writing_brief(generator, topic, seo_data, *, language, category_name, site_name, category_description=None,
+                   article_prompt=None, published_titles=None):
+    """The writing brief rendered for the article prompt, or None.
+
+    The brief is an enhancement, not a gate: when it cannot be made the article
+    is written without one (build_content_brief logs why).
+    """
+    try:
+        brief = build_content_brief(
+            generator, topic, seo_data, language=language, category=category_name, site_name=site_name,
+            category_description=category_description, article_prompt=article_prompt,
+            published_titles=published_titles,
+        )
+    except JobTimeoutException:
+        raise
+    except Exception as e:
+        logger.warning(f"Content brief for '{topic}' failed; writing without one: {e}")
+        return None
+    return (format_brief_for_prompt(brief, language) or None) if brief else None
+
+
+def _improve_generated_article(generator, article, generation_args, generation_options, *, seo_data, brief_text,
+                               language, topic, category_name, site_name, context, internal_posts=None,
+                               extra_allowed_urls=None, allowed_hosts=None, links_unknown=False):
+    """Helpfulness assessment, with one full rewrite when the article falls short.
+
+    The rewrite is a new generation call with the same inputs as the draft
+    (generation_args / generation_options, brief included) plus the previous
+    draft and the editor's instructions; it goes through the quality gate (and
+    link stripping) like the draft did. links_unknown: the recent posts could
+    not be fetched, so the rewrite's links are left alone as well.
+    Returns the QualityOutcome (outcome.article is the draft to publish).
+    Raises ArticleQualityRejected (content failure) or ArticleQualityUnavailable.
+    """
+    def rewrite(revision_request):
+        rewritten = generator.generate_article(*generation_args, revision_request=revision_request,
+                                               **generation_options)
+        if links_unknown:
+            rewritten['allowed_link_urls'] = None
+        try:
+            _apply_quality_gate(rewritten, f"{context} rewrite", "",
+                                extra_allowed_urls=extra_allowed_urls, allowed_hosts=allowed_hosts)
+        except QualityGateRejection as e:
+            raise RewriteFailed(f"tidak lolos quality gate: {e}") from e
+        return rewritten
+
+    evidence = build_review_evidence(seo_data, language, source_urls=_cited_source_urls(article, internal_posts))
+    outcome = improve_article(
+        generator, article, rewrite=rewrite, topic=topic, language=language, brief_text=brief_text,
+        evidence=evidence, site_name=site_name, category=category_name,
+    )
+    logger.info(f"Quality ({context}): {outcome.log_line()}")
+    return outcome
+
+
 class QualityGateRejection(Exception):
     """The generated article failed the pre-publish quality gate (a content failure)."""
 
@@ -568,6 +689,8 @@ def _generate_featured_image(generator, publisher, category_name, article, custo
         logger.info("Uploading featured image...")
         featured_image_id = publisher.upload_image(image_data, article.get('title', ''))
         return image_data, featured_image_id, not featured_image_id
+    except JobTimeoutException:
+        raise
     except Exception as img_err:
         logger.error(f"Image generation or upload failed: {img_err}", exc_info=True)
         return image_data, None, True
@@ -601,7 +724,8 @@ def _start_message(site_config, category, custom_topic):
     )
 
 
-def _published_message(site_config, article, category, post_url, image_data, review_note=None):
+def _published_message(site_config, article, category, post_url, image_data, review_note=None,
+                       quality_label=None):
     file_size = len(image_data.getvalue()) / 1024 if image_data else 0
     return (
         f"✅ <b>Artikel Berhasil Dipublish!</b>\n\n"
@@ -610,6 +734,7 @@ def _published_message(site_config, article, category, post_url, image_data, rev
         f"📂 <b>Kategori:</b> {_tg(category['name'])}\n"
         f"📊 <b>Panjang:</b> {len(article.get('content', '').split())} kata\n"
         f"🎨 <b>Featured Image:</b> WebP ({file_size:.1f} KB)\n"
+        + (f"⭐ <b>Kualitas AI:</b> {_tg(quality_label)}\n" if quality_label else "")
         + (f"🔎 <b>Tinjauan:</b> {_tg(review_note)}\n" if review_note else "")
         + f"🔗 <b>URL:</b> {_tg(post_url)}\n\n"
         f"🎉 Status: Terbit"
@@ -668,6 +793,12 @@ class _ArticlePostJob:
         # research topics matched (passed to the writer as titles to avoid).
         self.published_titles = []
         self.avoid_titles = []
+        # Rendered writing brief (None when it could not be made), the
+        # (args, kwargs) of the generation call that produced the article (the
+        # quality rewrite repeats it), and the helpfulness outcome.
+        self.brief_text = None
+        self.generation = None
+        self.quality = None
         self.review = None
 
     # -- credit / item settlement -------------------------------------------
@@ -789,6 +920,12 @@ class _ArticlePostJob:
             # written at all (checked before any research or generation cost).
             self._check_topic_is_new(generator, self.custom_topic)
         seo_data = self._gather_seo_data(generator)
+        self.brief_text = _writing_brief(
+            generator, self.custom_topic or self.category['name'], seo_data, language=self._language(),
+            category_name=self.category['name'], site_name=site_config.get('site_name'),
+            category_description=_category_description(site_config, self.category['name']),
+            article_prompt=site_config.get('article_prompt'), published_titles=self.published_titles,
+        )
         self._generate_article(generator, existing_titles, seo_data, recent_posts)
         if recent_posts is None:
             # The recent posts could not be fetched: no allow-list was really
@@ -797,6 +934,8 @@ class _ArticlePostJob:
         extra_urls, hosts = _link_allowances(site_config.get('article_prompt'), site_config.get('wordpress_url'))
         _apply_quality_gate(self.article, f"site {self.site_id}", "Artikel ditolak quality gate: ",
                             extra_allowed_urls=extra_urls, allowed_hosts=hosts)
+        # Does it genuinely serve the reader? One full rewrite when it falls short.
+        self._improve_article(generator, seo_data, recent_posts, extra_urls, hosts)
         # Nothing is published without the AI editorial review.
         title_before_review = self.article.get('title', '')
         self.review = _review_generated_article(
@@ -808,11 +947,26 @@ class _ArticlePostJob:
         )
         self._keep_reviewed_title_distinct(generator, title_before_review)
 
+        # Several workers run article jobs: an article written while another job
+        # of the site published a near-identical one must not repeat it. Checked
+        # before the image is made (so a rejection rarely leaves an orphaned
+        # upload) and again under the site's publish lock, right before publishing.
+        self._check_not_published_meanwhile(generator)
         image_data, featured_image_id, image_failed = _generate_featured_image(
             generator, publisher, self.category['name'], self.article,
             site_config.get('image_prompt') or None, site_config.get('site_name')
         )
-        self._publish(publisher, image_data, featured_image_id, image_failed)
+        with self._site_publish_lock() as release_publish_lock:
+            try:
+                self._check_not_published_meanwhile(generator)
+            except TopicTooSimilar:
+                if featured_image_id:
+                    # WordPressPublisher has no media delete helper: leave it, but say so.
+                    logger.warning(f"Featured image {featured_image_id} uploaded to site {self.site_id} is "
+                                   "unused: the article was not published.")
+                raise
+            self._publish(publisher, image_data, featured_image_id, image_failed,
+                          on_logged=release_publish_lock)
 
     def _load_site(self):
         """Load the user and site; abort (refunding) when the job cannot run."""
@@ -876,6 +1030,85 @@ class _ArticlePostJob:
             logger.warning(f"Topic '{topic}' repeats published article '{match[0]}' (score {match[1]}).")
             raise TopicTooSimilar(match[0])
 
+    @contextmanager
+    def _site_publish_lock(self):
+        """Per-site Redis lock around the final title check and publishing.
+
+        Waits for another job of the same site to finish publishing (seconds in
+        practice). The TTL frees the lock of a job killed while holding it; the
+        wait never exceeds it. Without Redis (tests, scripts) nothing is locked.
+        Yields a release function, so the lock can be let go as soon as the post
+        is recorded (before the slow social sharing); it is released on exit at
+        the latest.
+        """
+        connection = self.connection
+        key, token = SITE_PUBLISH_LOCK_KEY.format(site_id=self.site_id), uuid.uuid4().hex
+        acquired = False
+        if connection is not None:
+            deadline = time.monotonic() + SITE_PUBLISH_LOCK_TTL_SECONDS
+            try:
+                while not (acquired := bool(connection.set(key, token, nx=True, ex=SITE_PUBLISH_LOCK_TTL_SECONDS))):
+                    if time.monotonic() >= deadline:
+                        logger.warning(f"Publish lock of site {self.site_id} still held; publishing anyway.")
+                        break
+                    time.sleep(SITE_PUBLISH_LOCK_POLL_SECONDS)
+            except JobTimeoutException:
+                raise
+            except Exception as e:
+                logger.warning(f"Publish lock of site {self.site_id} unavailable ({e}); publishing without it.")
+        state = {'held': acquired}
+
+        def release():
+            if not state['held']:
+                return
+            state['held'] = False
+            try:
+                release_lock(connection, key, token)  # atomic: only while this job holds it
+            except Exception as e:
+                logger.warning(f"Could not release the publish lock of site {self.site_id}: {e}")
+
+        try:
+            yield release
+        finally:
+            release()
+
+    def _check_not_published_meanwhile(self, generator):
+        """The final title must not repeat an article the site published while
+        this one was being written (by a job on another worker). Only titles new
+        since the start are compared, so the earlier checks are not repeated."""
+        try:
+            fresh = db.get_existing_titles(self.user_id, self.site_id, None, limit=PUBLISHED_TITLES_LIMIT) or []
+        except JobTimeoutException:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not reload published titles for site {self.site_id}: {e}")
+            return
+        known = {str(t).strip().lower() for t in self.published_titles}
+        new_titles = [t for t in fresh if t and str(t).strip().lower() not in known]
+        if not new_titles:
+            return
+        # Niche-word weights from the whole history, as in the main check; only
+        # the new titles are matched.
+        match = find_similar_published(self.article.get('title', ''), new_titles, language=self._language(),
+                                       generator=generator, corpus=list(self.published_titles) + new_titles)
+        if match:
+            logger.warning(f"'{self.article.get('title')}' repeats '{match[0]}', published by another job "
+                           "while this article was written.")
+            raise TopicTooSimilar(match[0], article_title=self.article.get('title'))
+
+    def _restore_title_if_repeated(self, generator, previous_title, source):
+        """Put previous_title back when the article's new title repeats a published
+        article. previous_title already passed that check. True when restored."""
+        match = self._similar_published(generator, self.article.get('title', ''))
+        if not match:
+            return False
+        logger.warning(
+            f"{source} title '{self.article.get('title')}' repeats published article '{match[0]}'; "
+            f"keeping '{previous_title}'."
+        )
+        self.article['title'] = previous_title
+        return True
+
     def _keep_reviewed_title_distinct(self, generator, title_before_review):
         """A title the reviewer rewrote must not repeat a published article either.
 
@@ -884,14 +1117,25 @@ class _ArticlePostJob:
         """
         if not (self.review and self.review.title_changed):
             return
-        match = self._similar_published(generator, self.article.get('title', ''))
-        if match:
-            logger.warning(
-                f"Reviewer title '{self.article.get('title')}' repeats published article '{match[0]}'; "
-                f"keeping '{title_before_review}'."
-            )
-            self.article['title'] = title_before_review
+        if self._restore_title_if_repeated(generator, title_before_review, 'Reviewer'):
             self.review.title_changed = False
+
+    def _improve_article(self, generator, seo_data, recent_posts, extra_urls, hosts):
+        """Helpfulness assessment and, when needed, one full rewrite (see
+        services.article_quality). The kept draft replaces self.article; a new
+        title it brings must not repeat a published article either."""
+        title_before = self.article.get('title', '')
+        args, options = self.generation
+        self.quality = _improve_generated_article(
+            generator, self.article, args, options, seo_data=seo_data, brief_text=self.brief_text,
+            language=self._language(), topic=self.custom_topic or self.category['name'],
+            category_name=self.category['name'], site_name=self.site_config.get('site_name'),
+            context=f"site {self.site_id}", internal_posts=recent_posts, extra_allowed_urls=extra_urls,
+            allowed_hosts=hosts, links_unknown=recent_posts is None,
+        )
+        self.article = self.quality.article
+        if self.article.get('title', '') != title_before:
+            self._restore_title_if_repeated(generator, title_before, 'Rewritten')
 
     def _claim_new_research_topic(self, generator, category_name):
         """Claim the next research topic that does not repeat a published article.
@@ -944,13 +1188,16 @@ class _ArticlePostJob:
         # items carry their own title (the topic, researched below) but used to
         # be written without any of their category's research.
         seo_data = _load_category_research(self.user_id, self.site_id, category_name)
+        own_hosts = _site_hosts(self.site_config.get('wordpress_url'))
 
         # Second research stage. Category-level evidence is broad; once the actual
         # topic is known, research that topic directly so the article is grounded in
         # evidence about what it is really about.
         if self.custom_topic:
             seo_data = _merge_topic_research(seo_data, self.custom_topic, category_name,
-                                             self.site_config.get('language', 'id'))
+                                             self.site_config.get('language', 'id'), exclude_hosts=own_hosts)
+        # Before the content gaps are derived from the competitors below.
+        seo_data = _without_own_pages(seo_data, own_hosts)
 
         # Layer first-party Search Console evidence on top of the researched data.
         # These are queries this exact site already ranks for, so they are the most
@@ -974,7 +1221,8 @@ class _ArticlePostJob:
             site_name=site_config.get('site_name'),
             language=site_config.get('language', 'id'),
             category_desc=_category_description(site_config, category_name),
-            internal_links_context=recent_posts
+            internal_links_context=recent_posts,
+            content_brief=self.brief_text,
         )
 
         def titles_to_avoid(*matched):
@@ -983,16 +1231,18 @@ class _ArticlePostJob:
             avoid = [t for t in list(self.avoid_titles) + list(matched) if t]
             return [t for t in existing_titles or [] if t not in avoid] + avoid
 
+        def generate(titles, **extra):
+            # Remembered so the quality rewrite repeats exactly this call.
+            args, kwargs = (category_name, titles, self.custom_topic, seo_data), dict(extra, **options)
+            self.generation = (args, kwargs)
+            return generator.generate_checked_article(*args, **kwargs)
+
         if self.avoid_titles:
             # No distinct research topic was found: this is a category article
             # that must steer clear of the published titles the topics matched.
-            self.article = generator.generate_checked_article(
-                category_name, titles_to_avoid(), self.custom_topic, seo_data, avoid_similar=True, **options
-            )
+            self.article = generate(titles_to_avoid(), avoid_similar=True)
         else:
-            self.article = generator.generate_checked_article(
-                category_name, existing_titles, self.custom_topic, seo_data, **options
-            )
+            self.article = generate(existing_titles)
 
         match = self._similar_published(generator, self.article.get('title', ''))
         if match:
@@ -1000,15 +1250,14 @@ class _ArticlePostJob:
                 f"Similar title detected (score {match[1]}): '{self.article.get('title')}' ~ '{match[0]}'. "
                 "Regenerating..."
             )
-            self.article = generator.generate_checked_article(
-                category_name, titles_to_avoid(match[0]), self.custom_topic, seo_data, avoid_similar=True,
-                **options
-            )
+            self.article = generate(titles_to_avoid(match[0]), avoid_similar=True)
             match = self._similar_published(generator, self.article.get('title', ''))
             if match:
                 raise TopicTooSimilar(match[0], article_title=self.article.get('title'))
 
-    def _publish(self, publisher, image_data, featured_image_id, image_failed):
+    def _publish(self, publisher, image_data, featured_image_id, image_failed, on_logged=None):
+        """Publish, settle and record the post. on_logged runs once the PostLog
+        row (the history other jobs compare titles against) is written."""
         article, category = self.article, self.category
         success, result = publisher.create_post(
             article.get('title', ''),
@@ -1034,6 +1283,8 @@ class _ArticlePostJob:
                 post_id = result.get('id')
                 post_url = result.get('link')
             result_msg = RESULT_PUBLISHED_NO_IMAGE if image_failed else RESULT_PUBLISHED
+            if self.quality:
+                result_msg = f"{result_msg} {self.quality.note}"
             if self.review:
                 result_msg = f"{result_msg} {self.review.note}"
         else:
@@ -1059,12 +1310,15 @@ class _ArticlePostJob:
             post_url,
             image_failed=(image_failed if success else False)
         )
+        if on_logged:
+            on_logged()
 
         if success:
             logger.info(f"Consumed reserved credit for user_id={self.user_id}, site_id={self.site_id}")
             send_telegram_notification(
                 self.site_config, _published_message(self.site_config, article, category, post_url, image_data,
-                                                     review_note=self.review.note if self.review else None)
+                                                     review_note=self.review.note if self.review else None,
+                                                     quality_label=self.quality.label if self.quality else None)
             )
             _share_published_post(self.site_config, article, post_url, image_data)
             logger.info(f"Article published successfully: {article.get('title', '')}")
@@ -1298,7 +1552,65 @@ def regenerate_image_job(user_id, log_id):
         _fail_regeneration(user_id, log_id, e, 'regenerate_image_job', 'image regen', 'Regenerasi gambar gagal')
 
 
+# job_locks.regeneration_lock_key is held from enqueue (routes/queue.py) until
+# the job ends, so a post log is regenerated by one job at a time.
+# Once the job runs: just above the 45-minute RQ timeout, as a fallback for a
+# worker killed before the finally block below.
+REGENERATION_LOCK_RUNNING_TTL_SECONDS = 50 * 60
+
+
+def _regeneration_lock(log_id):
+    """(redis connection, key, this job's id) for the post log's regeneration lock."""
+    job = _current_job()
+    connection = getattr(job, 'connection', None) or getattr(core_extensions, 'redis_conn', None)
+    return connection, regeneration_lock_key(log_id), getattr(job, 'id', None)
+
+
+def _claim_regeneration_lock(log_id):
+    """Hold the post log's regeneration lock while this job runs.
+
+    The route took it for this job: its TTL is shortened to the running TTL
+    (atomic compare-and-expire). A lock that expired while the job waited in
+    the queue is taken again. False only when another regeneration of the same
+    log holds it. Without Redis or an RQ job (tests, scripts) nothing is locked.
+    """
+    connection, key, job_id = _regeneration_lock(log_id)
+    if connection is None or not job_id:
+        return True
+    try:
+        return claim_lock(connection, key, job_id, REGENERATION_LOCK_RUNNING_TTL_SECONDS,
+                          is_alive=lambda holder: _rq_job_is_alive(holder, connection))
+    except JobTimeoutException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not take the regeneration lock of log {log_id} ({e}); continuing.")
+        return True
+
+
+def _release_regeneration_lock(log_id):
+    connection, key, job_id = _regeneration_lock(log_id)
+    if connection is None or not job_id:
+        return
+    try:
+        release_lock(connection, key, job_id)  # atomic compare-and-delete
+    except Exception as e:
+        logger.warning(f"Could not release the regeneration lock of log {log_id}: {e}")
+
+
 def regenerate_article_job(user_id, log_id):
+    """Regenerate a published article in place (the route reserved 1 credit and
+    took the post log's regeneration lock, released here when the job ends)."""
+    if not _claim_regeneration_lock(log_id):
+        logger.warning(f"Another regeneration of log {log_id} is running; refunding and skipping this one.")
+        db.refund_user_credits(user_id, 1)
+        return
+    try:
+        _regenerate_article(user_id, log_id)
+    finally:
+        _release_regeneration_lock(log_id)
+
+
+def _regenerate_article(user_id, log_id):
     try:
         generator = _build_generator(load_config(user_id))
         target = _load_regeneration_target(user_id, log_id)
@@ -1310,30 +1622,49 @@ def regenerate_article_job(user_id, log_id):
 
         logger.info(f"Regenerating article for post {post_id} - {title}")
         recent_posts = _recent_posts_for_links(publisher)
-        article = generator.generate_checked_article(
-            target['category_name'],
-            [],
-            title,
-            None,
+        language = target['language'] or 'id'
+        context = f"regenerate log {log_id}"
+        # The same evidence a new article gets: the category's fresh research
+        # plus research on this article's own title. The writer, the brief, the
+        # quality assessment and the reviewer all work from it.
+        seo_data = _load_category_research(user_id, target['site_id'], target['category_name'])
+        own_hosts = _site_hosts(target['wordpress_url'])
+        seo_data = _merge_topic_research(seo_data, title, target['category_name'], language, exclude_hosts=own_hosts)
+        seo_data = _without_own_pages(seo_data, own_hosts)
+        brief_text = _writing_brief(
+            generator, title, seo_data, language=language, category_name=target['category_name'],
+            site_name=target['site_name'], category_description=target['category_description'],
+            article_prompt=target['article_prompt'],
+        )
+        generation_args = (target['category_name'], [], title, seo_data)
+        generation_options = dict(
             avoid_similar=False,
             custom_prompt=target['article_prompt'],
             site_name=target['site_name'],
             language=target['language'],
-            category_desc=None,
-            internal_links_context=recent_posts
+            category_desc=target['category_description'] or None,
+            internal_links_context=recent_posts,
+            content_brief=brief_text,
         )
+        article = generator.generate_checked_article(*generation_args, **generation_options)
         if recent_posts is None:
             article['allowed_link_urls'] = None  # fetch failed: leave links alone
         extra_urls, hosts = _link_allowances(target['article_prompt'], target['wordpress_url'])
-        _apply_quality_gate(article, f"regenerate log {log_id}", "Artikel hasil regenerasi ditolak quality gate: ",
+        _apply_quality_gate(article, context, "Artikel hasil regenerasi ditolak quality gate: ",
                             extra_allowed_urls=extra_urls, allowed_hosts=hosts)
-        # The writer gets no research here, but the reviewer checks claims against
-        # the category's fresh research when there is some, plus the publisher's
-        # own context.
+        quality = _improve_generated_article(
+            generator, article, generation_args, generation_options, seo_data=seo_data, brief_text=brief_text,
+            language=language, topic=title, category_name=target['category_name'], site_name=target['site_name'],
+            context=context, internal_posts=recent_posts, extra_allowed_urls=extra_urls, allowed_hosts=hosts,
+            links_unknown=recent_posts is None,
+        )
+        article = quality.article
+        # The reviewer checks claims against the same research, plus the
+        # publisher's own context.
         review = _review_generated_article(
-            generator, article, _load_category_research(user_id, target['site_id'], target['category_name']),
-            language=target['language'] or 'id', category_name=target['category_name'],
-            site_name=target['site_name'], context=f"regenerate log {log_id}", internal_posts=recent_posts,
+            generator, article, seo_data,
+            language=language, category_name=target['category_name'],
+            site_name=target['site_name'], context=context, internal_posts=recent_posts,
             extra_allowed_urls=extra_urls, allowed_hosts=hosts,
             article_prompt=target['article_prompt'], category_description=target['category_description'],
         )
@@ -1354,7 +1685,7 @@ def regenerate_article_job(user_id, log_id):
             raise Exception(f"Update postingan WordPress gagal: {result}")
 
         logger.info(f"Successfully regenerated article for post {post_id}")
-        _set_log_result(log_id, f"{RESULT_REGENERATED} {review.note}")
+        _set_log_result(log_id, f"{RESULT_REGENERATED} {quality.note} {review.note}")
         logger.info(f"Consumed reserved credit for user_id={user_id}, log_id={log_id}")
     except Exception as e:
         _fail_regeneration(user_id, log_id, e, 'regenerate_article_job', 'article regen', 'Regenerasi artikel gagal')

@@ -447,7 +447,8 @@ def _load_research_plan(user_id, site_id, category, categories, force, refund):
             'telegram_enabled': site.telegram_enabled,
             'telegram_bot_token': site.telegram_bot_token,
             'telegram_chat_id': site.telegram_chat_id,
-            'site_name': site.site_name
+            'site_name': site.site_name,
+            'wordpress_url': getattr(site, 'wordpress_url', None),
         }
         skip_reason = None
         if not selected_categories:
@@ -457,8 +458,12 @@ def _load_research_plan(user_id, site_id, category, categories, force, refund):
         return site_config, site.language or 'id', selected_categories, skip_reason
 
 
-def _research_categories(job, refund, outcome, user_id, site_id, site_name, language, selected_categories):
-    """Research each category in turn, recording progress and outcome."""
+def _research_categories(job, refund, outcome, user_id, site_id, site_name, language, selected_categories,
+                         exclude_hosts=None):
+    """Research each category in turn, recording progress and outcome.
+
+    exclude_hosts: the site's own host(s), never counted as a competitor or source.
+    """
     total = len(selected_categories)
     outcome['total'] = total
     logger.info(f"Starting research job for site {site_name} (language={language}, categories={total})")
@@ -467,6 +472,9 @@ def _research_categories(job, refund, outcome, user_id, site_id, site_name, lang
     # and do not import in every environment.
     from seo_research import SEOResearch
     seo = SEOResearch()
+    # The site's own pages must not be researched as its competitors. Set as an
+    # attribute (the default for every SEOResearch lookup), not passed per call.
+    seo.exclude_hosts = exclude_hosts
 
     # Loaded once for the whole job rather than per category.
     gsc_queries = _load_search_console_queries(user_id, site_id)
@@ -622,7 +630,8 @@ def deep_research_job(user_id, force=True, site_id=None, category=None, charged_
             else:
                 outcome['total'] = len(selected_categories)
                 _research_categories(job, refund, outcome, user_id, site_id,
-                                     site_config['site_name'], language, selected_categories)
+                                     site_config['site_name'], language, selected_categories,
+                                     exclude_hosts=[site_config.get('wordpress_url')])
     except BaseTimeoutException:
         outcome['failed'] = max(0, outcome['total'] - refund.successful)
         outcome['reason'] = (f'Riset melewati batas waktu setelah {refund.successful} '

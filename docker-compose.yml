@@ -50,9 +50,40 @@ services:
         condition: service_healthy
 
   worker:
+    # Article jobs (generate/post, regeneration) run up to 45 minutes each, so
+    # two workers serve the default queue: this one plus worker-2. Only this
+    # one runs RQ's scheduler (delayed jobs). Two jobs of the same site never
+    # publish at the same moment (per-site publish lock in tasks/article_jobs.py).
     build: .
     restart: unless-stopped
     command: rq worker --with-scheduler -u redis://redis:6379/0 high default low --max-jobs 100
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-}
+      - FERNET_KEY=${FERNET_KEY:-}
+      - AUTOWP_RUNTIME_DIR=/app/runtime
+    volumes:
+      - autowp_runtime:/app/runtime
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-2:
+    build: .
+    restart: unless-stopped
+    command: rq worker -u redis://redis:6379/0 high default low --max-jobs 100
     env_file:
       - .env
     environment:

@@ -45,9 +45,13 @@ db = Database(Config.DATABASE_URL)
 # abandoned and returned to 'pending'.
 STUCK_POSTING_TIMEOUT_MINUTES = 90
 
-# Article generation retries were doubled (quality correction pass), so 10 minutes
-# killed legitimate jobs mid-generation. Keep in sync with routes/queue.py.
-GENERATE_AND_POST_JOB_TIMEOUT = '25m'
+# An article job runs research, a writing brief, the article (with a quality
+# correction pass), a helpfulness assessment, possibly a full rewrite and a
+# second assessment, then up to two fact-check rounds and the image. On a slow
+# model the worst case passed 25 minutes and RQ killed the job mid-pipeline.
+# Keep in sync with ARTICLE_JOB_TIMEOUT in routes/queue.py, and below
+# STUCK_POSTING_TIMEOUT_MINUTES (the sweep must never reset a running job).
+GENERATE_AND_POST_JOB_TIMEOUT = '45m'
 
 # RQ statuses in which a job may still run or is running.
 LIVE_JOB_STATUSES = {'queued', 'started', 'scheduled', 'deferred', 'created'}

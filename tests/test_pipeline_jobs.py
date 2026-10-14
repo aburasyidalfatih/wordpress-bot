@@ -27,6 +27,7 @@ if 'core_extensions' not in sys.modules:
         setattr(_stub, _name, Mock())
     sys.modules['core_extensions'] = _stub
 
+from test_article_quality_support import PASSING_NOTE, quality_stub_patches  # noqa: E402
 import tasks.article_jobs as jobs
 from services.article_review import ReviewResult
 from database import Database
@@ -92,6 +93,7 @@ class GenerateAndPostTitleRetryTests(unittest.TestCase):
             patch.object(jobs, '_current_job', lambda: None),
             patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok'))),
         ]
+        patches += quality_stub_patches(jobs)
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -108,7 +110,7 @@ class GenerateAndPostTitleRetryTests(unittest.TestCase):
         with self.db.get_session() as s:
             log = s.query(PostLog).one()
             self.assertTrue(log.success)
-            self.assertEqual(log.result, jobs.RESULT_PUBLISHED_NO_IMAGE + ' Ditinjau AI: disetujui tanpa perbaikan isi.')
+            self.assertEqual(log.result, jobs.RESULT_PUBLISHED_NO_IMAGE + f' {PASSING_NOTE} Ditinjau AI: disetujui tanpa perbaikan isi.')
             self.assertEqual(s.get(User, 1).credits, 10)  # pre-reserved by the caller, consumed
 
     def test_failure_history_is_in_indonesian(self):
@@ -149,7 +151,10 @@ class RegenerationJobTests(unittest.TestCase):
             patch.object(jobs, 'WordPressPublisher', Mock(return_value=self.publisher)),
             patch.object(jobs, 'check_article', Mock(return_value=(True, [], []))),
             patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok', applied=2))),
+            # Regeneration researches the post's title; tests must not hit the network.
+            patch.object(jobs, '_merge_topic_research', lambda seo, *a, **k: seo),
         ]
+        patches += quality_stub_patches(jobs)
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -166,7 +171,7 @@ class RegenerationJobTests(unittest.TestCase):
 
     def test_article_regeneration_success_consumes_credit(self):
         jobs.regenerate_article_job(1, 10)
-        self.assertEqual(self.log().result, jobs.RESULT_REGENERATED + ' Ditinjau AI: 2 perbaikan diterapkan.')
+        self.assertEqual(self.log().result, jobs.RESULT_REGENERATED + f' {PASSING_NOTE} Ditinjau AI: 2 perbaikan diterapkan.')
         self.assertEqual(self.credits(), 4)
         args = self.publisher.update_post_content.call_args.args
         self.assertEqual(args[:3], (55, 'Judul Baru', '<p>isi</p>'))

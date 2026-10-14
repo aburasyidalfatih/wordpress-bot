@@ -210,8 +210,12 @@ def _same_intent_by_ai(generator, candidate, existing, language):
     return None
 
 
-def find_similar_published(candidate, published_titles, *, language='id', generator=None):
+def find_similar_published(candidate, published_titles, *, language='id', generator=None, corpus=None):
     """The published title `candidate` would cannibalize, as (title, score), or None.
+
+    corpus: titles the niche-word weights are computed from, when matching only
+    against a few of them (e.g. the titles published since a check ran);
+    defaults to published_titles.
 
     Scores at or above DEFINITE_THRESHOLD match outright. Gray-zone scores
     (BORDERLINE_THRESHOLD up to DEFINITE_THRESHOLD) are put to the model via
@@ -230,7 +234,11 @@ def find_similar_published(candidate, published_titles, *, language='id', genera
             continue
         seen.add(title.lower())
         published.append((title, significant_tokens(title, language)))
-    weights = _token_weights([tokens for _, tokens in published])
+    if corpus is None:
+        weights = _token_weights([tokens for _, tokens in published])
+    else:
+        corpus_titles = {html.unescape(str(t or '')).strip().lower() for t in list(corpus) + [t for t, _ in published]}
+        weights = _token_weights([significant_tokens(t, language) for t in corpus_titles if t])
 
     scored = sorted(
         ((similarity_score(candidate_tokens, tokens, weights), title) for title, tokens in published),
