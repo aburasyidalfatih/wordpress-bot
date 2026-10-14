@@ -1,17 +1,17 @@
 from datetime import datetime, timedelta, timezone
 
 from services.article_generator import sanitize_filename
+from services.quality_gate import plain_text, sanitize_article_html
 from services.url_safety import validate_public_http_url
 import requests
 import base64
 import html as html_mod
-import json
 import re
 import time
+import unicodedata
 import urllib.parse
 from io import BytesIO
 import logging
-from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from urllib3.exceptions import NewConnectionError
 
@@ -61,7 +61,9 @@ _PLACEHOLDER_PATTERNS = [
 
 
 def _clean_content(content):
-    """Strip model artifacts (placeholders, ASCII art, JSON debris) and close broken tags."""
+    """Strip model artifacts (placeholders, ASCII art, JSON debris), then reduce the
+    HTML to the article allow-list (sanitize_article_html), which also closes
+    broken tags. Runs before the publisher adds its own boxes and embeds."""
     for pattern in _PLACEHOLDER_PATTERNS:
         content = re.sub(pattern, '', content, flags=re.IGNORECASE)
 
@@ -79,35 +81,97 @@ def _clean_content(content):
 
     content = content.strip()
 
-    # Re-serialize through BeautifulSoup to close broken/unbalanced tags.
-    try:
-        content = str(BeautifulSoup(content, 'html.parser'))
-    except Exception as e:
-        logger.warning(f"Failed to sanitize HTML: {e}")
-    return content
+    # No fallback to the raw HTML: content that cannot be sanitized is not published.
+    return sanitize_article_html(content)
 
 
-def _key_takeaways_box(key_takeaways):
-    return f"""<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; border-left:5px solid #0ea5e9; margin-bottom:25px;">
-    <h3 style="margin-top:0; color:#0369a1;">✨ Key Takeaways</h3>
-    <ul style="margin-bottom:0;">
-        {''.join([f'<li>{k}</li>' for k in key_takeaways])}
-    </ul>
-</div>"""
+TAKEAWAYS_HEADINGS = {'en': 'Key takeaways', 'id': 'Poin penting'}
 
 
-def _faq_schema(faqs):
-    """FAQPage schema, or None when no FAQ has both a question and an answer."""
-    main_entity = [
-        {
-            "@type": "Question",
-            "name": faq["question"],
-            "acceptedAnswer": {"@type": "Answer", "text": faq["answer"]},
-        }
-        for faq in faqs
-        if 'question' in faq and 'answer' in faq
-    ]
-    return {"@type": "FAQPage", "mainEntity": main_entity} if main_entity else None
+def _key_takeaways_box(key_takeaways, language=None):
+    """Summary box in the site's language, or '' when there is nothing to list."""
+    items = [str(k).strip() for k in key_takeaways if str(k).strip()]
+    if not items:
+        return ''
+    heading = TAKEAWAYS_HEADINGS['en' if language == 'en' else 'id']
+    rows = ''.join(f'<li>{html_mod.escape(item, quote=False)}</li>' for item in items)
+    return (f'<div class="key-takeaways" style="background:#f0f9ff; padding:20px; border-radius:8px; '
+            f'border-left:5px solid #0ea5e9; margin-bottom:25px;">\n'
+            f'<p style="margin-top:0; font-weight:600; color:#0369a1;">{heading}</p>\n'
+            f'<ul style="margin-bottom:0;">{rows}</ul>\n</div>')
+
+
+def _faq_section(faqs):
+    """Visible FAQ section, or '' when no FAQ has both a question and an answer.
+
+    No FAQPage JSON-LD: Google no longer shows FAQ rich results, and the site's
+    SEO plugin owns the page's structured data.
+    """
+    items = []
+    for faq in faqs or []:
+        if not isinstance(faq, dict):
+            continue
+        question = str(faq.get('question') or '').strip()
+        answer = str(faq.get('answer') or '').strip()
+        if question and answer:
+            items.append(f'<h3>{html_mod.escape(question, quote=False)}</h3>\n'
+                         f'<p>{html_mod.escape(answer, quote=False)}</p>')
+    if not items:
+        return ''
+    return '\n<h2>FAQ</h2>\n' + '\n'.join(items) + '\n'
+
+
+# Slugs: short, readable, no year (a dated URL goes stale while the post is
+# updated) and no dangling stopword at either end.
+MAX_SLUG_CHARS = 60
+MAX_SLUG_WORDS = 8
+SLUG_STOPWORDS = frozenset({
+    'a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'vs',
+    'di', 'ke', 'dari', 'untuk', 'dan', 'yang', 'dengan', 'pada', 'atau', 'dalam', 'bagi', 'oleh',
+})
+_YEAR_RE = re.compile(r'^(?:19|20)\d{2}$')
+
+
+def _slug_words(text):
+    """Lower-case ASCII words: accents transliterated, apostrophes dropped, years removed."""
+    text = unicodedata.normalize('NFKD', str(text or '')).encode('ascii', 'ignore').decode('ascii').lower()
+    text = text.replace("'", '')
+    return [w for w in re.findall(r'[a-z0-9]+', text) if not _YEAR_RE.match(w)]
+
+
+def _trim_slug_words(words):
+    """Drop stopwords and bare numbers (list counts, leftovers like "in 2026") from
+    both ends, cap the length on a word boundary, then trim the new end again."""
+    def trim(ws):
+        start, end = 0, len(ws)
+        while start < end and (ws[start] in SLUG_STOPWORDS or ws[start].isdigit()):
+            start += 1
+        while end > start and (ws[end - 1] in SLUG_STOPWORDS or ws[end - 1].isdigit()):
+            end -= 1
+        return ws[start:end]
+
+    capped = []
+    for word in trim(words):
+        if len(capped) >= MAX_SLUG_WORDS or len('-'.join(capped + [word])) > MAX_SLUG_CHARS:
+            break
+        capped.append(word)
+    return trim(capped)
+
+
+def make_post_slug(title, focus_keyword=None):
+    """Short slug for a new post, or '' to let WordPress derive one.
+
+    The focus keyword is used when it is descriptive (two or more content words)
+    and at least half of those words appear in the title, so a generic fallback
+    keyword (the category name) cannot give every post the same slug. Otherwise
+    the title is used. Numbers inside the slug are kept ("pph-21-karyawan").
+    """
+    title_words = _slug_words(title)
+    keyword_words = _trim_slug_words(_slug_words(focus_keyword))
+    content_words = [w for w in keyword_words if w not in SLUG_STOPWORDS and not w.isdigit()]
+    if len(content_words) >= 2 and 2 * sum(w in title_words for w in content_words) >= len(content_words):
+        return '-'.join(keyword_words)
+    return '-'.join(_trim_slug_words(title_words))
 
 
 def _youtube_iframe(video_id):
@@ -164,8 +228,9 @@ def _seo_meta_fields(meta_description, focus_keyword):
 
 
 class WordPressPublisher:
-    def __init__(self, url, username, password, site_name=None, enable_youtube_embed=False):
+    def __init__(self, url, username, password, site_name=None, enable_youtube_embed=False, language=None):
         self.url = url.rstrip('/')
+        self.language = language
         self._raw_url = self.url
         # The base URL is user-supplied and fetched from inside the server
         # network, so it must be a public http(s) URL. The constructor never
@@ -445,44 +510,27 @@ class WordPressPublisher:
             logger.error(f"Error fetching categories: {e}")
             return []
 
-    def _structured_data_script(self, title, meta_description, focus_keyword, faqs, author_name):
-        """JSON-LD for the post.
-
-        FAQPage rich results are heavily restricted these days, so its main value
-        is as machine-readable Q&A for answer engines. BlogPosting is what
-        actually carries the authorship and freshness signals.
-        """
-        organization = {"@type": "Organization", "name": self.site_name or self.url}
-        blog_posting = {
-            "@type": "BlogPosting",
-            "headline": title[:110],
-            "datePublished": datetime.now().astimezone().isoformat(),
-            "dateModified": datetime.now().astimezone().isoformat(),
-            "publisher": organization,
-            "mainEntityOfPage": {"@type": "WebPage", "@id": self.url},
-            "author": {"@type": "Person", "name": author_name} if author_name else dict(organization),
-        }
-        if meta_description:
-            blog_posting["description"] = meta_description
-        if focus_keyword:
-            blog_posting["keywords"] = focus_keyword
-        graph = [blog_posting]
-
-        if faqs and isinstance(faqs, list):
-            faq_schema = _faq_schema(faqs)
-            if faq_schema:
-                graph.append(faq_schema)
-
-        schema_payload = {"@context": "https://schema.org", "@graph": graph}
-        return f'\n<script type="application/ld+json">{json.dumps(schema_payload, ensure_ascii=False)}</script>\n'
-
     def _prepare_post_payload(self, title, content, category_id=None, featured_image_id=None, meta_description=None,
-                              excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None):
-        """Build the REST payload. Returns (post_data, SEO meta fields)."""
+                              excerpt=None, focus_keyword=None, key_takeaways=None, faqs=None, author_name=None,
+                              set_slug=True):
+        """Build the REST payload. Returns (post_data, SEO meta fields).
+
+        No JSON-LD is added: the site's SEO plugin (Rank Math/Yoast) already
+        outputs the Article/BlogPosting schema, and AutoWP's own copy duplicated
+        it. The plugin gets the focus keyword and meta description through the
+        meta fields. author_name is still accepted from callers but unused.
+
+        set_slug=False leaves the slug alone, so an updated post keeps its URL.
+        """
         content = _clean_content(content)
+        # WordPress shows these as they are: plain text only.
+        title = plain_text(title)
+        excerpt = plain_text(excerpt) if excerpt else excerpt
+        meta_description = plain_text(meta_description) if meta_description else meta_description
         if key_takeaways and isinstance(key_takeaways, list):
-            content = _key_takeaways_box(key_takeaways) + "\n" + content
-        content += self._structured_data_script(title, meta_description, focus_keyword, faqs, author_name)
+            content = _key_takeaways_box(key_takeaways, self.language) + "\n" + content
+        if faqs and isinstance(faqs, list):
+            content += _faq_section(faqs)
 
         # YouTube auto-embed. Opt-in, and only when a result's title actually overlaps
         # the article topic — previously the first search hit was embedded blind, which
@@ -496,8 +544,10 @@ class WordPressPublisher:
             'title': title,
             'content': content,
             'status': 'publish',
-            'slug': re.sub(r'\b20[2-9][0-9]\b', '', title).strip()
         }
+        slug = make_post_slug(title, focus_keyword) if set_slug else ''
+        if slug:
+            post_data['slug'] = slug
         if category_id:
             post_data['categories'] = [category_id]
         if featured_image_id:
@@ -617,7 +667,7 @@ class WordPressPublisher:
             for check in range(3):
                 if check:
                     time.sleep(5)
-                found = self._find_created_post(title, post_data.get('slug'), not_before)
+                found = self._find_created_post(post_data['title'], post_data.get('slug'), not_before)
                 if found:
                     logger.info(f"Found post {found.get('id')} created despite the lost response.")
                     return True, found
@@ -649,7 +699,10 @@ class WordPressPublisher:
             return False, _refusal_message(self.url_error)
         headers = self._get_auth()
         headers['Content-Type'] = 'application/json'
-        post_data, meta_fields = self._prepare_post_payload(title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword, key_takeaways, faqs, author_name)
+        # An existing post keeps its slug: changing it would move a live URL.
+        post_data, meta_fields = self._prepare_post_payload(
+            title, content, category_id, featured_image_id, meta_description, excerpt, focus_keyword,
+            key_takeaways, faqs, author_name, set_slug=False)
         response = self._request('POST',
             f"{self.api_url}/posts/{post_id}",
             headers=headers,

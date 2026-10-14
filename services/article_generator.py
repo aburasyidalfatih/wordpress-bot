@@ -258,9 +258,18 @@ class ArticleGenerator:
     def image_model(self):
         return self.image.model
 
-    def generate_text(self, prompt, system=None, max_tokens=8192):
-        """Plain text completion for research titles and prompt helpers."""
-        return self.text.generate(prompt, system=system, max_tokens=max_tokens).text
+    def generate_text(self, prompt, system=None, max_tokens=8192, raise_on_truncation=False):
+        """Plain text completion for research titles, prompt helpers and the review.
+
+        raise_on_truncation=True raises TruncatedGenerationError when the model hit
+        max_tokens, for callers that cannot use a cut-off reply (JSON).
+        """
+        result = self.text.generate(prompt, system=system, max_tokens=max_tokens)
+        if raise_on_truncation and result.truncated:
+            raise TruncatedGenerationError(
+                f"Model mencapai batas {max_tokens} token output; jawaban terpotong."
+            )
+        return result.text
 
     def generate_checked_article(self, *args, **kwargs):
         """Allow one evidence-preserving correction, never publish rejected output."""

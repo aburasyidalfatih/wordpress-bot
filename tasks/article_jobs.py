@@ -1,6 +1,6 @@
+import html
 import re
 from datetime import datetime
-from difflib import SequenceMatcher
 
 from rq import get_current_job
 from rq.exceptions import NoSuchJobError
@@ -15,13 +15,17 @@ from database import USABLE_CONFIDENCE_LEVELS, add_credits, debit_credits, resea
 from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
 from services.ai_providers import AIProviderError
 from services.article_generator import ArticleGenerator, ArticleQualityError
+from services.article_review import (
+    ArticleReviewRejected, JobTimeoutException, build_publisher_context, build_review_evidence, review_article,
+)
 from services.content_planner import (
     load_search_metrics, topic_candidates_from_opportunities,
     keyword_demand_map, annotate_keywords_with_demand, find_content_gaps,
     classify_intent, intent_guidance, filter_opportunities_for_topic,
 )
-from services.quality_gate import check_article, strip_invalid_internal_links
+from services.quality_gate import check_article, link_host, strip_invalid_internal_links
 from services.search_console import build_search_opportunities
+from services.topic_similarity import find_similar_published
 from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result
 
 # RQ statuses in which a job may still run or is running.
@@ -146,12 +150,32 @@ TREND_TOPIC_TYPES = ('rising', 'popular', 'trending')
 # handed back at most this many times before it is consumed.
 MAX_TOPIC_RESTORES = 2
 
+# Research topics tried per scheduled article before one that does not repeat a
+# published article is found; after that the article falls back to the category.
+MAX_TOPIC_CLAIMS = 3
+
+# Published titles compared against new topics (PostLog history of the site).
+PUBLISHED_TITLES_LIMIT = 200
+
+
+class TopicTooSimilar(Exception):
+    """The topic or title repeats an article the site already published (a content failure)."""
+
+    def __init__(self, existing_title, article_title=None):
+        self.existing_title = existing_title
+        self.article_title = article_title
+        super().__init__(f"Topik terlalu mirip dengan artikel yang sudah terbit: '{existing_title}'")
+
+
+# Failures shown in the history as a deliberate "not published", not a crash.
+EDITORIAL_FAILURES = (ArticleReviewRejected, TopicTooSimilar)
+
 
 def _is_content_failure(error):
     """True when an article failed because of what was generated, so retrying the
-    same topic would fail the same way: quality gate rejections and a provider
-    refusing the topic."""
-    if isinstance(error, (ArticleQualityError, QualityGateRejection)):
+    same topic would fail the same way: quality gate and AI review rejections, a
+    topic repeating a published article, and a provider refusing the topic."""
+    if isinstance(error, (ArticleQualityError, QualityGateRejection) + EDITORIAL_FAILURES):
         return True
     return isinstance(error, AIProviderError) and 'menolak' in str(error).lower()
 
@@ -196,7 +220,10 @@ def _load_category_research(user_id, site_id, category_name):
                 'social_insights': research.social_insights or [],
                 'youtube_insights': research.youtube_insights or [],
                 'semantic_context': research.semantic_context or '',
-                'news_insights': research.news_insights or []
+                'news_insights': research.news_insights or [],
+                # Where the evidence came from (e.g. which Wikipedia article the
+                # background text is from), so the prompt can list it as a source.
+                'source_metadata': research.source_metadata if isinstance(research.source_metadata, dict) else {},
             }
             logger.info(
                 f"Using SEO data: {len(seo_data['keywords'])} keywords, {len(seo_data['questions'])} questions, "
@@ -417,39 +444,76 @@ def _category_description(site_config, category_name):
     return cat.get('description', '') if cat else ""
 
 
-def _normalize_title(text):
-    text = re.sub(r'\d+', '', text.lower())
-    text = re.sub(r'[^\w\s]', '', text)
-    return ' '.join(text.split())
+def _published_titles(user_id, site_id, recent_posts, extra_titles=()):
+    """Titles a new article must not cannibalize: the site's successful post
+    history (newest PUBLISHED_TITLES_LIMIT), the recent WordPress posts fetched
+    for internal linking (which include posts made outside AutoWP) and
+    extra_titles. Never raises: an empty list only disables the check."""
+    titles = list(extra_titles or [])
+    try:
+        titles += db.get_existing_titles(user_id, site_id, None, limit=PUBLISHED_TITLES_LIMIT) or []
+    except JobTimeoutException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not load published titles for site {site_id}: {e}")
+    titles += [post.get('title') for post in recent_posts or [] if isinstance(post, dict)]
+    seen, output = set(), []
+    for title in titles:
+        title = str(title or '').strip()
+        if title and title.lower() not in seen:
+            seen.add(title.lower())
+            output.append(title)
+    return output
 
 
-def _find_similar_title(new_title, existing_titles):
-    """Check whether a title duplicates or is too similar to an existing one.
+def _cited_source_urls(article, internal_posts):
+    """Research source URLs the writer was allowed to cite: the article's link
+    allow-list minus the site's own posts. None when no allow-list was built."""
+    allowed = article.get('allowed_link_urls')
+    if allowed is None:
+        return None
+    internal = {post.get('url') for post in internal_posts or [] if isinstance(post, dict)}
+    return [url for url in allowed if url and url not in internal]
 
-    Returns (is_similar, matching existing title, reason).
+
+def _protected_review_links(internal_posts, extra_allowed_urls, allowed_hosts):
+    """Hosts and URLs whose links the reviewer must leave alone: the site's own
+    domain, its posts and the URLs the custom article prompt asks for."""
+    links = [link_host(h) if '//' in str(h or '') else h for h in allowed_hosts or []]
+    links += [post.get('url') for post in internal_posts or [] if isinstance(post, dict)]
+    links += list(extra_allowed_urls or [])
+    return [link for link in links if link]
+
+
+def _review_generated_article(generator, article, seo_data, *, language, category_name, site_name, context,
+                              internal_posts=None, extra_allowed_urls=None, allowed_hosts=None,
+                              article_prompt=None, category_description=None):
+    """AI editorial review (fact-check, YMYL safety, title honesty) before publishing.
+
+    The reviewer sees the research the writer saw plus the source URLs it was
+    allowed to cite (so cited links can be checked against the evidence), the
+    publisher's own context (category description, custom article prompt) as
+    trusted facts, and the links it must not touch (site domain, internal posts,
+    URLs from the custom prompt).
+    Edits the article in place. When the review changed anything the quality gate
+    (and link stripping) runs again; failing it now is a review rejection.
+    Raises ArticleReviewRejected (content failure) or ArticleReviewUnavailable.
     """
-    new_normalized = _normalize_title(new_title)
-    # The first ~6 words usually carry the main topic.
-    new_main = ' '.join(new_normalized.split()[:6])
-
-    for existing in existing_titles:
-        existing_normalized = _normalize_title(existing)
-        existing_main = ' '.join(existing_normalized.split()[:6])
-
-        if new_normalized == existing_normalized:
-            return True, existing, "exact"
-
-        # Character similarity above 60% is too similar.
-        char_similarity = SequenceMatcher(None, new_normalized, existing_normalized).ratio()
-        if char_similarity > 0.6:
-            return True, existing, f"char {char_similarity:.0%}"
-
-        # Main-topic similarity above 75% is the same topic.
-        topic_similarity = SequenceMatcher(None, new_main, existing_main).ratio()
-        if topic_similarity > 0.75:
-            return True, existing, f"topic {topic_similarity:.0%}"
-
-    return False, None, None
+    evidence = build_review_evidence(seo_data, language, source_urls=_cited_source_urls(article, internal_posts))
+    result = review_article(
+        generator, article, evidence, language=language, category=category_name, site_name=site_name,
+        publisher_context=build_publisher_context(article_prompt, category_description),
+        protected_links=_protected_review_links(internal_posts, extra_allowed_urls, allowed_hosts),
+    )
+    logger.info(f"AI review ({context}): {result.log_line()}")
+    if result.changed:
+        try:
+            _apply_quality_gate(article, f"{context} after AI review", "",
+                                extra_allowed_urls=extra_allowed_urls, allowed_hosts=allowed_hosts)
+        except QualityGateRejection as e:
+            raise ArticleReviewRejected([f"hasil perbaikan tidak lolos quality gate: {e}"],
+                                        article.get('title')) from e
+    return result
 
 
 class QualityGateRejection(Exception):
@@ -523,25 +587,31 @@ def _share_published_post(site_config, article, post_url, image_data):
     post_to_threads(site_config, article, post_url, image_data)
 
 
+def _tg(value):
+    """Escape text going into a Telegram message sent with parse_mode=HTML."""
+    return html.escape(str(value if value is not None else ''), quote=False)
+
+
 def _start_message(site_config, category, custom_topic):
     return (
         f"🤖 <b>WordPress Auto Post Bot</b>\n\n"
-        f"🌐 <b>Website:</b> {site_config['site_name']}\n"
+        f"🌐 <b>Website:</b> {_tg(site_config['site_name'])}\n"
         f"📝 Mulai generate artikel...\n"
-        f"📂 Kategori: {category['name']}" + (f"\n🎯 Judul: {custom_topic}" if custom_topic else "")
+        f"📂 Kategori: {_tg(category['name'])}" + (f"\n🎯 Judul: {_tg(custom_topic)}" if custom_topic else "")
     )
 
 
-def _published_message(site_config, article, category, post_url, image_data):
+def _published_message(site_config, article, category, post_url, image_data, review_note=None):
     file_size = len(image_data.getvalue()) / 1024 if image_data else 0
     return (
         f"✅ <b>Artikel Berhasil Dipublish!</b>\n\n"
-        f"🌐 <b>Website:</b> {site_config['site_name']}\n"
-        f"📝 <b>Judul:</b> {article.get('title', '')}\n"
-        f"📂 <b>Kategori:</b> {category['name']}\n"
+        f"🌐 <b>Website:</b> {_tg(site_config['site_name'])}\n"
+        f"📝 <b>Judul:</b> {_tg(article.get('title', ''))}\n"
+        f"📂 <b>Kategori:</b> {_tg(category['name'])}\n"
         f"📊 <b>Panjang:</b> {len(article.get('content', '').split())} kata\n"
         f"🎨 <b>Featured Image:</b> WebP ({file_size:.1f} KB)\n"
-        f"🔗 <b>URL:</b> {post_url}\n\n"
+        + (f"🔎 <b>Tinjauan:</b> {_tg(review_note)}\n" if review_note else "")
+        + f"🔗 <b>URL:</b> {_tg(post_url)}\n\n"
         f"🎉 Status: Terbit"
     )
 
@@ -549,10 +619,10 @@ def _published_message(site_config, article, category, post_url, image_data):
 def _publish_failed_message(site_config, article, category, result):
     return (
         f"❌ <b>Posting Gagal!</b>\n\n"
-        f"🌐 <b>Website:</b> {site_config['site_name']}\n"
-        f"📝 <b>Judul:</b> {article.get('title', '')}\n"
-        f"📂 <b>Kategori:</b> {category['name']}\n"
-        f"⚠️ <b>Error:</b> {str(result)[:200]}"
+        f"🌐 <b>Website:</b> {_tg(site_config['site_name'])}\n"
+        f"📝 <b>Judul:</b> {_tg(article.get('title', ''))}\n"
+        f"📂 <b>Kategori:</b> {_tg(category['name'])}\n"
+        f"⚠️ <b>Error:</b> {_tg(str(result)[:200])}"
     )
 
 
@@ -594,6 +664,11 @@ class _ArticlePostJob:
         # (research_id, raw_topic) of a research topic taken for this article;
         # handed back if the article does not go out.
         self.topic_claim = None
+        # Published titles this article must not repeat, and those its skipped
+        # research topics matched (passed to the writer as titles to avoid).
+        self.published_titles = []
+        self.avoid_titles = []
+        self.review = None
 
     # -- credit / item settlement -------------------------------------------
 
@@ -693,7 +768,8 @@ class _ArticlePostJob:
             site_config['wordpress_url'],
             site_config['wordpress_username'],
             site_config['wordpress_password'],
-            site_name=site_config.get('site_name')
+            site_name=site_config.get('site_name'),
+            language=site_config.get('language') or 'id',
         )
         recent_posts = _recent_posts_for_links(publisher)
 
@@ -707,7 +783,12 @@ class _ArticlePostJob:
 
         send_telegram_notification(site_config, _start_message(site_config, self.category, self.custom_topic))
         existing_titles = db.get_existing_titles(self.user_id, self.site_id, self.category['name'], limit=50)
-        seo_data = self._gather_seo_data()
+        self.published_titles = _published_titles(self.user_id, self.site_id, recent_posts, existing_titles)
+        if self.item_id:
+            # A user-chosen title that repeats a published article is not
+            # written at all (checked before any research or generation cost).
+            self._check_topic_is_new(generator, self.custom_topic)
+        seo_data = self._gather_seo_data(generator)
         self._generate_article(generator, existing_titles, seo_data, recent_posts)
         if recent_posts is None:
             # The recent posts could not be fetched: no allow-list was really
@@ -716,6 +797,16 @@ class _ArticlePostJob:
         extra_urls, hosts = _link_allowances(site_config.get('article_prompt'), site_config.get('wordpress_url'))
         _apply_quality_gate(self.article, f"site {self.site_id}", "Artikel ditolak quality gate: ",
                             extra_allowed_urls=extra_urls, allowed_hosts=hosts)
+        # Nothing is published without the AI editorial review.
+        title_before_review = self.article.get('title', '')
+        self.review = _review_generated_article(
+            generator, self.article, seo_data, language=self._language(), category_name=self.category['name'],
+            site_name=site_config.get('site_name'), context=f"site {self.site_id}", internal_posts=recent_posts,
+            extra_allowed_urls=extra_urls, allowed_hosts=hosts,
+            article_prompt=site_config.get('article_prompt'),
+            category_description=_category_description(site_config, self.category['name']),
+        )
+        self._keep_reviewed_title_distinct(generator, title_before_review)
 
         image_data, featured_image_id, image_failed = _generate_featured_image(
             generator, publisher, self.category['name'], self.article,
@@ -771,14 +862,79 @@ class _ArticlePostJob:
         )
         return True
 
-    def _gather_seo_data(self):
+    def _language(self):
+        return (self.site_config or {}).get('language') or 'id'
+
+    def _similar_published(self, generator, title):
+        """(published title, score) that `title` would cannibalize, or None."""
+        return find_similar_published(title, self.published_titles, language=self._language(),
+                                      generator=generator)
+
+    def _check_topic_is_new(self, generator, topic):
+        match = self._similar_published(generator, topic)
+        if match:
+            logger.warning(f"Topic '{topic}' repeats published article '{match[0]}' (score {match[1]}).")
+            raise TopicTooSimilar(match[0])
+
+    def _keep_reviewed_title_distinct(self, generator, title_before_review):
+        """A title the reviewer rewrote must not repeat a published article either.
+
+        The pre-review title already passed that check, so a reviewer title that
+        fails it is dropped and the original kept.
+        """
+        if not (self.review and self.review.title_changed):
+            return
+        match = self._similar_published(generator, self.article.get('title', ''))
+        if match:
+            logger.warning(
+                f"Reviewer title '{self.article.get('title')}' repeats published article '{match[0]}'; "
+                f"keeping '{title_before_review}'."
+            )
+            self.article['title'] = title_before_review
+            self.review.title_changed = False
+
+    def _claim_new_research_topic(self, generator, category_name):
+        """Claim the next research topic that does not repeat a published article.
+
+        A topic too similar to a published title is consumed (not handed back)
+        and the next one is tried, MAX_TOPIC_CLAIMS at most. Returns the claim, or
+        None when no distinct topic was found; only then are the published titles
+        the skipped topics matched kept in avoid_titles, so the category article
+        written instead steers away from them. A distinct topic is written
+        normally (no avoid_similar).
+        """
+        matched = []
+        for _ in range(MAX_TOPIC_CLAIMS):
+            claim = db.get_unused_research_topic(self.user_id, self.site_id, category_name,
+                                                 return_claim=True)
+            if not claim:
+                break
+            # Held while it is checked, so a failure here still hands it back.
+            self.topic_claim = (claim[0], claim[2])
+            match = self._similar_published(generator, claim[1])
+            if not match:
+                return claim
+            self.topic_claim = None
+            logger.warning(
+                f"Research topic '{claim[1]}' consumed: too similar to published article "
+                f"'{match[0]}' (score {match[1]})."
+            )
+            matched.append(match[0])
+        if matched:
+            logger.warning(
+                f"No research topic for '{category_name}' distinct from published articles "
+                f"({len(matched)} skipped); writing a category article that avoids them."
+            )
+            self.avoid_titles = matched
+        return None
+
+    def _gather_seo_data(self, generator=None):
         category_name = self.category['name']
         topic_is_trending = False
         if not self.item_id:
             # Scheduled/category posts take an unused research topic, if any. It
             # is only spent for good once the article is published.
-            claim = db.get_unused_research_topic(self.user_id, self.site_id, category_name,
-                                                 return_claim=True)
+            claim = self._claim_new_research_topic(generator, category_name)
             if claim:
                 research_id, self.custom_topic, raw_topic = claim
                 self.topic_claim = (research_id, raw_topic)
@@ -809,7 +965,8 @@ class _ArticlePostJob:
         return seo_data
 
     def _generate_article(self, generator, existing_titles, seo_data, recent_posts):
-        """Generate the article, once more with avoid_similar if the title is a near-duplicate."""
+        """Generate the article, once more with avoid_similar if its title repeats a
+        published article; a second repeat fails the job (TopicTooSimilar)."""
         site_config = self.site_config
         category_name = self.category['name']
         options = dict(
@@ -819,18 +976,37 @@ class _ArticlePostJob:
             category_desc=_category_description(site_config, category_name),
             internal_links_context=recent_posts
         )
-        self.article = generator.generate_checked_article(
-            category_name, existing_titles, self.custom_topic, seo_data, **options
-        )
 
-        is_dup, similar_to, reason = _find_similar_title(self.article.get('title', ''), existing_titles)
-        if is_dup:
+        def titles_to_avoid(*matched):
+            # The prompt lists the last 10 titles given, so the ones that must
+            # be avoided go at the end.
+            avoid = [t for t in list(self.avoid_titles) + list(matched) if t]
+            return [t for t in existing_titles or [] if t not in avoid] + avoid
+
+        if self.avoid_titles:
+            # No distinct research topic was found: this is a category article
+            # that must steer clear of the published titles the topics matched.
+            self.article = generator.generate_checked_article(
+                category_name, titles_to_avoid(), self.custom_topic, seo_data, avoid_similar=True, **options
+            )
+        else:
+            self.article = generator.generate_checked_article(
+                category_name, existing_titles, self.custom_topic, seo_data, **options
+            )
+
+        match = self._similar_published(generator, self.article.get('title', ''))
+        if match:
             logger.warning(
-                f"Similar title detected ({reason}): '{self.article.get('title')}' ~ '{similar_to}'. Regenerating..."
+                f"Similar title detected (score {match[1]}): '{self.article.get('title')}' ~ '{match[0]}'. "
+                "Regenerating..."
             )
             self.article = generator.generate_checked_article(
-                category_name, existing_titles, self.custom_topic, seo_data, avoid_similar=True, **options
+                category_name, titles_to_avoid(match[0]), self.custom_topic, seo_data, avoid_similar=True,
+                **options
             )
+            match = self._similar_published(generator, self.article.get('title', ''))
+            if match:
+                raise TopicTooSimilar(match[0], article_title=self.article.get('title'))
 
     def _publish(self, publisher, image_data, featured_image_id, image_failed):
         article, category = self.article, self.category
@@ -858,6 +1034,8 @@ class _ArticlePostJob:
                 post_id = result.get('id')
                 post_url = result.get('link')
             result_msg = RESULT_PUBLISHED_NO_IMAGE if image_failed else RESULT_PUBLISHED
+            if self.review:
+                result_msg = f"{result_msg} {self.review.note}"
         else:
             result_msg = str(result)
             if unconfirmed:
@@ -885,7 +1063,8 @@ class _ArticlePostJob:
         if success:
             logger.info(f"Consumed reserved credit for user_id={self.user_id}, site_id={self.site_id}")
             send_telegram_notification(
-                self.site_config, _published_message(self.site_config, article, category, post_url, image_data)
+                self.site_config, _published_message(self.site_config, article, category, post_url, image_data,
+                                                     review_note=self.review.note if self.review else None)
             )
             _share_published_post(self.site_config, article, post_url, image_data)
             logger.info(f"Article published successfully: {article.get('title', '')}")
@@ -954,6 +1133,10 @@ class _ArticlePostJob:
             or f"Artikel kategori {log_category_name}"
         )
 
+        # A rejection by the editorial checks is a decision, not a crash.
+        result_prefix = (
+            "Artikel tidak diterbitkan" if isinstance(error, EDITORIAL_FAILURES) else "Sistem Berhenti Tiba-tiba"
+        )
         # Add to history so the user sees the failure.
         try:
             db.add_log(
@@ -963,7 +1146,7 @@ class _ArticlePostJob:
                 category_name=log_category_name,
                 title=f"GAGAL: {log_title}"[:500],
                 success=False,
-                result=f"Sistem Berhenti Tiba-tiba: {error_msg}"[:500],
+                result=f"{result_prefix}: {error_msg}"[:500],
                 post_id=None,
                 post_url=None
             )
@@ -972,8 +1155,8 @@ class _ArticlePostJob:
 
         try:
             send_telegram_notification(self.site_config or {},
-                                       f"❌ <b>Gagal Generate & Post</b>\n\n"
-                                       f"⚠️ {error_msg[:200]}")
+                                       f"❌ <b>Gagal Generate &amp; Post</b>\n\n"
+                                       f"⚠️ {_tg(error_msg[:200])}")
         except Exception as notify_err:
             logger.error(f"Failed to send Telegram error notification: {notify_err}")
 
@@ -1019,6 +1202,8 @@ def _load_regeneration_target(user_id, log_id):
         target = {
             'title': log.title,
             'category_name': log.category_name,
+            'category_description': _category_description({'categories': site.categories}, log.category_name),
+            'site_id': site.id,
             'post_id': log.post_id,
             'wordpress_url': site.wordpress_url,
             'wordpress_username': site.wordpress_username,
@@ -1036,7 +1221,8 @@ def _load_regeneration_target(user_id, log_id):
 
 
 def _target_publisher(target):
-    return WordPressPublisher(target['wordpress_url'], target['wordpress_username'], target['wordpress_password'])
+    return WordPressPublisher(target['wordpress_url'], target['wordpress_username'], target['wordpress_password'],
+                              language=target.get('language') or 'id')
 
 
 def _set_log_result(log_id, result, image_failed=None):
@@ -1141,6 +1327,16 @@ def regenerate_article_job(user_id, log_id):
         extra_urls, hosts = _link_allowances(target['article_prompt'], target['wordpress_url'])
         _apply_quality_gate(article, f"regenerate log {log_id}", "Artikel hasil regenerasi ditolak quality gate: ",
                             extra_allowed_urls=extra_urls, allowed_hosts=hosts)
+        # The writer gets no research here, but the reviewer checks claims against
+        # the category's fresh research when there is some, plus the publisher's
+        # own context.
+        review = _review_generated_article(
+            generator, article, _load_category_research(user_id, target['site_id'], target['category_name']),
+            language=target['language'] or 'id', category_name=target['category_name'],
+            site_name=target['site_name'], context=f"regenerate log {log_id}", internal_posts=recent_posts,
+            extra_allowed_urls=extra_urls, allowed_hosts=hosts,
+            article_prompt=target['article_prompt'], category_description=target['category_description'],
+        )
 
         success, result = publisher.update_post_content(
             post_id,
@@ -1158,7 +1354,7 @@ def regenerate_article_job(user_id, log_id):
             raise Exception(f"Update postingan WordPress gagal: {result}")
 
         logger.info(f"Successfully regenerated article for post {post_id}")
-        _set_log_result(log_id, RESULT_REGENERATED)
+        _set_log_result(log_id, f"{RESULT_REGENERATED} {review.note}")
         logger.info(f"Consumed reserved credit for user_id={user_id}, log_id={log_id}")
     except Exception as e:
         _fail_regeneration(user_id, log_id, e, 'regenerate_article_job', 'article regen', 'Regenerasi artikel gagal')

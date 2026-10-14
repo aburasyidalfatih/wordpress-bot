@@ -7,106 +7,20 @@ from core_extensions import db, logger, load_config, require_jwt
 from models import User, WordPressSite
 from services.ai_providers import describe_provider_error, is_retryable_provider_error, text_provider_name
 from services.article_generator import ArticleGenerator
+from services.default_prompts import FORMAT_MARKER_EN, FORMAT_MARKER_ID, default_article_prompt
 
 prompts_bp = Blueprint('prompts', __name__)
 
-MAX_OPTIMIZE_PROMPT_CHARS = 12000  # default article prompt is ~5000 chars
+MAX_OPTIMIZE_PROMPT_CHARS = 12000  # default article prompt is ~4500 chars
 # Free AI helpers (prompt optimizer, title generator) do not charge credits and
 # may run on the admin's shared AI key, so cap how often one user can call them.
 AI_HELPER_RATE_LIMIT = 20
 AI_HELPER_RATE_WINDOW_SECONDS = 3600
 OPTIMIZE_MAX_RETRIES = 3
 
-DEFAULT_ARTICLE_PROMPT = """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {target_site} tentang: {topic}
-{existing_titles}{research_note}{seo_section}{category_desc_text}{internal_links_text}
-TARGET AUDIENCE: {target_audience}
-
-⚠️ PENTING - TAHUN SAAT INI: 2026
-- Jika menyebutkan tahun, gunakan 2026 atau "saat ini"
-- Jangan gunakan tahun 2024 atau 2025
-
-STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
-⚠️ TULIS DENGAN SANGAT MENDETAIL DAN PANJANG. JANGAN MERINGKAS. SETIAP SUB-HEADING HARUS TERDIRI DARI MINIMAL 4-5 PARAGRAF PANJANG DAN KOMPREHENSIF. BENTUKLAH ARTIKEL YANG SANGAT DALAM. JIKA KURANG DARI 2000 KATA, ARTIKEL INI AKAN DITOLAK.
-
-1. HOOK PEMBUKA (100 kata):
-   ⚠️ WAJIB VARIATIF - Gunakan salah satu pendekatan ini (JANGAN selalu pakai statistik):
-   A. Story/Anekdot: "Pak Budi, kepala sekolah di Bandung, hampir putus asa ketika..."
-   B. Problem Statement: "Bayangkan: SPP sudah naik 20%, tapi guru tetap resign..."
-   C. Pertanyaan Provokatif: "Apa yang membuat 3 dari 5 sekolah swasta gagal bertahan?"
-   D. Fakta Mengejutkan: "Tahun 2026, lebih banyak sekolah tutup daripada yang buka..."
-   E. Kontras: "Sekolah A penuh siswa, Sekolah B sepi. Bedanya hanya satu hal..."
-   ✓ Akhiri dengan promise: "Artikel ini akan memandu Anda..."
-   ✗ JANGAN selalu mulai dengan "Data internal kami di KelasMaster..."
-
-2. RINGKASAN EKSEKUTIF / TL;DR (Kotak AEO untuk Google AI Overviews):
-   - WAJIB buat kotak <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
-   - Berisi 3 poin bullet (<ul>) yang menjawab inti topik secara langsung.
-   - Ini krusial untuk fitur Answer Engine Optimization 2026.
-
-3. CONTEXT (200 kata):
-   - Situasi pendidikan Indonesia saat ini terkait topik
-   - Mengapa topik ini urgent dan penting
-   - Siapa yang paling membutuhkan solusi ini
-
-4. KONTEN UTAMA (1500-1700 kata):
-   H2: Konsep Dasar & Pentingnya (300 kata)
-   - Definisi clear dengan bahasa praktis
-   - Mengapa ini critical untuk lembaga pendidikan
-   - Contoh konkret dari sekolah Indonesia
-
-   H2: Implementasi Praktis Step-by-Step (600 kata)
-   - Panduan actionable dengan numbered list
-   - Timeline realistis (minggu/bulan)
-   - Tools/template yang bisa digunakan
-   - Checklist untuk memulai
-
-   H2: Studi Kasus Nyata (400 kata)
-   - Sekolah X di Kota Y, Indonesia (nama & lokasi realistis)
-   - Challenge → Solution → Result (dengan angka spesifik)
-   - WAJIB: Quote langsung dari kepala sekolah
-     Format: "Quote," ujar Nama Lengkap, Kepala Sekolah X di Kota Y.
-
-   H2: Tips & Best Practices (300 kata)
-   - Analisis Perbandingan (Do's and Don'ts atau Mitos vs Fakta) dalam format HTML table
-   - Common mistakes yang harus dihindari
-   - Quick wins yang bisa langsung diterapkan
-
-4. KESIMPULAN (150 kata):
-   - Recap 3-5 key takeaways
-   - CTA: ajakan konsultasi/download resource
-
-5. FAQ (150 kata):
-   - 3-5 pertanyaan umum dengan jawaban singkat
-
-GAYA PENULISAN & SEO 2026 (SANGAT PENTING):
-✓ Tone: Profesional tapi approachable, gunakan "Anda"
-✓ Pendekatan Personal (Experience/E-E-A-T): Mulailah salah satu paragraf (misal di Context atau Kesimpulan) dengan "Berdasarkan pengalaman tim praktisi kami..." untuk mensimulasikan Kredensial Penulis (Authoritativeness).
-✓ Penekanan Teks (Scannability): WAJIB gunakan teks tebal (<strong>) pada konsep inti, metrik/angka penting, atau kata kunci.
-✓ Semantic SEO (Entitas): Gunakan LSI Keyword dan Entitas Semantik secara natural. Hindari pengulangan keyword utama (keyword stuffing). Sisipkan istilah teknis spesifik yang membuktikan keahlian mendalam.
-✓ Kalimat (BURSTINESS & PERPLEXITY - 100% HUMAN LIKE):
-  - VARIASIKAN panjang kalimat secara drastis untuk ritme natural (Burstiness).
-  - Kalimat sangat pendek (2-5 kata): Untuk emphasis/kejutan emosional.
-  - Kalimat panjang (25-35 kata): Untuk merangkai logika dan detail mendalam.
-  - Gunakan pilihan kata yang tidak tertebak (High Perplexity) tapi tetap natural. Hindari klise.
-✓ Contoh selalu dari konteks Indonesia
-✓ Transisi natural: "Hasilnya?", "Yang terjadi?", "Faktanya:"
-✗ Hindari: "Dengan demikian", "Oleh karena itu", "Pada akhirnya", "Kesimpulannya"
-✗ Hindari: "Penting untuk dicatat bahwa...", "Perlu diingat bahwa..."
-✗ JANGAN gunakan ASCII art atau Unicode box drawing
-✗ Gunakan HTML table (<table>) untuk tabel, BUKAN ASCII art
-
-SEO OPTIMIZATION:
-✓ Keyword di first 100 words
-✓ Keyword variations di H2 headings
-✓ LSI keywords natural throughout
-✓ Internal Links: WAJIB sisipkan link internal yang diberikan ke dalam paragraf secara natural (sesuai instruksi di atas).
-✓ Optimasi untuk featured snippet (gunakan list/table)
-
-FORMAT OUTPUT (Gunakan XML-Tags berikut):
-<TITLE>Judul CTR tinggi dengan angka + power word + benefit (50-60 karakter)</TITLE>
-<META_DESCRIPTION>Meta description 150-160 karakter dengan CTA dan keyword</META_DESCRIPTION>
-<CONTENT>Konten HTML lengkap 2000-2500 kata</CONTENT>
-<FOCUS_KEYWORD>keyword utama artikel</FOCUS_KEYWORD>"""
+# The default article prompt shown in the UI is default_article_prompt(site
+# language) from services/default_prompts.py: the same text the generator uses
+# when a site has no custom prompt.
 
 DEFAULT_IMAGE_PROMPT = """Create a professional featured image for this article about {topic}.
 
@@ -123,8 +37,10 @@ Design Requirements:
 
 Style: Modern, professional, suitable for educational blog featured image."""
 
-XML_FORMAT_MARKER = "FORMAT OUTPUT (Gunakan XML-Tags berikut):"
+XML_FORMAT_MARKER = FORMAT_MARKER_ID
 FORMAT_MARKER = "FORMAT OUTPUT"
+# English prompts head the section "OUTPUT FORMAT"; checked after the Indonesian markers.
+FORMAT_MARKER_EN_SHORT = "OUTPUT FORMAT"
 
 OPTIMIZER_LANG_INSTRUCTION_EN = "6. PENTING: Terjemahkan SELURUH isi teks prompt hasil revisi ke dalam Bahasa Inggris (English), termasuk semua instruksi, pedoman gaya penulisan, peringatan, dan contoh hook. KECUALI variabel placeholder seperti {topic} dll yang harus tetap sama. (Khusus Image Prompt, wajib dalam Bahasa Inggris karena model AI gambar hanya mendukung Bahasa Inggris)."
 OPTIMIZER_LANG_INSTRUCTION_ID = "6. Pertahankan teks dan instruksi dalam Bahasa Indonesia."
@@ -141,8 +57,8 @@ Informasi Website Pengguna:
 Instruksi Revisi (SANGAT PENTING):
 1. Ganti nama website, target audience, atau konteks niche (misalnya jika ada kata 'kelasmaster.id' atau 'pendidikan' di prompt asli) menjadi sesuai dengan Informasi Website Pengguna di atas.
 2. Pertahankan semua variabel placeholder seperti {{topic}}, {{existing_titles}}, {{title}}, dll persis seperti aslinya.
-3. Pertahankan semua peringatan tahun 2026.
-4. Sesuaikan contoh-contoh di Hook Pembuka atau Studi Kasus (jika ada) dengan niche website pengguna secara kreatif.
+3. Pertahankan aturan akurasi dan sumber (tidak mengarang data, kutipan, atau studi kasus; hanya menautkan URL yang diberikan), kehati-hatian untuk topik keuangan/kesehatan/hukum, serta aturan judul dan FAQ.
+4. JANGAN menambahkan target jumlah kata, kerangka heading tetap, tahun tertentu, formula judul clickbait, atau hook pembuka template. Sesuaikan contoh (jika ada) dengan niche website pengguna.
 {format_instruction}
 {lang_instruction}"""
 
@@ -203,7 +119,7 @@ def api_prompts(user_id):
                 'article_prompt': site.article_prompt,
                 'image_prompt': site.image_prompt
             },
-            'default_article_prompt': DEFAULT_ARTICLE_PROMPT,
+            'default_article_prompt': default_article_prompt(site.language or 'id'),
             'default_image_prompt': DEFAULT_IMAGE_PROMPT,
         })
 
@@ -237,7 +153,7 @@ def _split_output_format(prompt, prompt_type):
     Returns (prompt_without_format, format_section_to_reattach). Image prompts
     drop the section entirely.
     """
-    for marker in (XML_FORMAT_MARKER, FORMAT_MARKER):
+    for marker in (XML_FORMAT_MARKER, FORMAT_MARKER_EN, FORMAT_MARKER, FORMAT_MARKER_EN_SHORT):
         if marker in prompt:
             parts = prompt.split(marker)
             format_part = "\n\n" + marker + parts[1] if prompt_type != 'image' else ""

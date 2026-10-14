@@ -27,6 +27,7 @@ if 'core_extensions' not in sys.modules:
     sys.modules['core_extensions'] = _stub
 
 import tasks.article_jobs as jobs  # noqa: E402
+from services.article_review import ReviewResult  # noqa: E402
 from database import Database  # noqa: E402
 from models import Base, ContentQueue, User, WordPressSite  # noqa: E402
 
@@ -78,6 +79,7 @@ class GenerateAndPostCreditTests(unittest.TestCase):
             patch.object(jobs, '_attach_search_evidence', lambda seo, *a, **k: seo),
             patch.object(jobs, '_current_job', lambda: self.job),
             patch.object(jobs, '_rq_job_is_alive', Mock(return_value=False)),
+            patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok'))),
         ]
         for p in patches:
             p.start()

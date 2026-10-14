@@ -4,6 +4,7 @@ import requests
 from flask import Blueprint, request, jsonify
 from core_extensions import db, logger, require_jwt, send_telegram_notification
 from models import SearchConsoleMetric, WordPressSite
+from services.default_prompts import default_article_prompt
 from services.wp_publisher import WordPressPublisher
 from services.url_safety import validate_public_http_url
 
@@ -13,37 +14,6 @@ MAX_SELECTED_CATEGORIES = 500
 MAX_CATEGORIES = 500
 DEFAULT_SCHEDULE_HOURS = '0,6,12,18'
 
-SITE_DEFAULT_ARTICLE_PROMPT = """Buatkan artikel blog SEO-optimized berkualitas tinggi untuk website {site_name} tentang: {topic}
-{existing_titles}{research_note}{seo_section}
-TARGET AUDIENCE: Pembaca website {site_name}
-
-⚠️ PENTING - TAHUN SAAT INI: 2026
-- Jika menyebutkan tahun, gunakan 2026 atau "saat ini"
-- Jangan gunakan tahun 2024 atau 2025
-
-STRUKTUR ARTIKEL (MINIMAL 2000-2500 KATA - SANGAT WAJIB!):
-⚠️ TULIS DENGAN SANGAT MENDETAIL DAN PANJANG. JANGAN MERINGKAS. SETIAP SUB-HEADING HARUS TERDIRI DARI MINIMAL 4-5 PARAGRAF PANJANG DAN KOMPREHENSIF. BENTUKLAH ARTIKEL YANG SANGAT DALAM. JIKA KURANG DARI 2000 KATA, ARTIKEL INI AKAN DITOLAK.
-
-1. HOOK PEMBUKA (100 kata):
-   ⚠️ WAJIB VARIATIF - Gunakan salah satu pendekatan ini:
-   A. Story/Anekdot
-   B. Problem Statement
-   C. Pertanyaan Provokatif
-   D. Fakta Mengejutkan
-   E. Kontras
-   ✓ Akhiri dengan promise: "Artikel ini akan memandu Anda..."
-
-2. CONTEXT (200 kata):
-   - Situasi saat ini terkait topik
-   - Mengapa topik ini urgent dan penting
-   - Siapa yang paling membutuhkan solusi ini
-
-3. KONTEN UTAMA (1500-1700 kata):
-   H2: Konsep Dasar & Pentingnya (300 kata)
-   - Definisi clear dengan bahasa praktis
-   - Mengapa ini critical
-   - Contoh konkret
-"""
 SITE_DEFAULT_IMAGE_PROMPT = "Fotografi profesional, pencahayaan dramatis, gaya korporat modern, fokus tajam."
 
 # Write-only credentials: the API never returns them, and a blank value in an
@@ -538,12 +508,14 @@ def get_prompts(user_id, site_id):
         if not site:
             return _site_not_found()
 
-        default_article_prompt = SITE_DEFAULT_ARTICLE_PROMPT.replace('{site_name}', site.site_name)
+        # Same default the generator uses for a site without a custom prompt;
+        # {target_site} is filled in at generation time.
+        default_prompt = default_article_prompt(site.language or 'id')
         return jsonify({
             'success': True,
-            'article_prompt': site.article_prompt or default_article_prompt,
+            'article_prompt': site.article_prompt or default_prompt,
             'image_prompt': site.image_prompt or SITE_DEFAULT_IMAGE_PROMPT,
-            'default_article_prompt': default_article_prompt,
+            'default_article_prompt': default_prompt,
             'default_image_prompt': SITE_DEFAULT_IMAGE_PROMPT
         })
 

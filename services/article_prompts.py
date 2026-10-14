@@ -4,9 +4,13 @@ Prompt language follows the site language: 'en' gets English prompts, anything
 else gets Indonesian ones. Everything here is pure string building with no I/O,
 so ArticleGenerator only has to orchestrate the model calls.
 """
+import ipaddress
 import re
 import unicodedata
 from datetime import datetime
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+
+from services.default_prompts import default_article_prompt
 
 
 def _lang(language, en, id_):
@@ -29,8 +33,8 @@ _TITLE_NOTES = {
             "\n💡 TIPS FOR UNIQUE TITLES:\n"
             "- Use different angles (e.g., from customer's perspective, manager's perspective, general public)\n"
             "- Focus on specific aspects not yet discussed\n"
-            "- Use different formats (guide, checklist, case study, analysis, etc.)\n"
-            "- Add specific context (location, time, situation)\n\n"
+            "- Use different formats (guide, checklist, comparison, explainer, etc.)\n"
+            "- Add specific context (audience, situation, location)\n\n"
         ),
         'footer': "\nThe article title MUST be different and unique from the list above!\n",
     },
@@ -45,8 +49,8 @@ _TITLE_NOTES = {
             "\n💡 TIPS MEMBUAT JUDUL UNIK:\n"
             "- Gunakan angle berbeda (misalnya: dari sisi orang tua, dari sisi guru, dari sisi siswa)\n"
             "- Fokus pada aspek spesifik yang belum dibahas\n"
-            "- Gunakan format berbeda (panduan, checklist, studi kasus, analisis, dll)\n"
-            "- Tambahkan konteks spesifik (lokasi, waktu, situasi)\n\n"
+            "- Gunakan format berbeda (panduan, checklist, perbandingan, penjelasan, dll)\n"
+            "- Tambahkan konteks spesifik (pembaca, situasi, lokasi)\n\n"
         ),
         'footer': "\nJudul artikel HARUS berbeda dan unik dari daftar di atas!\n",
     },
@@ -110,33 +114,18 @@ def build_internal_links_note(internal_links_context, language='id'):
         text += f"- {post['title']} -> {post['url']}\n"
     text += _lang(
         language,
-        "Weave 3-5 of these into your paragraphs as natural HTML links "
-        "<a href=\"URL\">anchor text</a>. CRITICAL: only use URLs copied "
-        "exactly from the list above. Never invent a URL. Do not add a link "
-        "list at the end.\n",
-        "Sisipkan 3-5 di antaranya ke dalam paragraf sebagai link HTML natural "
-        "<a href=\"URL\">teks anchor</a>. PENTING: gunakan HANYA URL yang "
-        "disalin persis dari daftar di atas. Jangan pernah mengarang URL. "
-        "Jangan membuat daftar link di akhir artikel.\n",
+        "Where one of these is genuinely relevant to what you are explaining, link "
+        "it inside the paragraph as <a href=\"URL\">descriptive anchor text</a> "
+        "(usually 2-5 links; skip any that do not fit). CRITICAL: only use URLs "
+        "copied exactly from the list above. Never invent a URL. Do not add a "
+        "link list at the end.\n",
+        "Bila salah satunya benar-benar relevan dengan yang sedang dijelaskan, "
+        "tautkan di dalam paragraf sebagai <a href=\"URL\">teks anchor yang "
+        "deskriptif</a> (biasanya 2-5 link; lewati yang tidak cocok). PENTING: "
+        "gunakan HANYA URL yang disalin persis dari daftar di atas. Jangan pernah "
+        "mengarang URL. Jangan membuat daftar link di akhir artikel.\n",
     )
     return text, allowed_link_urls
-
-
-def build_topic_context(topic, category_desc=None, seo_data=None):
-    """Context derived from this site's own data instead of a hardcoded niche.
-
-    AutoWP is multi-tenant: a fixed industry vocabulary made every tenant's
-    articles read as if they were about that one niche.
-    """
-    context_parts = [topic]
-    if category_desc:
-        context_parts.append(category_desc)
-    if seo_data:
-        for kw in (seo_data.get('keywords') or [])[:8]:
-            kw_text = kw.get('keyword') if isinstance(kw, dict) else str(kw)
-            if kw_text:
-                context_parts.append(kw_text)
-    return ", ".join(dict.fromkeys(p for p in context_parts if p))
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +419,131 @@ def build_seo_section(seo_data, language='id'):
 
 
 # ---------------------------------------------------------------------------
+# Citable sources. sanitize_research_text() strips every URL out of scraped
+# text, so the model used to have nothing it could link to. These URLs come only
+# from structured research fields (the page a competitor outline, news item or
+# video transcript was taken from, the Wikipedia article behind the background
+# text) - never from scraped prose - and are validated before being listed. They
+# are returned with the internal links as allowed_link_urls, so the quality gate
+# keeps links to them and still unwraps every other external link.
+# ---------------------------------------------------------------------------
+
+MAX_SOURCE_URLS = 8
+MAX_SOURCE_URL_CHARS = 300
+# Query parameters that only identify the click, not the page.
+_TRACKING_PARAM_RE = re.compile(
+    r'^(?:utm_\w*|fbclid|gclid|gclsrc|dclid|gbraid|wbraid|msclkid|yclid|mc_cid|mc_eid|'
+    r'igshid|_ga|_gl|ref|ref_src|spm|cmpid|ocid)$',
+    re.IGNORECASE,
+)
+# Characters that may not appear in a URL we hand to the model as an href.
+_UNSAFE_URL_CHARS_RE = re.compile(r'[\s<>"\'`{}|\\^]')
+_LOCAL_HOST_SUFFIXES = ('.localhost', '.local', '.internal', '.lan', '.home.arpa')
+
+
+def clean_source_url(url):
+    """A citable form of url, or None when it is not a plain public http(s) URL.
+
+    Lower-cases scheme and host, drops the fragment and tracking parameters,
+    percent-encodes non-ASCII path characters and rejects credentials, IP
+    literals, local host names and anything that could break out of an href.
+    """
+    if not isinstance(url, str):
+        return None
+    url = url.strip()
+    if not url or len(url) > MAX_SOURCE_URL_CHARS or _UNSAFE_URL_CHARS_RE.search(url):
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ''
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ('http', 'https') or parts.username or parts.password:
+        return None
+    host = host.lower().rstrip('.')
+    if not host.isascii() or '.' not in host or host == 'localhost' or host.endswith(_LOCAL_HOST_SUFFIXES):
+        return None
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        pass
+    query = urlencode(
+        [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not _TRACKING_PARAM_RE.match(k)]
+    )
+    netloc = f'{host}:{port}' if port else host
+    path = quote(parts.path or '/', safe="/%:@!$&'()*+,;=-._~")
+    return urlunsplit((parts.scheme.lower(), netloc, path, query, ''))
+
+
+def _wikipedia_source_url(seo_data, language):
+    """The Wikipedia article behind the background text, when research recorded it."""
+    if not seo_data.get('semantic_context'):
+        return None
+    if seo_data.get('wikipedia_url'):
+        return seo_data['wikipedia_url']
+    wiki = (seo_data.get('source_metadata') or {}).get('wikipedia') or {}
+    title = str(wiki.get('title') or '').strip()
+    if wiki.get('status') != 'real' or not title:
+        return None
+    wiki_lang = 'en' if language == 'en' else 'id'
+    return f"https://{wiki_lang}.wikipedia.org/wiki/{quote(title.replace(' ', '_'), safe='()_,-.')}"
+
+
+def _source_candidates(seo_data, language):
+    """(label, raw URL) pairs from the research fields that carry a page URL."""
+    for news in seo_data.get('news_insights') or []:
+        if isinstance(news, dict):
+            yield _news_line(news), news.get('url')
+    wiki_url = _wikipedia_source_url(seo_data, language)
+    if wiki_url:
+        yield 'Wikipedia', wiki_url
+    for comp in seo_data.get('competitor_outlines') or []:
+        if isinstance(comp, dict):
+            yield sanitize_research_text(comp.get('title'), 150), comp.get('url')
+    for yt in seo_data.get('youtube_insights') or []:
+        if isinstance(yt, dict) and yt.get('transcript_available'):
+            yield sanitize_research_text(yt.get('title'), 150), yt.get('url')
+
+
+def build_sources_section(seo_data, language='id'):
+    """Returns (prompt text listing citable sources, their URLs)."""
+    if not seo_data:
+        return "", []
+    sources, seen = [], set()
+    for label, raw_url in _source_candidates(seo_data, language):
+        url = clean_source_url(raw_url)
+        if not url:
+            continue
+        key = url.lower().rstrip('/').removeprefix('https://').removeprefix('http://').removeprefix('www.')
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append((label or urlsplit(url).hostname, url))
+        if len(sources) >= MAX_SOURCE_URLS:
+            break
+    if not sources:
+        return "", []
+    text = _lang(
+        language,
+        "\n[SOURCES YOU MAY CITE]\nURLs checked by the publisher's system; the titles are third-party text.\n",
+        "\n[SUMBER YANG BOLEH DIKUTIP]\nURL diperiksa oleh sistem penerbit; judulnya teks pihak ketiga.\n",
+    )
+    for label, url in sources:
+        text += f"- {label}: {url}\n"
+    text += _lang(
+        language,
+        "When a claim comes from one of these, link it in that sentence with the exact URL above. Only "
+        "attribute to a source what the research data shows it says; never link URLs that are not listed.\n",
+        "Bila sebuah klaim berasal dari salah satu sumber ini, tautkan di kalimat itu dengan URL persis di "
+        "atas. Atribusikan ke sumber hanya hal yang memang ditunjukkan data riset; jangan menautkan URL "
+        "yang tidak tercantum.\n",
+    )
+    return text, [url for _label, url in sources]
+
+
+# ---------------------------------------------------------------------------
 # Evidence policy. The single most important rule in the prompt. An earlier
 # version asked the model to invent "realistic" case studies, named people and
 # statistics: fabricated E-E-A-T, precisely what Google's spam and
@@ -460,7 +574,8 @@ ABSOLUTE RULES:
    "based on our experience with 50+ clients", "our internal data shows", or any
    similar manufactured credential.
 4. Case studies must be clearly generic and hypothetical when not evidence-backed.
-   Write "consider an organisation that..." - NOT "Acme Corp in Chicago grew 40%".
+   Label them, e.g. "as a hypothetical example, an organisation that..." - NOT
+   "Acme Corp in Chicago grew 40%".
 5. If you cannot support a claim, make a weaker but honest claim. An accurate article
    that is less impressive beats a confident article that is fabricated.
 6. Demonstrate expertise through clear reasoning, useful structure, correct
@@ -485,7 +600,8 @@ ATURAN MUTLAK:
    "berdasarkan pengalaman kami menangani 50+ klien", "data internal kami menunjukkan",
    "berdasarkan pengalaman tim praktisi kami", atau kredensial buatan sejenis.
 4. Studi kasus harus jelas bersifat umum dan hipotetis kalau tidak didukung data.
-   Tulis "bayangkan sebuah organisasi yang..." - BUKAN "SMA Harapan di Bandung naik 40%".
+   Beri label, misalnya "sebagai contoh hipotetis, sebuah organisasi yang..." - BUKAN
+   "SMA Harapan di Bandung naik 40%".
 5. Kalau sebuah klaim tidak bisa didukung, tulis klaim yang lebih lemah tapi jujur.
    Artikel akurat yang terdengar biasa lebih baik daripada artikel meyakinkan yang palsu.
 6. Tunjukkan keahlian lewat penalaran jernih, struktur rapi, istilah yang tepat, dan
@@ -523,9 +639,12 @@ OUTPUT_CONTRACT_TEMPLATE = """
 1. Do NOT write literal template labels (e.g. "H2:", "1. OPENING") in the HTML.
 2. Do NOT use emoji in the content.
 3. Output MUST use the XML tags specified. Never output JSON.
-4. Write the full 2000-2500 words inside <CONTENT>. Close every HTML tag you open.
+4. Write the complete article inside <CONTENT>: cover the topic fully, but never pad
+   it to reach a length. Close every HTML tag you open.
 5. <EXCERPT> and <KEY_TAKEAWAYS> must describe THIS article specifically. Generic
    filler such as "practical tips you can apply immediately" is rejected.
+6. Link only URLs listed above (internal links or sources you may cite), copied
+   exactly. Never invent a URL. <FAQS> may be left empty.
 {evidence_policy}"""
 
 
@@ -536,201 +655,21 @@ def build_quality_correction(quality_feedback):
         'Generate a complete replacement on the same topic using the supplied evidence. '
         'Correct every issue below. Do not quote these diagnostic messages in the article. '
         'Remove unsupported claims entirely; do not merely disguise them with synonyms. '
-        'Keep the required XML format, full length, and closed HTML tags.\n- '
+        'Keep the required XML format, a complete article, and closed HTML tags.\n- '
         + '\n- '.join(quality_feedback)
     )
 
 
 # ---------------------------------------------------------------------------
-# Default article prompt (used when the site has no custom article prompt)
+# Article prompt. A site without a custom prompt uses the default from
+# services.default_prompts, filled exactly like a custom prompt.
 # ---------------------------------------------------------------------------
 
-ARTICLE_PROMPT_TEMPLATES = {
-    'en': """Write an in-depth, genuinely useful article for the website {target_site} about: {topic_focus}
-{existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
-TARGET AUDIENCE: {target_audience}
-TOPIC CONTEXT: {context}
-CURRENT YEAR: {current_year} (use this year when a year is relevant)
-
-LENGTH: 2000-2500 words. Depth comes from genuinely covering the subject, not from
-padding. Every section must add information a reader could act on.
-
-STRUCTURE:
-
-1. OPENING (about 100 words)
-   Vary the approach between articles - a concrete scenario, a sharp problem
-   statement, a question, or a counter-intuitive observation. End by telling the
-   reader what they will be able to do after reading.
-
-2. KEY POINTS BOX (for Answer Engine Optimization / AI Overviews)
-   <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
-   containing a <ul> of 3 bullets that answer the core question directly and
-   specifically. These must be real answers, not teasers.
-
-3. CONTEXT (about 200 words)
-   Why this matters now, and who it matters most to.
-
-4. MAIN BODY (1500-1700 words)
-   H2: Core concept and why it matters (~300 words)
-       Clear definition in plain language. Concrete, checkable examples.
-   H2: Step-by-step implementation (~600 words)
-       Numbered, actionable steps. Realistic timeframes. Tools or templates that
-       genuinely exist. A starting checklist.
-   H2: Worked example (~400 words)
-       A clearly hypothetical scenario ("consider a mid-sized team that...").
-       Walk through challenge, approach, and outcome. Keep outcomes qualitative
-       unless the evidence section gave you real figures.
-   H2: Practical tips and common mistakes (~300 words)
-       A do/don't comparison as an HTML <table>. Real mistakes people make.
-
-5. CONCLUSION (about 150 words)
-   Recap the 3-5 things that matter most, then a clear next step.
-
-6. FAQ (about 150 words)
-   3-5 questions people genuinely ask, with direct answers.
-
-WRITING QUALITY:
-- Tone: professional but direct. Address the reader as "you".
-- Use <strong> on key terms, metrics and concepts so the page is scannable.
-- Use related terminology naturally. Never keyword-stuff.
-- Vary sentence length deliberately. Short sentences for emphasis. Longer ones to
-  develop an argument fully. Avoid a uniform rhythm.
-- Short paragraphs: 2-3 sentences, often one.
-- Avoid filler openers: "It is important to note that", "In this context",
-  "Let's discuss", "In conclusion".
-- Every article must open differently from the ones listed above.
-
-SEO:
-- Focus keyword within the first 100 words.
-- Keyword variations in H2 headings.
-- Structure list and table content so it can be lifted as a featured snippet.
-- Use the internal links exactly as instructed above.
-
-FORMATTING RULES:
-- No emoji anywhere in the content.
-- No placeholder markers like [INFOGRAPHIC: ...] or [CHECKLIST: ...].
-- No ASCII art or box-drawing characters. Tables must be real HTML <table>.
-- Do not repeat the title inside the content.
-- Do not write literal section labels such as "H2:" or "1. OPENING" in the output.
-
-OUTPUT FORMAT - use these XML tags exactly, no JSON, no markdown fences:
-<TITLE>Compelling, accurate title, 50-60 characters. Title text only.</TITLE>
-<META_DESCRIPTION>150-160 characters, specific to THIS article, includes the keyword.</META_DESCRIPTION>
-<FOCUS_KEYWORD>primary keyword</FOCUS_KEYWORD>
-<EXCERPT>One or two sentences summarising what THIS specific article covers, 140-160 characters. Must not be generic.</EXCERPT>
-<KEY_TAKEAWAYS>
-- First specific takeaway drawn from this article's actual content
-- Second specific takeaway
-- Third specific takeaway
-</KEY_TAKEAWAYS>
-<CONTENT>
-Full HTML article, 2000-2500 words. Start with the opening paragraph. Use h2, h3,
-strong, em, ul, ol, table, blockquote.
-</CONTENT>
-<FAQS>
-Q: Question 1?
-A: Answer 1
-
-Q: Question 2?
-A: Answer 2
-</FAQS>
-""",
-    'id': """Tulis artikel mendalam yang benar-benar berguna untuk website {target_site} tentang: {topic_focus}
-{existing_titles_text}{research_note}{seo_section}{category_desc_text}{internal_links_text}
-TARGET PEMBACA: {target_audience}
-KONTEKS TOPIK: {context}
-TAHUN SEKARANG: {current_year} (pakai tahun ini kalau perlu menyebut tahun)
-
-PANJANG: 2000-2500 kata. Kedalaman datang dari benar-benar membahas topiknya, bukan
-dari mengulang-ulang. Setiap bagian harus menambah informasi yang bisa ditindaklanjuti.
-
-STRUKTUR:
-
-1. PEMBUKA (sekitar 100 kata)
-   Variasikan pendekatan antar artikel - skenario konkret, pernyataan masalah yang
-   tajam, pertanyaan, atau pengamatan yang berlawanan dengan dugaan umum. Akhiri
-   dengan menjelaskan apa yang bisa pembaca lakukan setelah membaca.
-
-2. KOTAK POIN UTAMA (untuk Answer Engine Optimization / AI Overviews)
-   <div class="executive-summary" style="background:#f8fafc; padding:15px; border-left:4px solid #4f46e5; margin-bottom:20px;">
-   berisi <ul> dengan 3 poin yang menjawab inti pertanyaan secara langsung dan
-   spesifik. Ini harus jawaban sungguhan, bukan pancingan.
-
-3. KONTEKS (sekitar 200 kata)
-   Kenapa ini penting sekarang, dan siapa yang paling membutuhkannya.
-
-4. ISI UTAMA (1500-1700 kata)
-   H2: Konsep inti dan kenapa penting (~300 kata)
-       Definisi jelas dengan bahasa sederhana. Contoh konkret yang bisa dicek.
-   H2: Implementasi langkah demi langkah (~600 kata)
-       Langkah bernomor yang bisa dikerjakan. Perkiraan waktu yang realistis.
-       Tools atau template yang benar-benar ada. Checklist untuk memulai.
-   H2: Contoh penerapan (~400 kata)
-       Skenario yang jelas hipotetis ("bayangkan sebuah tim berukuran menengah
-       yang..."). Bahas tantangan, pendekatan, dan hasilnya. Jaga hasil tetap
-       kualitatif kecuali bagian data riset memberimu angka nyata.
-   H2: Tips praktis dan kesalahan umum (~300 kata)
-       Perbandingan lakukan/hindari dalam bentuk <table> HTML. Kesalahan nyata
-       yang sering terjadi.
-
-5. KESIMPULAN (sekitar 150 kata)
-   Rangkum 3-5 hal terpenting, lalu langkah lanjutan yang jelas.
-
-6. FAQ (sekitar 150 kata)
-   3-5 pertanyaan yang benar-benar sering ditanyakan, dengan jawaban langsung.
-
-KUALITAS PENULISAN:
-- Nada: profesional tapi lugas. Sapa pembaca dengan "Anda".
-- Gunakan <strong> pada istilah kunci, metrik, dan konsep penting agar mudah dipindai.
-- Gunakan istilah terkait secara natural. Jangan menumpuk keyword.
-- Variasikan panjang kalimat dengan sengaja. Kalimat pendek untuk penegasan. Kalimat
-  panjang untuk mengembangkan argumen. Hindari ritme yang seragam.
-- Paragraf pendek: 2-3 kalimat, sering cukup satu.
-- Hindari pembuka kosong: "Penting untuk dicatat bahwa", "Dalam konteks ini",
-  "Mari kita bahas", "Kesimpulannya".
-- Setiap artikel harus dibuka berbeda dari judul-judul yang terdaftar di atas.
-
-SEO:
-- Focus keyword muncul di 100 kata pertama.
-- Variasi keyword di heading H2.
-- Susun isi list dan tabel supaya bisa diangkat jadi featured snippet.
-- Gunakan link internal persis seperti instruksi di atas.
-
-ATURAN FORMAT:
-- Tidak ada emoji di dalam konten.
-- Tidak ada penanda placeholder seperti [INFOGRAFIS: ...] atau [CHECKLIST: ...].
-- Tidak ada ASCII art atau karakter box-drawing. Tabel harus <table> HTML asli.
-- Jangan mengulang judul di dalam konten.
-- Jangan menulis label struktur seperti "H2:" atau "1. PEMBUKA" di output.
-
-FORMAT OUTPUT - gunakan tag XML berikut persis, tanpa JSON, tanpa pagar markdown:
-<TITLE>Judul menarik dan akurat, 50-60 karakter. Hanya teks judul.</TITLE>
-<META_DESCRIPTION>150-160 karakter, spesifik untuk artikel INI, mengandung keyword.</META_DESCRIPTION>
-<FOCUS_KEYWORD>keyword utama</FOCUS_KEYWORD>
-<EXCERPT>Satu atau dua kalimat yang merangkum isi spesifik artikel INI, 140-160 karakter. Tidak boleh generik.</EXCERPT>
-<KEY_TAKEAWAYS>
-- Poin spesifik pertama yang diambil dari isi artikel ini
-- Poin spesifik kedua
-- Poin spesifik ketiga
-</KEY_TAKEAWAYS>
-<CONTENT>
-Artikel HTML lengkap 2000-2500 kata. Mulai langsung dengan paragraf pembuka. Gunakan
-h2, h3, strong, em, ul, ol, table, blockquote.
-</CONTENT>
-<FAQS>
-Q: Pertanyaan 1?
-A: Jawaban 1
-
-Q: Pertanyaan 2?
-A: Jawaban 2
-</FAQS>
-""",
-}
-
 # Placeholders a site's custom article prompt may use, in substitution order.
+# {site_name} is an alias of {target_site}: the old per-site default used it.
 CUSTOM_PROMPT_PLACEHOLDERS = (
     'topic', 'existing_titles', 'research_note', 'seo_section', 'category_desc_text',
-    'internal_links_text', 'target_site', 'target_audience', 'current_year',
+    'internal_links_text', 'target_site', 'site_name', 'target_audience', 'current_year',
 )
 
 
@@ -754,8 +693,13 @@ def build_article_prompt(topic, existing_titles=None, custom_topic=None, seo_dat
     custom_topic is labelled as trending only when topic_is_trending is true or,
     when that is None, seo_data['topic_is_trending'] is true.
 
+    Without a custom prompt the language's default from services.default_prompts
+    is used. Citable research sources are listed after the research block (so
+    custom prompts get them through {seo_section} too).
+
     Returns (prompt, evidence_policy, allowed_link_urls); the evidence policy is
-    also sent as the system instruction.
+    also sent as the system instruction. allowed_link_urls holds the internal
+    post URLs followed by the citable source URLs.
     """
     target_site = site_name if site_name else "website"
     target_audience = _lang(language, f"Readers of website {target_site}", f"Pembaca website {target_site}")
@@ -767,35 +711,25 @@ def build_article_prompt(topic, existing_titles=None, custom_topic=None, seo_dat
         topic_is_trending = bool((seo_data or {}).get('topic_is_trending'))
     research_note = build_research_note(custom_topic, topic, language, is_trending=topic_is_trending)
     seo_section, has_evidence = build_seo_section(seo_data, language)
+    sources_text, source_urls = build_sources_section(seo_data, language)
+    seo_section += sources_text
     evidence_policy = build_evidence_policy(has_evidence, language)
     category_desc_text = build_category_brief(category_desc, language)
-    internal_links_text, allowed_link_urls = build_internal_links_note(internal_links_context, language)
+    internal_links_text, internal_urls = build_internal_links_note(internal_links_context, language)
+    allowed_link_urls = internal_urls + [url for url in source_urls if url not in internal_urls]
 
-    if custom_prompt:
-        prompt = apply_custom_prompt(custom_prompt, {
-            'topic': topic_focus,
-            'existing_titles': existing_titles_text,
-            'research_note': research_note,
-            'seo_section': seo_section,
-            'category_desc_text': category_desc_text,
-            'internal_links_text': internal_links_text,
-            'target_site': target_site,
-            'target_audience': target_audience,
-            'current_year': str(current_year),
-        })
-    else:
-        prompt = ARTICLE_PROMPT_TEMPLATES[_lang(language, 'en', 'id')].format(
-            target_site=target_site,
-            topic_focus=topic_focus,
-            existing_titles_text=existing_titles_text,
-            research_note=research_note,
-            seo_section=seo_section,
-            category_desc_text=category_desc_text,
-            internal_links_text=internal_links_text,
-            target_audience=target_audience,
-            context=build_topic_context(topic, category_desc, seo_data),
-            current_year=current_year,
-        )
+    prompt = apply_custom_prompt(custom_prompt or default_article_prompt(language), {
+        'topic': topic_focus,
+        'existing_titles': existing_titles_text,
+        'research_note': research_note,
+        'seo_section': seo_section,
+        'category_desc_text': category_desc_text,
+        'internal_links_text': internal_links_text,
+        'target_site': target_site,
+        'site_name': target_site,
+        'target_audience': target_audience,
+        'current_year': str(current_year),
+    })
 
     prompt = prompt + "\n\n" + OUTPUT_CONTRACT_TEMPLATE.format(evidence_policy=evidence_policy)
     if quality_feedback:
@@ -816,8 +750,8 @@ Category context: {topic}
 
 Design requirements:
 - Landscape 16:9 composition.
-- Include a bold, highly aesthetic typographic overlay (about 3 to 6 words). This text should be a catchy, descriptive hook that perfectly summarizes the article's core value (e.g. "Ultimate Guide to {topic}", "Mastering {topic} in 2026", "Key Strategies You Need to Know").
-- DO NOT just write 1 or 2 generic words. The text must accurately represent the article's content while remaining click-worthy.
+- Include a bold, highly aesthetic typographic overlay (about 3 to 6 words). This text should be a catchy, descriptive hook that perfectly summarizes the article's core value (e.g. "A Practical Guide to {topic}", "How {topic} Works", "Choosing the Right Approach").
+- DO NOT just write 1 or 2 generic words. The text must accurately represent the article's content without exaggeration.
 - DO NOT render the full lengthy article title. Keep it punchy and readable.
 - Beautiful, modern typography perfectly integrated into the design.
 - Conceptual illustration with soft abstract shapes, charts, or modern digital elements.
@@ -827,7 +761,7 @@ Design requirements:
     (
         "generic-education",
         """Create a high-quality 16:9 featured image for an article about {topic}.
-Include a descriptive, click-worthy typographic hook of 3 to 6 words in the center (e.g. "Essential Tips for {topic}").
+Include a descriptive typographic hook of 3 to 6 words in the center (e.g. "Practical Tips for {topic}").
 Do NOT write the full lengthy title, but make sure the text clearly describes the content.
 Use abstract modern symbols and a soft geometric background.
 Modern clean vector or soft 3D illustration, professional blog thumbnail."""

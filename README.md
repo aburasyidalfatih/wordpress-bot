@@ -100,8 +100,10 @@ autowp/
 | Auto Post | Generate & publish terjadwal per site (timezone-aware) |
 | Multi-platform | Telegram (chat & channel), Facebook, Twitter/X, Threads, Pinterest |
 | Gemini AI | Model artikel & gambar dikonfigurasi terpisah |
-| SEO | Meta description, focus keyword, excerpt per-artikel, internal linking tervalidasi, schema BlogPosting + FAQPage |
-| Quality Gate | Menolak artikel terpotong, terlalu pendek, bocor template, atau mengandung kredensial karangan — sebelum publish |
+| SEO | Meta description & focus keyword dikirim ke Yoast/Rank Math (schema Article/BlogPosting diurus plugin SEO, AutoWP tidak menyisipkan JSON-LD), excerpt per-artikel, slug pendek tanpa tahun, FAQ terlihat tanpa schema FAQPage, internal linking & tautan sumber tervalidasi |
+| Quality Gate | Menolak artikel terpotong, terlalu pendek, bocor template, atau mengandung kredensial karangan — sebelum publish; HTML artikel disaring allow-list (tanpa script/iframe/event handler) |
+| Tinjauan AI | Sebelum terbit, AI bertindak sebagai editor & pemeriksa fakta terhadap data riset: klaim tanpa dukungan dihapus/diperhalus, topik YMYL (keuangan/kesehatan/hukum) diperketat, judul clickbait diperbaiki; artikel yang tidak layak ditolak (kredit dikembalikan) dan tidak ada artikel yang terbit tanpa ditinjau |
+| Anti-kanibalisasi | Topik riset, judul antrean, dan judul hasil generate dibandingkan dengan artikel yang sudah terbit; topik yang terlalu mirip dilewati atau ditolak |
 | Research Intelligence | Google Trends, autocomplete, kompetitor, sosial, YouTube, berita; dilengkapi provenance, freshness, dan quality gate |
 | Search Console Intelligence | OAuth read-only, query/page metrics, quick wins, low CTR, tren penurunan — dipakai sebagai sumber topik & bukti saat menulis |
 | Content Planner | Aksi per peluang (artikel baru / rewrite meta / refresh konten), content gap vs kompetitor, deteksi search intent, volume dari impressions GSC |

@@ -28,6 +28,7 @@ if 'core_extensions' not in sys.modules:
     sys.modules['core_extensions'] = _stub
 
 import tasks.article_jobs as jobs
+from services.article_review import ReviewResult
 from database import Database
 from models import Base, ContentQueue, PostLog, User, WordPressSite
 
@@ -44,23 +45,6 @@ def make_db():
     database.engine = engine
     database.session_factory = sessionmaker(bind=engine)
     return database
-
-
-class SimilarTitleTests(unittest.TestCase):
-    def test_exact_match_ignores_case_digits_and_punctuation(self):
-        self.assertEqual(jobs._find_similar_title('7 Tips Menabung!', ['tips menabung']),
-                         (True, 'tips menabung', 'exact'))
-
-    def test_near_duplicate_is_flagged(self):
-        similar, existing, reason = jobs._find_similar_title(
-            'Cara Menabung untuk Pelajar SMA', ['Cara Menabung untuk Pelajar SMP'])
-        self.assertTrue(similar)
-        self.assertEqual(existing, 'Cara Menabung untuk Pelajar SMP')
-        self.assertTrue(reason.startswith('char'))
-
-    def test_distinct_title_passes(self):
-        self.assertEqual(jobs._find_similar_title('Investasi Emas Jangka Panjang', ['Resep Nasi Goreng']),
-                         (False, None, None))
 
 
 class CategoryLookupTests(unittest.TestCase):
@@ -106,6 +90,7 @@ class GenerateAndPostTitleRetryTests(unittest.TestCase):
             patch.object(jobs, '_merge_topic_research', lambda seo, *a, **k: seo),
             patch.object(jobs, '_attach_search_evidence', lambda seo, *a, **k: seo),
             patch.object(jobs, '_current_job', lambda: None),
+            patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok'))),
         ]
         for p in patches:
             p.start()
@@ -123,7 +108,7 @@ class GenerateAndPostTitleRetryTests(unittest.TestCase):
         with self.db.get_session() as s:
             log = s.query(PostLog).one()
             self.assertTrue(log.success)
-            self.assertEqual(log.result, jobs.RESULT_PUBLISHED_NO_IMAGE)
+            self.assertEqual(log.result, jobs.RESULT_PUBLISHED_NO_IMAGE + ' Ditinjau AI: disetujui tanpa perbaikan isi.')
             self.assertEqual(s.get(User, 1).credits, 10)  # pre-reserved by the caller, consumed
 
     def test_failure_history_is_in_indonesian(self):
@@ -163,6 +148,7 @@ class RegenerationJobTests(unittest.TestCase):
             patch.object(jobs, 'ArticleGenerator', Mock(**{'from_config.return_value': self.generator})),
             patch.object(jobs, 'WordPressPublisher', Mock(return_value=self.publisher)),
             patch.object(jobs, 'check_article', Mock(return_value=(True, [], []))),
+            patch.object(jobs, 'review_article', Mock(return_value=ReviewResult('approve', 'ok', applied=2))),
         ]
         for p in patches:
             p.start()
@@ -180,7 +166,7 @@ class RegenerationJobTests(unittest.TestCase):
 
     def test_article_regeneration_success_consumes_credit(self):
         jobs.regenerate_article_job(1, 10)
-        self.assertEqual(self.log().result, jobs.RESULT_REGENERATED)
+        self.assertEqual(self.log().result, jobs.RESULT_REGENERATED + ' Ditinjau AI: 2 perbaikan diterapkan.')
         self.assertEqual(self.credits(), 4)
         args = self.publisher.update_post_content.call_args.args
         self.assertEqual(args[:3], (55, 'Judul Baru', '<p>isi</p>'))

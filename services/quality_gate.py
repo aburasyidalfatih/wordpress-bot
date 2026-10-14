@@ -1,30 +1,33 @@
 """Pre-publish quality checks for generated articles.
 
-The prompt asks for a 2000-2500 word article, but nothing used to verify that the
-model actually delivered one: the only check was "more than 50 words", so a truncated
-or half-length article was published as if it were fine. These checks run after
-generation and before anything is sent to WordPress.
+These checks run after generation and before anything is sent to WordPress. The
+prompt no longer sets a word count (length follows what the topic needs, without
+padding), so length and structure checks are floors that catch truncated or
+empty output, not targets that reward filler.
 
 Failures are split into two kinds:
   - errors: block publishing (the credit is refunded by the caller)
   - warnings: logged, but the article still goes out
 """
 
+import html
 import re
 import logging
 from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup, Comment, Declaration, Doctype, ProcessingInstruction
 
 from services.article_generator import strip_html
 
 logger = logging.getLogger(__name__)
 
-# Minimum publishable length. Well below the 2000 the prompt requests, so that a
-# slightly short but complete article is not thrown away, while an obviously
-# truncated one is.
-MIN_WORD_COUNT = 900
-TARGET_WORD_COUNT = 2000
+# Below this the output is a stub or was cut off; it is never a complete article.
+MIN_WORD_COUNT = 300
+# Short but possibly complete (a focused answer): published, with a warning.
+SHORT_WORD_COUNT = 600
 
-MIN_HEADINGS = 3
+MIN_HEADINGS = 2
+MAX_TITLE_LENGTH = 70  # the prompt asks for at most 60; some slack before warning
 MIN_META_LENGTH = 80
 MAX_META_LENGTH = 200
 
@@ -78,8 +81,8 @@ def check_article(article, focus_keyword=None, allowed_link_urls=None):
 
     if not title:
         errors.append('Article has no title.')
-    elif len(title) > 200:
-        warnings.append(f'Title is unusually long ({len(title)} chars).')
+    elif len(title) > MAX_TITLE_LENGTH:
+        warnings.append(f'Title is long ({len(title)} chars); search results truncate it.')
 
     if not content.strip():
         errors.append('Article has no content.')
@@ -87,11 +90,11 @@ def check_article(article, focus_keyword=None, allowed_link_urls=None):
 
     if word_count < MIN_WORD_COUNT:
         errors.append(
-            f'Article is too short: {word_count} words (minimum {MIN_WORD_COUNT}, '
-            f'target {TARGET_WORD_COUNT}).'
+            f'Article is too short: {word_count} words (minimum {MIN_WORD_COUNT}); '
+            'it looks incomplete.'
         )
-    elif word_count < TARGET_WORD_COUNT:
-        warnings.append(f'Article is below target length: {word_count}/{TARGET_WORD_COUNT} words.')
+    elif word_count < SHORT_WORD_COUNT:
+        warnings.append(f'Article is short ({word_count} words); check that it fully answers the topic.')
 
     unclosed = _unclosed_block_tags(content)
     if unclosed:
@@ -167,8 +170,9 @@ def _normalize_host(value):
 
 
 def normalize_link_url(url):
-    """Comparable form of a link: http/https, "www." and a trailing slash do not matter."""
-    url = str(url or '').strip()
+    """Comparable form of a link: http/https, "www." and a trailing slash do not
+    matter, and neither does HTML-escaping ("&amp;" in an href is "&")."""
+    url = html.unescape(str(url or '')).strip()
     host = link_host(url) if '//' in url else ''
     if not host:
         return url.rstrip('/')
@@ -189,7 +193,7 @@ def _same_site(href, allowed_urls):
 
 def _is_allowed_href(href, allowed):
     """In the supplied (normalized) list, or an in-page anchor (#section), which cannot leak anywhere."""
-    href = (href or '').strip()
+    href = html.unescape(href or '').strip()
     return href.startswith('#') or normalize_link_url(href) in allowed
 
 
@@ -228,3 +232,123 @@ def strip_invalid_internal_links(content, allowed_link_urls, allowed_hosts=None)
         content,
         flags=re.DOTALL | re.IGNORECASE
     )
+
+
+# ---------------------------------------------------------------------------
+# Allow-list HTML sanitizer for the article body. Runs on every article right
+# before it is published (WordPressPublisher._clean_content), so nothing the
+# model, scraped research or an AI review edit put into the HTML can carry
+# script, event handlers, embeds or foreign markup onto the site. The
+# publisher's own boxes (key takeaways, FAQ, YouTube embed) are added after it.
+# ---------------------------------------------------------------------------
+
+ALLOWED_TAGS = frozenset((
+    'p', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+    'a', 'strong', 'em', 'b', 'i', 'u', 's', 'mark', 'small', 'sub', 'sup', 'code', 'pre', 'blockquote', 'q',
+    'cite', 'abbr', 'br', 'hr', 'figure', 'figcaption', 'dl', 'dt', 'dd', 'div', 'span',
+))
+# Removed together with everything inside them. The pipeline never puts
+# images into the article body (the featured image is uploaded separately).
+DROPPED_TAGS = frozenset((
+    'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'form', 'input', 'button',
+    'select', 'textarea', 'option', 'meta', 'base', 'link', 'head', 'title', 'noscript', 'template', 'svg',
+    'math', 'img', 'image', 'picture', 'source', 'video', 'audio', 'track', 'canvas', 'map', 'area',
+    'portal', 'dialog',
+))
+# Headings outside h2-h4 keep their meaning at the nearest allowed level.
+RENAMED_TAGS = {'h1': 'h2', 'h5': 'h4', 'h6': 'h4'}
+_ALLOWED_ATTRS = {
+    'a': ('href', 'title', 'rel', 'target'),
+    'th': ('colspan', 'rowspan', 'scope'),
+    'td': ('colspan', 'rowspan'),
+    'abbr': ('title',),
+}
+_ALLOWED_REL = frozenset(('nofollow', 'noopener', 'noreferrer', 'sponsored', 'ugc', 'external'))
+_SAFE_CLASS_RE = re.compile(r'^[\w\s-]{1,100}$')
+_URL_SCHEME_RE = re.compile(r'^([a-z][a-z0-9+.-]*):', re.IGNORECASE)
+
+
+def _safe_href(href):
+    """True for http(s), mailto, relative and in-page links."""
+    compact = re.sub(r'[\x00-\x20\x7f]+', '', html.unescape(str(href or '')))
+    if not compact:
+        return False
+    scheme = _URL_SCHEME_RE.match(compact)
+    return scheme is None or scheme.group(1).lower() in ('http', 'https', 'mailto')
+
+
+def _clean_attrs(tag):
+    allowed = _ALLOWED_ATTRS.get(tag.name, ())
+    attrs = {}
+    for name, value in tag.attrs.items():
+        name = name.lower()
+        value = ' '.join(value) if isinstance(value, list) else str(value)
+        if name == 'class':
+            if _SAFE_CLASS_RE.match(value):
+                attrs['class'] = value
+            continue
+        if name not in allowed:
+            continue
+        if name in ('colspan', 'rowspan') and not value.strip().isdigit():
+            continue
+        if name == 'target':
+            if value.strip().lower() != '_blank':
+                continue
+            value = '_blank'
+        if name == 'rel':
+            value = ' '.join(r for r in value.lower().split() if r in _ALLOWED_REL)
+            if not value:
+                continue
+        attrs[name] = value
+    if tag.name == 'a' and attrs.get('target') == '_blank':
+        attrs['rel'] = ' '.join(sorted(set((attrs.get('rel') or '').split()) | {'noopener'}))
+    tag.attrs = attrs
+
+
+def _is_markup_debris(node):
+    return isinstance(node, (Comment, Declaration, Doctype, ProcessingInstruction))
+
+
+def sanitize_article_html(content):
+    """Article HTML reduced to an allow-list of tags and attributes.
+
+    Dangerous elements (script, style, iframe, forms, embeds, images, SVG,
+    meta/base/link ...) are removed with their content; other unknown tags are
+    unwrapped (their text is kept); attributes are limited per tag (links keep
+    href/title/rel/target, table cells their spans, any tag a plain class);
+    links with a scheme other than http(s)/mailto lose the link but keep the
+    text. Broken markup comes back balanced.
+    """
+    if not content:
+        return content or ''
+    soup = BeautifulSoup(content, 'html.parser')
+    for node in soup.find_all(string=_is_markup_debris):
+        node.extract()
+    for tag in soup.find_all(True):
+        if tag.decomposed:
+            continue
+        name = (tag.name or '').lower()
+        if name in DROPPED_TAGS:
+            tag.decompose()
+            continue
+        name = RENAMED_TAGS.get(name, name)
+        if name not in ALLOWED_TAGS:
+            tag.unwrap()
+            continue
+        tag.name = name
+        _clean_attrs(tag)
+        if name == 'a' and not _safe_href(tag.get('href')):
+            tag.unwrap()
+    return str(soup)
+
+
+def plain_text(value):
+    """Text for fields WordPress shows as they are (title, excerpt, meta).
+
+    Entities are decoded first and tags removed after, then any remaining angle
+    bracket, so an encoded "&lt;script&gt;" cannot turn into live markup.
+    """
+    text = html.unescape(str(value or ''))
+    text = re.sub(r'<[^>]*>', ' ', text)
+    text = text.replace('<', '').replace('>', '')
+    return ' '.join(text.split())
