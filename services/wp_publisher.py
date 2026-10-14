@@ -122,6 +122,23 @@ def _youtube_iframe(video_id):
     )
 
 
+# ddgs is a metasearch client whose "auto" backend mixes in Wikipedia-style
+# results; the YouTube embed search wants plain DuckDuckGo results.
+YOUTUBE_SEARCH_BACKEND = 'duckduckgo'
+
+
+def _ddgs_text_search(query, max_results=5):
+    """Text search through ddgs (explicit backend), or the old duckduckgo_search
+    package, which does not know ddgs' backend names."""
+    # Local import: only needed by the opt-in YouTube embed.
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        from duckduckgo_search import DDGS as LegacyDDGS
+        return list(LegacyDDGS().text(query, max_results=max_results) or [])
+    return list(DDGS().text(query, max_results=max_results, backend=YOUTUBE_SEARCH_BACKEND) or [])
+
+
 def _insert_mid_article(content, snippet):
     """Insert snippet before the middle H2, or append it when there are fewer than one."""
     parts = re.split(r'(<h2.*?>)', content)
@@ -379,9 +396,7 @@ class WordPressPublisher:
             return None
 
         try:
-            # Local import: only needed by the opt-in YouTube embed.
-            from duckduckgo_search import DDGS
-            results = DDGS().text(f"site:youtube.com {search_term}", max_results=5) or []
+            results = _ddgs_text_search(f"site:youtube.com {search_term}", max_results=5)
         except Exception as e:
             logger.warning(f"YouTube search failed: {e}")
             return None

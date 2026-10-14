@@ -418,32 +418,54 @@ def manual_post(user_id):
         return jsonify({'success': False, 'error': 'Gagal memasukkan tugas posting ke antrean. Silakan coba lagi.'}), 500
 
 
+def _job_return_value(job):
+    """The finished job's return value when it is a JSON object, else None."""
+    try:
+        getter = getattr(job, 'return_value', None)
+        value = getter() if callable(getter) else job.result
+    except Exception as e:
+        logger.warning(f"Could not read the result of job {job.id}: {e}")
+        return None
+    return value if isinstance(value, dict) else None
+
+
 @queue_bp.route('/api/job-status/<job_id>', methods=['GET'])
 @require_jwt
 def job_status(user_id, job_id):
+    # Job.fetch reads the job by id, so this serves jobs of every queue
+    # (default and research).
     try:
         job = Job.fetch(job_id, connection=redis_conn)
         if job.args and job.args[0] != user_id:
             return _error('Tugas tidak ditemukan.', 404)
         status = job.get_status()
+        status = str(getattr(status, 'value', status) or '')
 
-        progress = int(job.meta.get('progress', 0) or 0)
-        message = job.meta.get('message') or 'Sedang diproses...'
+        meta = job.meta or {}
+        reports_progress = 'progress' in meta
+        progress = max(0, min(100, int(meta.get('progress', 0) or 0)))
+        message = meta.get('message') or 'Sedang diproses...'
+        result = None
         if status == 'finished':
             progress = 100
             message = 'Selesai.'
+            result = _job_return_value(job)
         elif status == 'failed':
             progress = 100
             message = 'Tugas gagal.'
-        elif status == 'started' and progress == 0:
+        elif status == 'started' and not reports_progress:
+            # Jobs that do not report progress (article posting) only say they run.
             progress = 50
             message = 'Sedang berjalan...'
+        elif status == 'queued':
+            message = meta.get('message') or 'Menunggu giliran di antrean...'
 
         return jsonify({
             'success': True,
             'status': status,
             'progress': progress,
-            'message': message
+            'message': message,
+            'result': result,
         })
     except NoSuchJobError:
         return _error('Tugas tidak ditemukan.', 404)

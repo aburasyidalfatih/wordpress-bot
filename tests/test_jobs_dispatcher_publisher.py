@@ -267,7 +267,9 @@ class UnusedResearchTopicTests(unittest.TestCase):
                                created_at=now, used=False))
         self.assertEqual(database.get_unused_research_topic(1, 1, 'Keuangan'), 'Cara menabung')
         with database.get_session() as s:
-            self.assertTrue(s.get(ResearchData, 2).used)
+            # A row saved without topics is skipped, not consumed: its evidence
+            # still serves titles and articles.
+            self.assertFalse(s.get(ResearchData, 2).used)
             self.assertEqual(s.get(ResearchData, 1).suggested_topics, ['Investasi emas'])
         self.assertEqual(database.get_unused_research_topic(1, 1, 'Keuangan'), 'Investasi emas')
         self.assertIsNone(database.get_unused_research_topic(1, 1, 'Keuangan'))

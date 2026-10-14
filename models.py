@@ -325,6 +325,12 @@ class ResearchData(Base):
     used = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=datetime.now, index=True)
 
+    __table_args__ = (
+        # Latest runs per category (Research page, retention cleanup). Same name
+        # and columns as Database.migrate_research_quality_columns creates.
+        Index('idx_research_site_category_created', 'site_id', 'category', 'created_at'),
+    )
+
 class ContentQueue(Base):
     __tablename__ = 'content_queue'
 

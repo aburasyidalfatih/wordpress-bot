@@ -245,6 +245,89 @@ def _topic_tokens(text):
     return {w for w in words if len(w) > 3 and w not in _STOPWORDS}
 
 
+# Words that appear in queries of every niche ("tips", "cara", "online",
+# "terbaik"). Sharing one of them says nothing about the topic, so a query only
+# counts as relevant to a category or topic through a distinctive word.
+GENERIC_TOPIC_WORDS = _STOPWORDS | {
+    # Indonesian function words and query scaffolding
+    'bagaimana', 'apakah', 'kenapa', 'mengapa', 'kapan', 'dimana', 'mana', 'siapa',
+    'cara', 'tips', 'trik', 'panduan', 'lengkap', 'terbaik', 'terbaru', 'terlengkap',
+    'termurah', 'mudah', 'cepat', 'gratis', 'online', 'contoh', 'pengertian', 'arti',
+    'jenis', 'macam', 'daftar', 'manfaat', 'kelebihan', 'kekurangan', 'harga',
+    'tahun', 'hari', 'baru', 'sudah', 'belum', 'harus', 'ingin', 'tanpa', 'para',
+    'kamu', 'anda', 'kita', 'saya', 'mereka', 'tentang', 'secara', 'serta', 'sebagai',
+    'seperti', 'lebih', 'paling', 'banyak', 'sangat', 'semua', 'setiap', 'beberapa',
+    'menjadi', 'membuat', 'adanya', 'untuk', 'begini', 'yuk', 'simak', 'review',
+    'rekomendasi', 'indonesia',
+    # English
+    'best', 'guide', 'tips', 'tricks', 'free', 'online', 'easy', 'quick', 'top',
+    'review', 'reviews', 'list', 'ideas', 'example', 'examples', 'tutorial',
+    'when', 'where', 'which', 'does', 'have', 'into', 'more', 'most', 'than',
+    'them', 'they', 'their', 'there', 'these', 'those', 'make', 'need', 'without',
+    'year', 'new', 'near', 'cheap', 'complete', 'ultimate', 'beginner', 'beginners',
+}
+MIN_TOPIC_TOKEN_LENGTH = 4
+
+
+def _normalize_words(text):
+    return re.findall(r'\w+', str(text or '').lower())
+
+
+def _singular(word):
+    # Crude singular so "beginner" matches "beginners" and "saving" "savings".
+    return word[:-1] if len(word) > MIN_TOPIC_TOKEN_LENGTH and word.endswith('s') else word
+
+
+def meaningful_topic_tokens(text):
+    """Distinctive words of text: at least 4 characters and not generic."""
+    return {
+        _singular(word) for word in _normalize_words(text)
+        if len(word) >= MIN_TOPIC_TOKEN_LENGTH and not word.isdigit()
+        and word not in GENERIC_TOPIC_WORDS and _singular(word) not in GENERIC_TOPIC_WORDS
+    }
+
+
+def _phrase(text):
+    words = _normalize_words(text)
+    # A phrase made only of generic words ("Tips", "Cara Online") proves nothing.
+    if not words or all(w in GENERIC_TOPIC_WORDS or len(w) < 2 for w in words):
+        return ''
+    return ' '.join(words)
+
+
+def text_matches_topic(query, *topic_texts):
+    """True when query shares a distinctive word, or a whole phrase, with any topic text.
+
+    The phrase match keeps short but specific names ("KPR", "SEO") working,
+    which the 4-character token rule alone would drop.
+    """
+    query_words = ' '.join(_normalize_words(query))
+    if not query_words:
+        return False
+    query_tokens = meaningful_topic_tokens(query)
+    for topic in topic_texts:
+        if not topic:
+            continue
+        if query_tokens & meaningful_topic_tokens(topic):
+            return True
+        phrase = _phrase(topic)
+        if phrase and re.search(r'(?<!\w)' + re.escape(phrase) + r'(?!\w)', query_words):
+            return True
+    return False
+
+
+def filter_opportunities_for_topic(opportunities, *topic_texts):
+    """Only the Search Console opportunities/queries relevant to a category or topic.
+
+    Search Console data is site-wide; feeding every query of the site into one
+    category's article or titles pulled unrelated topics in.
+    """
+    return [
+        opp for opp in opportunities or []
+        if text_matches_topic(opp.get('query'), *topic_texts)
+    ]
+
+
 def find_content_gaps(competitor_outlines, existing_titles, limit=8):
     """Competitor subtopics we have never written about.
 

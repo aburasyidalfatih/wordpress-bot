@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import seo_research
+import trending_research
 from seo_research import SEOResearch
 from trending_research import TrendingResearch
 from services.search_console import (
@@ -87,7 +88,8 @@ class ResearchQualityTests(unittest.TestCase):
         self.assertEqual(self.research.source_status['social']['status'], 'unavailable')
 
     def test_trend_score_is_measured_not_default_fifty(self):
-        with patch.object(seo_research, 'TrendReq', FakeTrendClient):
+        with patch.object(seo_research, 'TrendReq', FakeTrendClient), \
+                patch.object(trending_research, 'TRENDS_MIN_INTERVAL_SECONDS', 0):
             analysis = self.research.get_trend_analysis('bisnis online', 'id')
         self.assertEqual(analysis['status'], 'real')
         self.assertGreater(analysis['score'], 50)
@@ -129,7 +131,8 @@ class SearchConsoleFoundationTests(unittest.TestCase):
     def test_opportunities_use_actual_query_metrics(self):
         current = [{
             'query': 'cara bisnis online', 'page': 'https://example.com/bisnis',
-            'clicks': 10, 'impressions': 1000, 'ctr': .01, 'position': 8,
+            # CTR at or above 2%: a page-one result with a weak CTR is low_ctr.
+            'clicks': 30, 'impressions': 1000, 'ctr': .03, 'position': 8,
         }]
         previous = [{
             'query': 'cara bisnis online', 'page': 'https://example.com/bisnis',

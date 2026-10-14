@@ -1,33 +1,65 @@
 import json
 import re
+import uuid
 from difflib import SequenceMatcher
-from datetime import datetime, timezone
+from datetime import datetime
 from flask import Blueprint, request, jsonify
+from rq.exceptions import NoSuchJobError
+from rq.job import Job
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import load_only
 
-from core_extensions import db, q, trending, logger, load_config, require_jwt
+import core_extensions
+import rate_limit
+from core_extensions import db, trending, logger, load_config, require_jwt
 from routes.prompts import check_ai_helper_quota
-from database import MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS
+from database import (
+    LOCK_ACTIVE, LOCK_FREE, LOCK_STARTING, MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS,
+    acquire_research_lock, category_key, is_research_fresh, record_research_charge, release_research_lock,
+    research_job_timeout, research_lock_state, restore_research_charge, take_research_charge,
+)
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from services.ai_providers import describe_provider_error, text_provider_name
 from services.article_generator import ArticleGenerator
 from services.search_console import build_search_opportunities
 from services.content_planner import (
     load_search_metrics, plan_from_opportunities, topic_candidates_from_opportunities,
-    keyword_demand_map, annotate_keywords_with_demand,
+    keyword_demand_map, annotate_keywords_with_demand, filter_opportunities_for_topic,
     find_content_gaps, classify_intent, intent_guidance,
 )
 
 research_bp = Blueprint('research', __name__)
 
-# Generous per-category budget: a category can spend ~20-30s across Trends,
-# autocomplete, competitor scraping, social, YouTube and news, and a slow or
-# rate-limited provider stretches that further.
-RESEARCH_SECONDS_PER_CATEGORY = 180
-RESEARCH_MIN_TIMEOUT_SECONDS = 600
 MAX_TITLE_CATEGORY_CHARS = 200
-STALE_RESEARCH_HOURS = 168
 RESEARCH_DATE_FORMAT = '%d %b %Y, %H:%M'
+
+# Reasons a category cannot be used for title generation, shared by the
+# Research page (title_block_reason) and /api/generate-titles.
+TITLE_BLOCK_NO_RESEARCH = 'Belum ada riset'
+TITLE_BLOCK_WEAK_EVIDENCE = 'Bukti riset belum cukup'
+TITLE_BLOCK_STALE = f'Data riset sudah lebih dari {MAX_RESEARCH_AGE_DAYS} hari'
+
+# Title generation: only the newest queue titles take part in the near-duplicate
+# check (SequenceMatcher per pair is quadratic), and the model output is capped.
+TITLE_DEDUPE_QUEUE_LIMIT = 300
+MAX_AI_TITLES_PROCESSED = 40
+MAX_TITLE_CHARS = 300
+TITLE_PARSE_ERROR = 'Respons AI tidak dapat dibaca sebagai daftar judul. Silakan coba lagi.'
+TITLE_QUOTA_BUCKET = 'ai_titles'
+TITLE_QUOTA_LIMIT = 200
+
+# /api/trending and /api/suggest-topics scrape Google Trends without charging,
+# so each user gets a small hourly budget.
+TREND_LOOKUP_RATE_LIMIT = 10
+TREND_LOOKUP_RATE_WINDOW_SECONDS = 3600
+# Bounded wait for the process-wide Google Trends lock (trending_research), so a
+# web request cannot tie up a gunicorn thread behind research traffic.
+TRENDS_WEB_LOCK_TIMEOUT_SECONDS = 20
+
+RESEARCH_BUSY_MESSAGE = 'Riset untuk website ini masih berjalan.'
+RESEARCH_STARTING_MESSAGE = 'Riset sedang dimulai, coba lagi sebentar.'
+RESEARCH_UNAVAILABLE_MESSAGE = 'Layanan riset sedang tidak aktif. Hubungi admin.'
 
 AI_BUSY_MESSAGE = 'Server Google AI sedang sibuk karena lonjakan permintaan. Silakan coba lagi beberapa saat.'
 
@@ -109,26 +141,71 @@ def _published_titles(session, user_id, site_id, limit):
     ]
 
 
+# Columns of the previous run that _research_delta reads; its large JSON
+# columns (competitors, social, news, ...) are never needed.
+_PREVIOUS_RUN_COLUMNS = (
+    ResearchData.id, ResearchData.category, ResearchData.keywords, ResearchData.trend_score,
+    ResearchData.quality_score, ResearchData.confidence_level, ResearchData.researched_at,
+    ResearchData.created_at,
+)
+
+
 def _latest_runs_by_category(session, user_id, site_id, category_names):
-    """The latest two research runs per category, loaded in ONE query."""
+    """The latest two research runs per category (latest + previous is all the UI needs).
+
+    Rows are ranked per category in SQL (ROW_NUMBER) instead of loading every
+    run ever stored. The latest run is loaded whole; the previous one only with
+    the columns the comparison uses.
+    """
     runs_by_category = {}
     if not category_names:
         return runs_by_category
-    all_runs = session.query(ResearchData).filter(
+    ranked = session.query(
+        ResearchData.id.label('id'),
+        func.row_number().over(
+            partition_by=ResearchData.category,
+            order_by=(ResearchData.created_at.desc(), ResearchData.id.desc()),
+        ).label('rn'),
+    ).filter(
         ResearchData.user_id == user_id,
         ResearchData.site_id == site_id,
         ResearchData.category.in_(category_names)
-    ).order_by(ResearchData.created_at.desc()).all()
-    for run in all_runs:
-        bucket = runs_by_category.setdefault(run.category, [])
-        if len(bucket) < 2:  # latest + previous is all the UI needs
-            bucket.append(run)
+    ).subquery()
+
+    latest_runs = session.query(ResearchData).join(
+        ranked, ResearchData.id == ranked.c.id
+    ).filter(ranked.c.rn == 1).all()
+    previous_runs = session.query(ResearchData).options(load_only(*_PREVIOUS_RUN_COLUMNS)).join(
+        ranked, ResearchData.id == ranked.c.id
+    ).filter(ranked.c.rn == 2).all()
+
+    for run in latest_runs:
+        runs_by_category[run.category] = [run]
+    for run in previous_runs:
+        if run.category in runs_by_category:
+            runs_by_category[run.category].append(run)
     return runs_by_category
+
+
+def _title_block_reason(latest, now=None):
+    """Why titles cannot be generated from this research run, or None when they can.
+
+    The one rule used by both the Research page and /api/generate-titles.
+    """
+    if latest is None:
+        return TITLE_BLOCK_NO_RESEARCH
+    if (latest.confidence_level or 'unknown') not in USABLE_CONFIDENCE_LEVELS:
+        return TITLE_BLOCK_WEAK_EVIDENCE
+    if not is_research_fresh(latest.researched_at or latest.created_at, now):
+        return TITLE_BLOCK_STALE
+    return None
 
 
 def _research_entry(latest, previous, now):
     researched_at = latest.researched_at or latest.created_at
+    # now and researched_at are both local naive time (see database.is_research_fresh).
     age_hours = max(0, int((now - researched_at).total_seconds() / 3600)) if researched_at else None
+    block_reason = _title_block_reason(latest, now)
     return {
         'trending_count': len(latest.trending_topics) if latest.trending_topics else 0,
         'rising_count': len(latest.rising_topics) if latest.rising_topics else 0,
@@ -151,23 +228,34 @@ def _research_entry(latest, previous, now):
         'confidence_level': latest.confidence_level or 'unknown',
         'is_fallback': bool(latest.is_fallback),
         'age_hours': age_hours,
-        'is_stale': age_hours is not None and age_hours > STALE_RESEARCH_HOURS,
+        'is_stale': not is_research_fresh(researched_at, now),
         'created_at': researched_at.strftime(RESEARCH_DATE_FORMAT) if researched_at else None,
         'change_since_last_run': _research_delta(latest, previous),
+        'eligible_for_titles': block_reason is None,
+        'title_block_reason': block_reason,
     }
 
 
 def _load_research_data(user_id, site_id, selected_categories):
     research_data = {}
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Local naive time: the clock researched_at is written with. Comparing it with
+    # UTC skewed age_hours/is_stale by the server's UTC offset.
+    now = datetime.now()
     with db.get_session() as session:
-        category_names = [c['name'] for c in selected_categories if c.get('name')]
+        category_names = [c['name'] for c in selected_categories
+                          if isinstance(c, dict) and isinstance(c.get('name'), str) and c.get('name')]
         runs_by_category = _latest_runs_by_category(session, user_id, site_id, category_names)
-        for category in selected_categories:
-            runs = runs_by_category.get(category['name']) or []
+        # Same normalization as the research job, which saves a duplicate entry
+        # ("Tips" / "tips ") under the first spelling only.
+        runs_by_key = {}
+        for name in category_names:
+            if name in runs_by_category:
+                runs_by_key.setdefault(category_key(name), runs_by_category[name])
+        for name in category_names:
+            runs = runs_by_category.get(name) or runs_by_key.get(category_key(name)) or []
             if runs:
                 previous = runs[1] if len(runs) > 1 else None
-                research_data[category['name']] = _research_entry(runs[0], previous, now)
+                research_data[name] = _research_entry(runs[0], previous, now)
     return research_data
 
 
@@ -310,14 +398,33 @@ def _site_language(user_id, site_id):
     return language
 
 
-@research_bp.route('/api/trending/<category>')
+def _trend_lookup_limited(user_id):
+    """429 response when the user exhausted the hourly trend lookup budget, else None."""
+    allowed, retry_sec = rate_limit.hit(
+        f'ratelimit:trend_lookup:{user_id}', TREND_LOOKUP_RATE_LIMIT, TREND_LOOKUP_RATE_WINDOW_SECONDS
+    )
+    if allowed:
+        return None
+    return jsonify({
+        'success': False,
+        'error': f'Terlalu banyak permintaan tren. Coba lagi dalam {retry_sec // 60 + 1} menit.'
+    }), 429
+
+
+@research_bp.route('/api/trending/<path:category>')
 @require_jwt
 def get_trending(user_id, category):
     """API endpoint to get trending topics for a category"""
+    if not category.strip() or len(category) > MAX_TITLE_CATEGORY_CHARS:
+        return jsonify({'success': False, 'error': 'Kategori tidak valid.'}), 400
+    limited = _trend_lookup_limited(user_id)
+    if limited:
+        return limited
     site_id = request.args.get('site_id', type=int)
     language = _site_language(user_id, site_id) if site_id else 'id'
     try:
-        data = trending.get_trending_topics(category, limit=15, language=language)
+        data = trending.get_trending_topics(category, limit=15, language=language,
+                                            lock_timeout=TRENDS_WEB_LOCK_TIMEOUT_SECONDS)
         return jsonify(data)
     except Exception as e:
         logger.error(f"Trending API error: {e}")
@@ -333,8 +440,11 @@ def suggest_topics(user_id):
     try:
         data = request.get_json(silent=True) or {}
         category = data.get('category')
-        if not isinstance(category, str) or not category.strip() or len(category) > 200:
+        if not isinstance(category, str) or not category.strip() or len(category) > MAX_TITLE_CATEGORY_CHARS:
             return jsonify({'success': False, 'error': 'Kategori wajib diisi.'}), 400
+        limited = _trend_lookup_limited(user_id)
+        if limited:
+            return limited
         try:
             count = min(max(int(data.get('count', 5)), 1), 20)
         except (TypeError, ValueError):
@@ -348,7 +458,8 @@ def suggest_topics(user_id):
                 return jsonify({'success': False, 'error': 'site_id tidak valid.'}), 400
             language = _site_language(user_id, site_id)
 
-        suggestions = trending.suggest_article_topics(category, count, language=language)
+        suggestions = trending.suggest_article_topics(category, count, language=language,
+                                                     lock_timeout=TRENDS_WEB_LOCK_TIMEOUT_SECONDS)
         return jsonify({'suggestions': suggestions})
     except Exception as e:
         logger.error(f"Suggest topics error: {e}")
@@ -357,95 +468,245 @@ def suggest_topics(user_id):
         return jsonify({'error': 'Gagal mengambil saran topik. Silakan coba lagi.'}), 500
 
 
+def _redis():
+    # Looked up at call time so tests can patch core_extensions.redis_conn.
+    return getattr(core_extensions, 'redis_conn', None)
+
+
+def _research_queue():
+    return getattr(core_extensions, 'research_q', None)
+
+
+def _rq_job_status(job_id):
+    """RQ status of job_id as a string, 'missing' when the job no longer exists."""
+    try:
+        job = Job.fetch(job_id, connection=_redis())
+    except NoSuchJobError:
+        return 'missing'
+    status = job.get_status(refresh=True)
+    return str(getattr(status, 'value', status) or 'missing')
+
+
+def _research_lock_state(site_id):
+    """(state, job_id) of the site's research lock (database.research_lock_state)."""
+    return research_lock_state(_redis(), site_id, _rq_job_status)
+
+
+def _research_workers_available():
+    """False only when RQ positively reports no worker listening on the research queue.
+
+    A failure of the introspection itself does not block research: monitoring
+    trouble must not take the feature down.
+    """
+    try:
+        from rq import Worker
+        return Worker.count(connection=_redis(), queue=_research_queue()) > 0
+    except Exception as e:
+        logger.warning(f"Could not count research workers: {e}")
+        return True
+
+
+def _research_busy_response(state, job_id):
+    if state == LOCK_STARTING or not job_id:
+        # The other request is still enqueueing its job; there is no job to poll yet.
+        return jsonify({'success': False, 'error': RESEARCH_STARTING_MESSAGE}), 409
+    return jsonify({'success': False, 'error': RESEARCH_BUSY_MESSAGE, 'job_id': job_id}), 409
+
+
+def _bad_request(message):
+    return jsonify({'success': False, 'error': message, 'code': 400}), 400
+
+
+def _manual_research_params():
+    """Returns (site_id, category, error_response); category None means every selected category.
+
+    site_id and category are each read from the query string or, independently,
+    from the JSON body. A missing or empty category means "all categories"; no
+    category name (not even "all") is special.
+    """
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
+    site_id = request.args.get('site_id') or body.get('site_id')
+    category = request.args.get('category') if 'category' in request.args else body.get('category')
+
+    if not site_id:
+        return None, None, _bad_request('site_id wajib diisi.')
+    try:
+        site_id = int(site_id)
+    except (TypeError, ValueError):
+        return None, None, _bad_request('Format site_id tidak valid.')
+    if category is not None and not isinstance(category, str):
+        return None, None, _bad_request('Kategori tidak valid.')
+    category = (category or '').strip() or None
+    if category and len(category) > MAX_TITLE_CATEGORY_CHARS:
+        return None, None, _bad_request('Kategori tidak valid.')
+    return site_id, category, None
+
+
+def _research_charge_plan(user_id, site_id, category):
+    """Returns ((category_name, required_credits), None) or (None, error_response).
+
+    category_name is the site's own spelling of the requested category (None for
+    all). The job researches each normalized name (database.category_key) once,
+    so the charge is one credit per unique normalized name.
+    """
+    with db.get_session() as session:
+        site = session.query(WordPressSite).filter_by(id=site_id, user_id=user_id).first()
+        if not site:
+            return None, (jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404)
+        user = session.query(User).filter_by(id=user_id).first()
+        if not user:
+            return None, (jsonify({'success': False, 'error': 'Pengguna tidak ditemukan.'}), 404)
+
+        names_by_key = {}
+        for cat in site.selected_categories or []:
+            name = cat.get('name') if isinstance(cat, dict) else None
+            if isinstance(name, str) and name.strip():
+                names_by_key.setdefault(category_key(name), name)
+        user_credits = user.credits if user.credits is not None else 0
+
+    if not names_by_key:
+        return None, _bad_request('Silakan pilih kategori target terlebih dahulu di Pengaturan Website.')
+    if category:
+        category_name = names_by_key.get(category_key(category))
+        if category_name is None:
+            return None, _bad_request(f'Kategori "{category}" tidak terpilih untuk website ini.')
+        required_credits = 1
+    else:
+        category_name = None
+        required_credits = len(names_by_key)
+
+    if user_credits < required_credits:
+        return None, _bad_request(
+            f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit, '
+            f'tetapi Anda hanya memiliki {user_credits} kredit.'
+        )
+    return (category_name, required_credits), None
+
+
+def _current_credits(user_id):
+    with db.get_session() as session:
+        user = session.query(User).filter_by(id=user_id).first()
+        return max(0, user.credits or 0) if user else 0
+
+
+def _undo_research_reservation(conn, user_id, site_id, job_id, amount):
+    """Refund a reservation whose job was never enqueued, and release the lock.
+
+    The reservation record is taken first so the dispatcher's reconciliation
+    cannot refund it a second time.
+    """
+    record = None
+    try:
+        record = take_research_charge(conn, job_id)
+    except Exception as e:
+        logger.warning(f"Could not remove research reservation {job_id}: {e}")
+    try:
+        db.refund_user_credits(user_id, amount)
+    except Exception:
+        if record is not None:
+            # Hand the reservation back to the dispatcher's reconciliation.
+            restore_research_charge(conn, job_id, record, owed=amount)
+        raise
+    finally:
+        try:
+            release_research_lock(conn, site_id, job_id)
+        except Exception as e:
+            logger.warning(f"Could not release the research lock of site {site_id}: {e}")
+
+
+def _start_manual_research(user_id, site_id, category_name, required_credits):
+    """Lock the site, reserve credits, record the reservation and enqueue the job."""
+    conn = _redis()
+    job_id = f"research-{site_id}-{uuid.uuid4().hex}"
+    # The timeout must be explicit: RQ's 180s default kills a multi-category
+    # run after the first category or two (each takes roughly 20-30s).
+    timeout_seconds = research_job_timeout(required_credits)
+
+    # One research run per site. The lock is taken before any credit is reserved,
+    # so a second click is answered with 409 without charging. It stays busy for
+    # as long as its job is queued or running, however long the queue is.
+    state, holder = _research_lock_state(site_id)
+    if state != LOCK_FREE:
+        return _research_busy_response(state, holder)
+    if not acquire_research_lock(conn, site_id, job_id):
+        return _research_busy_response(*_research_lock_state(site_id))
+
+    try:
+        reserved = db.reserve_user_credits(user_id, required_credits)
+    except Exception:
+        release_research_lock(conn, site_id, job_id)
+        raise
+    if not reserved:
+        release_research_lock(conn, site_id, job_id)
+        return _bad_request(f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit.')
+
+    try:
+        # Recorded before enqueueing: if the job is later killed without running
+        # its own refund, the dispatcher refunds from this record.
+        record_research_charge(conn, job_id, user_id, site_id, required_credits, timeout_seconds)
+        _research_queue().enqueue(
+            'tasks.research_jobs.deep_research_job',
+            user_id, True, site_id, category_name,
+            charged_credits=required_credits,
+            charge_recorded=True,
+            job_timeout=timeout_seconds,
+            job_id=job_id,
+        )
+    except Exception as enqueue_error:
+        _undo_research_reservation(conn, user_id, site_id, job_id, required_credits)
+        logger.error(f"Manual research enqueue failed, refunded {required_credits} credits: {enqueue_error}")
+        return jsonify({'success': False, 'error': 'Gagal memasukkan riset ke antrean. Kredit sudah dikembalikan.'}), 500
+
+    return jsonify({
+        'success': True,
+        'job_id': job_id,
+        'message': f'Riset berhasil masuk antrean. {required_credits} kredit didebit.',
+        'credits_deducted': required_credits,
+        # Read after the reservation, so concurrent spending is reflected.
+        'remaining_credits': _current_credits(user_id),
+    })
+
+
 @research_bp.route('/manual-research', methods=['POST'])
 @require_jwt
 def manual_research(user_id):
-    site_id = request.args.get('site_id')
-    category = request.args.get('category')
-    if not site_id and request.is_json:
-        data = request.get_json(silent=True) or {}
-        site_id = data.get('site_id')
-        category = data.get('category')
-
-    if not site_id:
-        return jsonify({'success': False, 'error': 'site_id wajib diisi.', 'code': 400}), 400
-
-    if category in ("", "all", "All"):
-        category = None
-
+    site_id, category, error = _manual_research_params()
+    if error:
+        return error
     try:
-        try:
-            site_id_int = int(site_id)
-        except (TypeError, ValueError):
-            return jsonify({'success': False, 'error': 'Format site_id tidak valid.'}), 400
-
-        with db.get_session() as session:
-            site = session.query(WordPressSite).filter_by(id=site_id_int, user_id=user_id).first()
-            if not site:
-                return jsonify({'success': False, 'error': 'Website tidak ditemukan.'}), 404
-
-            user = session.query(User).filter_by(id=user_id).first()
-            if not user:
-                return jsonify({'success': False, 'error': 'Pengguna tidak ditemukan.'}), 404
-
-            # The research job researches each category name once, so charge per
-            # unique name; duplicate entries must not be billed twice.
-            selected_category_names = list(dict.fromkeys(
-                cat.get('name') for cat in (site.selected_categories or [])
-                if isinstance(cat, dict) and isinstance(cat.get('name'), str) and cat.get('name')
-            ))
-            if not selected_category_names:
-                return jsonify({'success': False, 'error': 'Silakan pilih kategori target terlebih dahulu di Pengaturan Website.'}), 400
-
-            if category:
-                if not isinstance(category, str) or category not in selected_category_names:
-                    return jsonify({'success': False, 'error': f'Kategori "{category}" tidak terpilih untuk website ini.'}), 400
-                required_credits = 1
-            else:
-                required_credits = len(selected_category_names)
-
-            user_credits = user.credits if user.credits is not None else 0
-            if user_credits < required_credits:
-                return jsonify({
-                    'success': False,
-                    'error': f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit, tetapi Anda hanya memiliki {user_credits} kredit.'
-                }), 400
-
-        if not db.reserve_user_credits(user_id, required_credits):
-            return jsonify({
-                'success': False,
-                'error': f'Kredit tidak mencukupi. Riset membutuhkan {required_credits} kredit.'
-            }), 400
-
-        # Enqueue outside the validation query. If Redis/RQ fails, refund the user.
-        # The timeout must be explicit: RQ's 180s default kills a multi-category
-        # run after the first category or two (each takes roughly 20-30s).
-        timeout_seconds = max(
-            RESEARCH_MIN_TIMEOUT_SECONDS,
-            required_credits * RESEARCH_SECONDS_PER_CATEGORY
-        )
-        try:
-            job = q.enqueue(
-                'tasks.research_jobs.deep_research_job',
-                user_id, True, site_id_int, category,
-                charged_credits=required_credits,
-                job_timeout=timeout_seconds
-            )
-        except Exception as enqueue_error:
-            db.refund_user_credits(user_id, required_credits)
-            logger.error(f"Manual research enqueue failed, refunded {required_credits} credits: {enqueue_error}")
-            return jsonify({'success': False, 'error': 'Gagal memasukkan riset ke antrean. Kredit sudah dikembalikan.'}), 500
-
-        return jsonify({
-            'success': True,
-            'job_id': job.id,
-            'message': f'Riset berhasil masuk antrean. {required_credits} kredit didebit.',
-            'credits_deducted': required_credits,
-            'remaining_credits': max(0, user_credits - required_credits)
-        })
+        plan, error = _research_charge_plan(user_id, site_id, category)
+        if error:
+            return error
+        category_name, required_credits = plan
+        if not _research_workers_available():
+            # Without a worker the job would wait forever with the credits held.
+            return jsonify({'success': False, 'error': RESEARCH_UNAVAILABLE_MESSAGE}), 503
+        return _start_manual_research(user_id, site_id, category_name, required_credits)
     except Exception as e:
         logger.error(f"Manual research error: {e}")
         return jsonify({'success': False, 'error': 'Terjadi kesalahan saat memulai riset.'}), 500
+
+
+@research_bp.route('/api/research/active')
+@require_jwt
+def active_research(user_id):
+    """The research job currently queued or running for one of the user's sites."""
+    site_id = request.args.get('site_id', type=int)
+    if not site_id:
+        return _bad_request('site_id wajib diisi.')
+    with db.get_session() as session:
+        site_exists = session.query(WordPressSite.id).filter_by(id=site_id, user_id=user_id).first() is not None
+    if not site_exists:
+        return jsonify({'success': False, 'error': 'Website tidak ditemukan.', 'code': 404}), 404
+    try:
+        state, job_id = _research_lock_state(site_id)
+        if state != LOCK_ACTIVE:
+            job_id = None  # a job still being enqueued has nothing to poll yet
+    except Exception as e:
+        logger.error(f"Could not read the research lock of site {site_id}: {e}")
+        return jsonify({'success': False, 'error': 'Status riset tidak dapat diperiksa saat ini.'}), 503
+    return jsonify({'success': True, 'job_id': job_id})
 
 
 def _load_title_context(user_id, site_id, category):
@@ -467,6 +728,14 @@ def _read_title_context(session, user_id, site_id, category):
     if not site:
         return None, ('Website tidak ditemukan.', 404)
 
+    # Research is saved under the site's first spelling of a category
+    # (normalized with database.category_key), so resolve to that spelling.
+    for cat in site.selected_categories or []:
+        name = cat.get('name') if isinstance(cat, dict) else None
+        if isinstance(name, str) and category_key(name) == category_key(category):
+            category = name
+            break
+
     latest = session.query(ResearchData).filter(
         ResearchData.user_id == user_id,
         ResearchData.site_id == site_id,
@@ -475,13 +744,10 @@ def _read_title_context(session, user_id, site_id, category):
 
     if not latest:
         return None, ('Jalankan riset berkualitas terlebih dahulu.', 400)
-    confidence = latest.confidence_level or 'unknown'
-    research_time = latest.researched_at or latest.created_at
-    age_days = (datetime.now() - research_time).days if research_time else 999
-    if confidence not in USABLE_CONFIDENCE_LEVELS or age_days > MAX_RESEARCH_AGE_DAYS:
-        reason = ('bukti riset belum terverifikasi' if confidence not in USABLE_CONFIDENCE_LEVELS
-                  else f'data riset sudah lebih dari {MAX_RESEARCH_AGE_DAYS} hari')
-        return None, (f'Tidak aman membuat judul dari data ini: {reason}. Silakan riset ulang.', 400)
+    # Same rule as eligible_for_titles on the Research page.
+    reason = _title_block_reason(latest)
+    if reason:
+        return None, (f'Tidak aman membuat judul dari data ini: {reason.lower()}. Silakan riset ulang.', 400)
 
     category_desc = ""
     for cat in (site.categories or []):
@@ -490,6 +756,7 @@ def _read_title_context(session, user_id, site_id, category):
             break
 
     return {
+        'category': category,
         'keywords': latest.keywords or [],
         'questions': latest.questions or [],
         'competitor_outlines': latest.competitor_outlines or [],
@@ -499,18 +766,23 @@ def _read_title_context(session, user_id, site_id, category):
     }, None
 
 
-def _title_evidence(user_id, site_id, competitor_outlines):
+def _title_evidence(user_id, site_id, competitor_outlines, category=None):
     """Search Console quick wins and content gaps to steer the title prompt.
 
     Search Console queries are the strongest topic signal available: real
-    searches that already produced impressions for this exact site.
+    searches that already produced impressions for this exact site. They are
+    site-wide, so only queries relevant to this category are used.
     """
     gsc_topics = []
     content_gaps = []
     try:
         with db.get_session() as session:
             current_rows, previous_rows = load_search_metrics(session, user_id, site_id)
-            opportunities = build_search_opportunities(current_rows, previous_rows, limit=20)
+            opportunities = filter_opportunities_for_topic(
+                build_search_opportunities(current_rows, previous_rows, limit=100),
+                # The category name only: a free-text description is too broad.
+                category,
+            )
             gsc_topics = topic_candidates_from_opportunities(opportunities, limit=6)
             published_titles = _published_titles(session, user_id, site_id, 200)
         content_gaps = find_content_gaps(competitor_outlines, published_titles, limit=5)
@@ -556,39 +828,87 @@ def _build_title_prompt(count, category, context, evidence):
     )
 
 
-def _parse_title_response(text):
-    text = text.strip()
-    # Clean markdown codeblocks if any
-    if text.startswith('```'):
-        text = '\n'.join(text.split('\n')[1:-1])
-        if text.startswith('json'):
-            text = text[4:].strip()
+class _TitleParseError(ValueError):
+    """The model output contained no JSON array of titles."""
 
-    titles = json.loads(text)
-    if not isinstance(titles, list):
-        raise ValueError('Respons AI bukan daftar judul')
-    titles = [str(title).strip() for title in titles if isinstance(title, str) and title.strip()]
-    return list(dict.fromkeys(titles))
+
+def _json_arrays(text):
+    """Every JSON array in text, in order, tolerating code fences and prose around it."""
+    text = str(text or '')
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'\[', text):
+        try:
+            value, _ = decoder.raw_decode(text, match.start())
+        except ValueError:
+            continue
+        if isinstance(value, list):
+            yield value
+
+
+def _titles_from_array(items):
+    titles = []
+    for item in items:
+        if isinstance(item, dict):
+            item = item.get('title') or item.get('judul')
+        if not isinstance(item, str):
+            continue
+        title = ' '.join(item.split())
+        if title and len(title) <= MAX_TITLE_CHARS:
+            titles.append(title)
+    return list(dict.fromkeys(titles))[:MAX_AI_TITLES_PROCESSED]
+
+
+def _parse_title_response(text):
+    """Unique titles from the first JSON array of titles in the model output.
+
+    At most MAX_AI_TITLES_PROCESSED. Raises _TitleParseError when there is none.
+    """
+    for items in _json_arrays(text):
+        titles = _titles_from_array(items)
+        if titles:
+            return titles
+    raise _TitleParseError('Respons AI tidak berisi daftar judul JSON.')
+
+
+def _refund_title_quota(user_id):
+    """Give back the ai_titles quota a request used when the model output was unusable."""
+    conn = _redis()
+    if conn is None:
+        return
+    key = f'ratelimit:{TITLE_QUOTA_BUCKET}:{user_id}'
+    try:
+        # Never below zero: users with their own AI key are not counted at all.
+        conn.eval(
+            "local v = tonumber(redis.call('GET', KEYS[1]) or '0') "
+            "if v > 0 then return redis.call('DECR', KEYS[1]) end return v",
+            1, key,
+        )
+    except Exception as e:
+        logger.warning(f"Could not refund the title quota of user {user_id}: {e}")
 
 
 def _existing_site_titles(user_id, site_id):
-    """Everything this site already has queued or published, across all categories.
+    """Recent titles this site already has queued or published, across all categories.
 
     Two categories can otherwise produce near-identical titles that end up
-    competing with each other.
+    competing with each other. Failed queue items are left out (they never went
+    out), and only the newest queue titles are compared: the near-duplicate
+    check is pairwise, and the whole queue history made it grow without bound.
     """
     with db.get_session() as session:
         existing = [
             row[0] for row in session.query(ContentQueue.title).filter(
                 ContentQueue.user_id == user_id,
-                ContentQueue.site_id == site_id
-            ).all() if row[0]
+                ContentQueue.site_id == site_id,
+                ContentQueue.status != 'failed',
+            ).order_by(ContentQueue.created_at.desc()).limit(TITLE_DEDUPE_QUEUE_LIMIT).all() if row[0]
         ]
         existing += _published_titles(session, user_id, site_id, 300)
     return existing
 
 
 def _queue_titles(user_id, site_id, category, titles, keywords):
+    """Add titles to the queue. Returns how many were queued."""
     with db.get_session() as session:
         for title in titles:
             session.add(ContentQueue(
@@ -600,22 +920,37 @@ def _queue_titles(user_id, site_id, category, titles, keywords):
                 status='pending'
             ))
         session.commit()
+    return len(titles)
 
 
-@research_bp.route('/api/generate-titles/<category>', methods=['POST'])
-@require_jwt
-def generate_titles(user_id, category):
-    data = request.get_json(silent=True) or {}
+def _title_request_params(category):
+    """Returns (count, site_id, error_response)."""
+    data = request.get_json(silent=True)
+    data = data if isinstance(data, dict) else {}
     try:
         count = min(max(int(data.get('count', 5)), 1), 20)
     except (TypeError, ValueError):
         count = 5
-    site_id = data.get('site_id') or request.args.get('site_id', type=int)
-
+    site_id = data.get('site_id') or request.args.get('site_id')
     if not site_id:
-        return jsonify({'success': False, 'error': 'site_id wajib diisi.', 'code': 400}), 400
+        return None, None, _bad_request('site_id wajib diisi.')
+    try:
+        site_id = int(site_id)
+    except (TypeError, ValueError):
+        return None, None, _bad_request('Format site_id tidak valid.')
     if not category.strip() or len(category) > MAX_TITLE_CATEGORY_CHARS:
-        return jsonify({'success': False, 'error': 'Kategori tidak valid.', 'code': 400}), 400
+        return None, None, _bad_request('Kategori tidak valid.')
+    return count, site_id, None
+
+
+# <path:category>: a category name may contain "/" (e.g. "Hukum/Perdata"), which
+# the default converter rejected with a 404.
+@research_bp.route('/api/generate-titles/<path:category>', methods=['POST'])
+@require_jwt
+def generate_titles(user_id, category):
+    count, site_id, error = _title_request_params(category)
+    if error:
+        return error
 
     config = {}
     try:
@@ -623,22 +958,30 @@ def generate_titles(user_id, category):
             context = _load_title_context(user_id, site_id, category)
         except _TitleRequestError as exc:
             return jsonify({'success': False, 'error': exc.message}), exc.status
+        category = context['category']
 
         # Only gate (and count) the uncharged AI call once the request is
         # otherwise valid. Bulk generation sends one request per category, so
         # titles get their own, larger bucket instead of sharing the prompt
         # optimizer's.
-        quota_error = check_ai_helper_quota(user_id, bucket='ai_titles', limit=200)
+        quota_error = check_ai_helper_quota(user_id, bucket=TITLE_QUOTA_BUCKET, limit=TITLE_QUOTA_LIMIT)
         if quota_error:
             return quota_error
         config = load_config(user_id)
 
-        gsc_topics, content_gaps = _title_evidence(user_id, site_id, context['competitor_outlines'])
+        gsc_topics, content_gaps = _title_evidence(user_id, site_id, context['competitor_outlines'], category)
         evidence = _title_evidence_blocks(category, context['language'], gsc_topics, content_gaps)
         prompt = _build_title_prompt(count, category, context, evidence)
 
         generator = ArticleGenerator.from_config(config)
-        titles = _parse_title_response(generator.generate_text(prompt))
+        try:
+            titles = _parse_title_response(generator.generate_text(prompt))
+        except _TitleParseError as parse_error:
+            # The model answered but not with a usable list: not the user's fault,
+            # so the request does not count against their title quota.
+            logger.warning(f"Unusable title response for user {user_id}: {parse_error}")
+            _refund_title_quota(user_id)
+            return jsonify({'success': False, 'error': TITLE_PARSE_ERROR}), 502
 
         titles = _filter_duplicate_titles(titles, _existing_site_titles(user_id, site_id))[:count]
         if not titles:
@@ -647,8 +990,12 @@ def generate_titles(user_id, category):
                 'error': 'Semua judul yang dihasilkan terlalu mirip dengan yang sudah ada. Coba riset ulang atau ganti kategori.'
             }), 409
 
-        _queue_titles(user_id, site_id, category, titles, context['keywords'])
-        return jsonify({'success': True, 'message': f'{len(titles)} judul berhasil dibuat dan dimasukkan ke antrean!'})
+        queued = _queue_titles(user_id, site_id, category, titles, context['keywords'])
+        return jsonify({
+            'success': True,
+            'queued': queued,
+            'message': f'{queued} judul berhasil dibuat dan dimasukkan ke antrean!',
+        })
     except Exception as e:
         logger.error(f"Generate titles error: {e}")
         reason = describe_provider_error(e, text_provider_name(config or {})) or 'terjadi kesalahan, silakan coba lagi.'
@@ -658,13 +1005,17 @@ def generate_titles(user_id, category):
 @research_bp.route('/api/clear-research', methods=['POST'])
 @require_jwt
 def clear_research(user_id):
-    data = request.json or {}
-    site_id = data.get('site_id')
-
-    if not site_id:
-        return jsonify({'success': False, 'error': 'site_id wajib diisi.'}), 400
-
     try:
+        data = request.get_json(silent=True)
+        data = data if isinstance(data, dict) else {}
+        site_id = data.get('site_id')
+        if site_id is None or site_id == '':
+            return _bad_request('site_id wajib diisi.')
+        try:
+            site_id = int(site_id)
+        except (TypeError, ValueError):
+            return _bad_request('Format site_id tidak valid.')
+
         with db.get_session() as session:
             deleted_count = session.query(ResearchData).filter_by(site_id=site_id, user_id=user_id).delete()
             session.commit()

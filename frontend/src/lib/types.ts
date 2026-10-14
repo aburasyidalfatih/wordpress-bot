@@ -228,6 +228,12 @@ export interface SearchOpportunity {
   position_change?: number | null;
   opportunity_score: number;
   rationale: string;
+  /** Recommended response, e.g. 'new_article', 'rewrite_meta' or 'refresh_content'. */
+  action?: string;
+  /** Human-readable (Indonesian) description of `action`. */
+  action_label?: string;
+  /** Search intent of the query, e.g. 'informational' or 'commercial'. */
+  intent?: string;
 }
 
 export interface SearchConsoleSummary {
@@ -235,6 +241,8 @@ export interface SearchConsoleSummary {
   property_url?: string | null;
   last_synced_at?: string | null;
   opportunities: SearchOpportunity[];
+  /** Why the opportunities could not be loaded (sync failure, expired token...). */
+  error?: string | null;
 }
 
 interface ResearchKeyword {
@@ -257,6 +265,10 @@ export interface ResearchStats {
   is_fallback: boolean;
   is_stale: boolean;
   age_hours: number | null;
+  /** False when the research is too weak to generate titles from. Older APIs omit it. */
+  eligible_for_titles?: boolean;
+  /** Why titles cannot be generated from this research; null when eligible. */
+  title_block_reason?: string | null;
   long_tail_keywords: string[];
   semantic_context: string;
   news_insights: { title: string; source?: string; url?: string; published_at?: string }[];
@@ -279,6 +291,25 @@ export interface ResearchDataResponse {
   categories: SiteCategory[];
   research_data: Record<string, ResearchStats>;
   search_console?: SearchConsoleSummary;
+}
+
+/** Outcome of a finished research job (null for jobs from older backends). */
+export interface ResearchJobResult {
+  successful_categories?: number;
+  failed_categories?: number;
+  refunded_credits?: number;
+  skipped?: boolean;
+  reason?: string | null;
+}
+
+/** GET /api/job-status/<id> */
+export interface JobStatusResponse {
+  success: boolean;
+  status: string;
+  progress: number;
+  message: string;
+  result?: ResearchJobResult | null;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -76,6 +76,35 @@ services:
       redis:
         condition: service_healthy
 
+  research-worker:
+    build: .
+    restart: unless-stopped
+    # Research jobs (manual and the daily scheduled refresh) run on their own
+    # queue so a long research run never delays article posting.
+    command: rq worker -u redis://redis:6379/0 research
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-}
+      - FERNET_KEY=${FERNET_KEY:-}
+      - AUTOWP_RUNTIME_DIR=/app/runtime
+    volumes:
+      - autowp_runtime:/app/runtime
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   scheduler:
     build: .
     restart: unless-stopped

@@ -51,6 +51,25 @@ export function errorMessage(error: unknown, fallback: string): string {
 export const NETWORK_ERROR = 'Gagal terhubung ke server. Periksa koneksi Anda lalu coba lagi.';
 
 /**
+ * Parses a response body as a JSON object. Resolves to `{}` when the body is not
+ * JSON (e.g. the HTML page of a 502/504 gateway error), so callers can fall back
+ * to a status-based message instead of reporting a network failure.
+ */
+export async function readJson<T extends object>(res: Response): Promise<Partial<T>> {
+  try {
+    const payload: unknown = await res.json();
+    return payload !== null && typeof payload === 'object' ? payload as Partial<T> : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Message for a response that carried no usable JSON `error` field. */
+export function serverErrorMessage(status: number): string {
+  return `Server tidak merespons dengan benar (HTTP ${status}).`;
+}
+
+/**
  * GET (by default) a JSON endpoint. Rejects with a readable Error when the
  * response is not 2xx, preferring the backend's `error` field.
  */

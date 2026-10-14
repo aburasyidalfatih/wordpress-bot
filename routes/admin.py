@@ -13,6 +13,7 @@ from models import User, Transaction, WordPressSite, PostLog, ResearchData, Cont
 from config import Config, DEFAULT_IMAGE_PROVIDER, DEFAULT_TEXT_PROVIDER, IMAGE_PROVIDERS, TEXT_PROVIDERS
 from services.ai_providers import PROVIDER_LABELS, describe_provider_error, list_models
 from routes.payments import fulfill_transaction
+from tasks.research_jobs import validate_year_change
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -48,13 +49,22 @@ def _secret_response(config_dict, key):
 @admin_bp.route('/api/admin/bulk_update_year', methods=['POST'])
 @require_admin
 def bulk_update_year_endpoint(user_id):
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     site_id = data.get('site_id')
     from_year = data.get('from_year')
     to_year = data.get('to_year')
 
     if not all([site_id, from_year, to_year]):
         return jsonify({'success': False, 'error': 'site_id, from_year, dan to_year wajib diisi.'}), 400
+    try:
+        site_id = int(site_id)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Format site_id tidak valid.'}), 400
+    # A loose value (e.g. "1" or "20") used to be replaced in every post title
+    # and body, including inside URLs and numbers.
+    from_year, to_year, year_error = validate_year_change(from_year, to_year)
+    if year_error:
+        return jsonify({'success': False, 'error': year_error}), 400
 
     try:
         # Enqueue by dotted path against the shared queue. The previous version

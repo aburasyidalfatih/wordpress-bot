@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { RefreshCw, TrendingUp, Sparkles, ShieldCheck, AlertTriangle, Clock } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -31,8 +32,11 @@ export function EmptyCategoryCard({ category, researching, isResearchingThis, on
     <Card className="overflow-hidden border-dashed border-2 border-border bg-muted/15 p-6 flex flex-col justify-between min-h-[220px] shadow-sm hover:border-primary/50 transition-all duration-300">
       <div className="space-y-2">
         <h3 className="text-xl font-bold capitalize text-muted-foreground/90">{category.name}</h3>
+        {category.description && (
+          <p className="text-xs text-muted-foreground/80 line-clamp-2">{category.description}</p>
+        )}
         <p className="text-sm text-muted-foreground leading-relaxed">
-          {category.description || 'Belum ada data riset intelijen untuk kategori ini. Mulai riset kategori ini secara terpisah untuk menemukan tren kata kunci kompetitor, tren sosial, dan video YouTube terpopuler.'}
+          Belum ada riset untuk kategori ini. Mulai riset kategori ini secara terpisah untuk menemukan tren kata kunci kompetitor, tren sosial, dan video YouTube terpopuler.
         </p>
       </div>
       <div className="pt-4 flex justify-start">
@@ -49,24 +53,34 @@ export function EmptyCategoryCard({ category, researching, isResearchingThis, on
   );
 }
 
-function staleWarning(stats: ResearchStats): string | null {
-  if (stats.is_stale) return 'Data ini berusia lebih dari 7 hari. Riset ulang sebelum membuat keputusan konten.';
-  if (stats.confidence_level === 'unknown') return 'Data ini dibuat sebelum sistem quality scoring tersedia. Riset ulang untuk hasil terverifikasi.';
-  if (stats.is_fallback) return 'Sebagian data memakai fallback dan tidak dianggap sebagai bukti sumber nyata.';
-  return null;
+/** Every caveat that applies to the research; age and fallback can both apply. */
+function researchWarnings(stats: ResearchStats): string[] {
+  const warnings: string[] = [];
+  if (stats.is_stale) warnings.push('Data ini berusia lebih dari 7 hari. Riset ulang sebelum membuat keputusan konten.');
+  else if (stats.confidence_level === 'unknown') warnings.push('Data ini dibuat sebelum sistem quality scoring tersedia. Riset ulang untuk hasil terverifikasi.');
+  if (stats.is_fallback) warnings.push('Sebagian data memakai fallback dan tidak dianggap sebagai bukti sumber nyata.');
+  return warnings;
 }
 
 interface CategoryResearchCardProps extends CategoryActions {
   name: string;
   stats: ResearchStats;
   isGenerating: boolean;
+  /** Another title request (single or bulk) is running. */
+  titlesBusy: boolean;
+  /** Why titles cannot be generated from this research; null when they can. */
+  titleBlockReason: string | null;
   onGenerateTitles: () => void;
 }
 
 /** Card with the research results of one category. */
-export function CategoryResearchCard({ name, stats, researching, isResearchingThis, onResearch, isGenerating, onGenerateTitles }: CategoryResearchCardProps) {
+export function CategoryResearchCard({
+  name, stats, researching, isResearchingThis, onResearch, isGenerating, titlesBusy, titleBlockReason, onGenerateTitles,
+}: CategoryResearchCardProps) {
   const trendScore = stats.trend_score || 0;
-  const warning = staleWarning(stats);
+  const qualityScore = Math.min(100, Math.max(0, stats.quality_score || 0));
+  const warnings = researchWarnings(stats);
+  const titleReasonId = useId();
 
   return (
     <Card className="overflow-hidden border-border/50 shadow-md hover:shadow-xl transition-all duration-300 group">
@@ -79,7 +93,7 @@ export function CategoryResearchCard({ name, stats, researching, isResearchingTh
               Skor Tren: <span className="font-bold text-foreground">{trendScore > 0 ? `${trendScore}/100` : 'Tidak tersedia'}</span>
               <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${CONFIDENCE_CLASS[stats.confidence_level] || CONFIDENCE_CLASS.unknown}`}>
                 <ShieldCheck className="h-3 w-3" />
-                Keyakinan {CONFIDENCE_LABEL[stats.confidence_level] || 'Data lama'} · {stats.quality_score || 0}/100
+                Keyakinan {CONFIDENCE_LABEL[stats.confidence_level] || 'Data lama'} · {qualityScore}/100
               </span>
             </CardDescription>
           </div>
@@ -98,26 +112,43 @@ export function CategoryResearchCard({ name, stats, researching, isResearchingTh
                 <RefreshCw className={`h-3.5 w-3.5 ${isResearchingThis ? 'animate-spin' : ''}`} />
                 Riset Ulang (1 Kredit)
               </Button>
-              <Button
-                size="sm"
-                onClick={onGenerateTitles}
-                disabled={isGenerating}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm gap-1"
-              >
-                <Sparkles className={`h-3.5 w-3.5 ${isGenerating ? 'animate-pulse' : ''}`} />
-                {isGenerating ? 'Memproses...' : 'Buat Judul AI'}
-              </Button>
+              {/* Disabled buttons get no hover events, so the wrapper carries the tooltip. */}
+              <span title={titleBlockReason ?? undefined} className="inline-flex">
+                <Button
+                  size="sm"
+                  onClick={onGenerateTitles}
+                  disabled={isGenerating || titlesBusy || !!titleBlockReason}
+                  aria-describedby={titleBlockReason ? titleReasonId : undefined}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm gap-1"
+                >
+                  <Sparkles className={`h-3.5 w-3.5 ${isGenerating ? 'animate-pulse' : ''}`} />
+                  {isGenerating ? 'Memproses...' : 'Buat Judul AI'}
+                </Button>
+              </span>
             </div>
           </div>
         </div>
-        {warning && (
-          <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        {titleBlockReason && (
+          <p id={titleReasonId} className="mt-3 text-xs text-muted-foreground">
+            Judul AI belum bisa dibuat: {titleBlockReason}
+          </p>
+        )}
+        {warnings.map(warning => (
+          <div key={warning} className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{warning}</span>
           </div>
-        )}
-        <div className="w-full bg-secondary rounded-full h-2 mt-4 overflow-hidden">
-          <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${Math.min(100, Math.max(0, stats.quality_score || 0))}%` }} />
+        ))}
+        <div
+          role="meter"
+          aria-label="Skor kualitas riset"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={qualityScore}
+          aria-valuetext={`${qualityScore} dari 100`}
+          className="w-full bg-secondary rounded-full h-2 mt-4 overflow-hidden"
+        >
+          <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${qualityScore}%` }} />
         </div>
       </CardHeader>
 

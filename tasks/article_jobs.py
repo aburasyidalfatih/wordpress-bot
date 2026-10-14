@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from difflib import SequenceMatcher
 
 from rq import get_current_job
@@ -11,13 +11,14 @@ from core_extensions import (
     db, logger, load_config, send_telegram_notification, post_to_telegram_channel,
     post_to_facebook_page, post_to_twitter, post_to_threads, post_to_pinterest
 )
-from database import add_credits, debit_credits
+from database import USABLE_CONFIDENCE_LEVELS, add_credits, debit_credits, research_fresh_cutoff
 from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
-from services.article_generator import ArticleGenerator
+from services.ai_providers import AIProviderError
+from services.article_generator import ArticleGenerator, ArticleQualityError
 from services.content_planner import (
     load_search_metrics, topic_candidates_from_opportunities,
     keyword_demand_map, annotate_keywords_with_demand, find_content_gaps,
-    classify_intent, intent_guidance,
+    classify_intent, intent_guidance, filter_opportunities_for_topic,
 )
 from services.quality_gate import check_article, strip_invalid_internal_links
 from services.search_console import build_search_opportunities
@@ -68,9 +69,9 @@ def _merge_topic_research(seo_data, topic, category_name, language='id'):
 
     merged = dict(seo_data or {})
 
-    def combine(key, limit):
+    def combine(key, limit, category_key=None):
         # Topic-specific evidence first, category evidence as backfill.
-        values = list(topic_data.get(key) or []) + list(merged.get(key) or [])
+        values = list(topic_data.get(key) or []) + list(merged.get(category_key or key) or [])
         seen, output = set(), []
         for value in values:
             marker = value.get('url') if isinstance(value, dict) and value.get('url') else str(value)
@@ -87,7 +88,8 @@ def _merge_topic_research(seo_data, topic, category_name, language='id'):
     merged['questions'] = combine('questions', 8)
     merged['competitor_outlines'] = combine('competitor_outlines', 4)
     merged['social_insights'] = combine('social_insights', 6)
-    merged['long_tail'] = combine('long_tail_keywords', 12)
+    # Category research stores these as 'long_tail' (see _load_category_research).
+    merged['long_tail'] = combine('long_tail_keywords', 12, category_key='long_tail')
     logger.info(
         f"Merged topic research for '{topic}': "
         f"{len(merged['keywords'])} keywords, {len(merged['competitor_outlines'])} competitors"
@@ -115,7 +117,12 @@ def _attach_search_evidence(seo_data, user_id, site_id, category_name, topic=Non
 
         data = dict(seo_data or {})
         if current_rows:
-            opportunities = build_search_opportunities(current_rows, previous_rows, limit=20)
+            # Search Console data is site-wide: only queries about this article's
+            # category or topic may steer it.
+            opportunities = filter_opportunities_for_topic(
+                build_search_opportunities(current_rows, previous_rows, limit=100),
+                category_name, topic,
+            )
             data['search_queries'] = topic_candidates_from_opportunities(opportunities, limit=6)
             data['keywords'] = annotate_keywords_with_demand(
                 data.get('keywords'), keyword_demand_map(current_rows)
@@ -133,16 +140,48 @@ def _attach_search_evidence(seo_data, user_id, site_id, category_name, topic=Non
         return seo_data
 
 
+TREND_TOPIC_TYPES = ('rising', 'popular', 'trending')
+
+# A research topic whose article failed for reasons unrelated to its content is
+# handed back at most this many times before it is consumed.
+MAX_TOPIC_RESTORES = 2
+
+
+def _is_content_failure(error):
+    """True when an article failed because of what was generated, so retrying the
+    same topic would fail the same way: quality gate rejections and a provider
+    refusing the topic."""
+    if isinstance(error, (ArticleQualityError, QualityGateRejection)):
+        return True
+    return isinstance(error, AIProviderError) and 'menolak' in str(error).lower()
+
+
+def _topic_is_trending(raw_topic):
+    """True when a stored research suggestion came from Google Trends.
+
+    New suggestions carry is_trending; older ones only their type. Plain-string
+    topics carry no evidence either way and stay neutral (False).
+    """
+    if not isinstance(raw_topic, dict):
+        return False
+    if 'is_trending' in raw_topic:
+        return bool(raw_topic.get('is_trending'))
+    return raw_topic.get('type') in TREND_TOPIC_TYPES
+
+
 def _load_category_research(user_id, site_id, category_name):
-    """Recent (7 days) category research usable as evidence, or None."""
+    """Fresh, confident category research usable as evidence, or None.
+
+    Same freshness and confidence rules as the title gate (database.is_research_fresh).
+    """
     try:
         with db.get_session() as session:
             research = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
                 ResearchData.category == category_name,
-                ResearchData.confidence_level.in_(['high', 'medium', 'low']),
-                ResearchData.researched_at >= datetime.now() - timedelta(days=7),
+                ResearchData.confidence_level.in_(USABLE_CONFIDENCE_LEVELS),
+                ResearchData.researched_at >= research_fresh_cutoff(),
             ).order_by(ResearchData.created_at.desc()).first()
             if not research:
                 return None
@@ -333,13 +372,31 @@ def _build_generator(config):
 
 
 def _recent_posts_for_links(publisher):
+    """Recent posts for internal linking: [] when the site has none, None when the
+    fetch failed (then the article's links are left alone instead of every link
+    being unwrapped against an empty allow-list)."""
     try:
         posts = publisher.get_recent_posts(limit=30)
+        posts = list(posts or [])
         logger.info(f"Fetched {len(posts)} recent posts for internal linking.")
         return posts
     except Exception as e:
         logger.error(f"Failed to fetch recent posts for linking: {e}")
-        return []
+        return None
+
+
+_PROMPT_URL_RE = re.compile(r'https?://[^\s"\'<>()\[\]{}]+', re.IGNORECASE)
+
+
+def _link_allowances(article_prompt, wordpress_url):
+    """(extra allowed URLs, allowed hosts) for link stripping.
+
+    URLs the user wrote into their custom article prompt were asked for on
+    purpose, and links to the site's own domain are never foreign.
+    """
+    urls = [url.rstrip('.,;:!?') for url in _PROMPT_URL_RE.findall(article_prompt or '')]
+    hosts = [wordpress_url] if wordpress_url else []
+    return urls, hosts
 
 
 def _find_site_category(site_config, category_name):
@@ -395,11 +452,16 @@ def _find_similar_title(new_title, existing_titles):
     return False, None, None
 
 
-def _apply_quality_gate(article, warning_context, rejection_prefix):
+class QualityGateRejection(Exception):
+    """The generated article failed the pre-publish quality gate (a content failure)."""
+
+
+def _apply_quality_gate(article, warning_context, rejection_prefix, extra_allowed_urls=None, allowed_hosts=None):
     """Block truncated, too-short, template-leaking or fabricated-credential output.
 
-    Raises with rejection_prefix plus the gate errors; otherwise drops any
-    internal link the model invented, keeping the anchor text.
+    Raises QualityGateRejection with rejection_prefix plus the gate errors;
+    otherwise drops any link the model invented, keeping the anchor text. Links
+    in extra_allowed_urls or to allowed_hosts are always kept.
     """
     allowed_link_urls = article.get('allowed_link_urls')
     ok, gate_errors, gate_warnings = check_article(
@@ -410,9 +472,16 @@ def _apply_quality_gate(article, warning_context, rejection_prefix):
     for warning in gate_warnings:
         logger.warning(f"Quality gate warning ({warning_context}): {warning}")
     if not ok:
-        raise Exception(rejection_prefix + "; ".join(gate_errors))
-    if allowed_link_urls:
-        article['content'] = strip_invalid_internal_links(article['content'], allowed_link_urls)
+        raise QualityGateRejection(rejection_prefix + "; ".join(gate_errors))
+    # An empty list is a real allow-list (the site has no internal posts yet):
+    # every link outside it, external ones included, is unwrapped. None means no
+    # list was built (or the recent posts could not be fetched) and leaves the
+    # content untouched.
+    if allowed_link_urls is not None:
+        article['content'] = strip_invalid_internal_links(
+            article['content'], list(allowed_link_urls) + list(extra_allowed_urls or []),
+            allowed_hosts=allowed_hosts,
+        )
 
 
 def _generate_featured_image(generator, publisher, category_name, article, custom_prompt, site_name):
@@ -522,6 +591,9 @@ class _ArticlePostJob:
         self.category = None
         self.custom_topic = None
         self.article = None
+        # (research_id, raw_topic) of a research topic taken for this article;
+        # handed back if the article does not go out.
+        self.topic_claim = None
 
     # -- credit / item settlement -------------------------------------------
 
@@ -637,7 +709,13 @@ class _ArticlePostJob:
         existing_titles = db.get_existing_titles(self.user_id, self.site_id, self.category['name'], limit=50)
         seo_data = self._gather_seo_data()
         self._generate_article(generator, existing_titles, seo_data, recent_posts)
-        _apply_quality_gate(self.article, f"site {self.site_id}", "Artikel ditolak quality gate: ")
+        if recent_posts is None:
+            # The recent posts could not be fetched: no allow-list was really
+            # built, so stripping against an empty one would unwrap every link.
+            self.article['allowed_link_urls'] = None
+        extra_urls, hosts = _link_allowances(site_config.get('article_prompt'), site_config.get('wordpress_url'))
+        _apply_quality_gate(self.article, f"site {self.site_id}", "Artikel ditolak quality gate: ",
+                            extra_allowed_urls=extra_urls, allowed_hosts=hosts)
 
         image_data, featured_image_id, image_failed = _generate_featured_image(
             generator, publisher, self.category['name'], self.article,
@@ -695,13 +773,21 @@ class _ArticlePostJob:
 
     def _gather_seo_data(self):
         category_name = self.category['name']
-        seo_data = None
+        topic_is_trending = False
         if not self.item_id:
-            # Scheduled/category posts take an unused research topic, if any.
-            self.custom_topic = db.get_unused_research_topic(self.user_id, self.site_id, category_name)
-            if self.custom_topic:
+            # Scheduled/category posts take an unused research topic, if any. It
+            # is only spent for good once the article is published.
+            claim = db.get_unused_research_topic(self.user_id, self.site_id, category_name,
+                                                 return_claim=True)
+            if claim:
+                research_id, self.custom_topic, raw_topic = claim
+                self.topic_claim = (research_id, raw_topic)
+                topic_is_trending = _topic_is_trending(raw_topic)
                 logger.info(f"Using research topic: {self.custom_topic}")
-            seo_data = _load_category_research(self.user_id, self.site_id, category_name)
+        # Category research is the background evidence for every article. Queue
+        # items carry their own title (the topic, researched below) but used to
+        # be written without any of their category's research.
+        seo_data = _load_category_research(self.user_id, self.site_id, category_name)
 
         # Second research stage. Category-level evidence is broad; once the actual
         # topic is known, research that topic directly so the article is grounded in
@@ -713,9 +799,14 @@ class _ArticlePostJob:
         # Layer first-party Search Console evidence on top of the researched data.
         # These are queries this exact site already ranks for, so they are the most
         # reliable signal available about what the audience actually searches.
-        return _attach_search_evidence(seo_data, self.user_id, self.site_id, category_name,
-                                       topic=self.custom_topic,
-                                       language=self.site_config.get('language') or 'id')
+        seo_data = _attach_search_evidence(seo_data, self.user_id, self.site_id, category_name,
+                                           topic=self.custom_topic,
+                                           language=self.site_config.get('language') or 'id')
+        # The prompt labels the topic "trending" only when it really came from
+        # Google Trends; queue titles and other topics stay neutral.
+        if topic_is_trending and isinstance(seo_data, dict):
+            seo_data['topic_is_trending'] = True
+        return seo_data
 
     def _generate_article(self, generator, existing_titles, seo_data, recent_posts):
         """Generate the article, once more with avoid_similar if the title is a near-duplicate."""
@@ -804,10 +895,35 @@ class _ArticlePostJob:
             )
             logger.error(f"Article publish failed: {result}")
 
+    def restore_research_topic(self, error=None):
+        """Settle an unpublished research topic after a failure.
+
+        A failure caused by the content itself (quality gate, refusal) would
+        repeat with the same topic, so the topic is consumed. Anything else
+        (WordPress/network/publish errors, timeouts, transient provider errors)
+        hands it back, at most MAX_TOPIC_RESTORES times, so a topic can never
+        block the category's rotation for days.
+        """
+        claim, self.topic_claim = self.topic_claim, None
+        if not claim:
+            return
+        if error is not None and _is_content_failure(error):
+            logger.info(f"Research topic '{self.custom_topic}' consumed: the article failed on its content.")
+            return
+        try:
+            if db.restore_research_topic(*claim, max_restores=MAX_TOPIC_RESTORES):
+                logger.info(f"Research topic '{self.custom_topic}' returned for a later article.")
+            else:
+                logger.info(f"Research topic '{self.custom_topic}' consumed after repeated failures.")
+        except Exception as e:
+            logger.error(f"Could not return research topic '{self.custom_topic}': {e}")
+
     def _settle_after_publish(self, success, unconfirmed, post_url):
         """Settle the queue item and credit right after publishing, before any
         further step that could raise and send this job into the failure path."""
         if success or unconfirmed:
+            # The topic is spent: the post went out (or may have).
+            self.topic_claim = None
             if self.item_claimed and not self.item_settled:
                 _settle_queue_item(self.user_id, self.item_id, self.job_id,
                                    status='posted' if success else 'failed',
@@ -816,6 +932,7 @@ class _ArticlePostJob:
             self.credit_reserved = False
         else:
             self.release_credit('failed')
+            self.restore_research_topic()
 
     def _handle_failure(self, error):
         error_msg = str(error)
@@ -824,6 +941,8 @@ class _ArticlePostJob:
         # no-op when the outcome was already settled (e.g. the post went live
         # and a later notification step raised).
         self.release_credit('failed')
+        # A no-op once the post went out (_settle_after_publish spent the topic).
+        self.restore_research_topic(error)
 
         # Category values for the history, even if the job failed early.
         log_category_id = self.category['id'] if self.category else None
@@ -1004,6 +1123,7 @@ def regenerate_article_job(user_id, log_id):
         post_id, title = target['post_id'], target['title']
 
         logger.info(f"Regenerating article for post {post_id} - {title}")
+        recent_posts = _recent_posts_for_links(publisher)
         article = generator.generate_checked_article(
             target['category_name'],
             [],
@@ -1014,9 +1134,13 @@ def regenerate_article_job(user_id, log_id):
             site_name=target['site_name'],
             language=target['language'],
             category_desc=None,
-            internal_links_context=_recent_posts_for_links(publisher)
+            internal_links_context=recent_posts
         )
-        _apply_quality_gate(article, f"regenerate log {log_id}", "Artikel hasil regenerasi ditolak quality gate: ")
+        if recent_posts is None:
+            article['allowed_link_urls'] = None  # fetch failed: leave links alone
+        extra_urls, hosts = _link_allowances(target['article_prompt'], target['wordpress_url'])
+        _apply_quality_gate(article, f"regenerate log {log_id}", "Artikel hasil regenerasi ditolak quality gate: ",
+                            extra_allowed_urls=extra_urls, allowed_hosts=hosts)
 
         success, result = publisher.update_post_content(
             post_id,

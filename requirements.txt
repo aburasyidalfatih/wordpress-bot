@@ -20,8 +20,8 @@ cryptography==46.0.7
 psutil==7.2.2
 pytrends==4.9.2
 beautifulsoup4==4.12.3
-duckduckgo-search==6.3.2
-youtube-transcript-api==0.6.3
+ddgs==9.16.0
+youtube-transcript-api==1.2.4
 gunicorn==21.2.0
 Flask-Limiter[redis]==3.5.0
 tzdata

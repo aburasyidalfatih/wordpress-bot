@@ -126,57 +126,100 @@ def check_article(article, focus_keyword=None, allowed_link_urls=None):
     if not takeaways:
         warnings.append('No key takeaways.')
 
-    # Internal links must point at pages we actually gave the model. Anything else is
-    # a hallucinated URL and would publish a broken link.
+    # Links must point at URLs we actually gave the model. An unknown internal URL
+    # is hallucinated (a broken link); an unknown external URL is either invented
+    # or planted by scraped research text, so it is not published either.
     if allowed_link_urls is not None:
-        allowed = {u.rstrip('/') for u in allowed_link_urls if u}
+        allowed = {normalize_link_url(u) for u in allowed_link_urls if u}
         hrefs = re.findall(r'<a[^>]+href=["\']([^"\']+)["\']', content, re.IGNORECASE)
-        internal = [h for h in hrefs if h.startswith('/') or _same_site(h, allowed)]
-        invented = [h for h in internal if h.rstrip('/') not in allowed]
+        unknown = [h for h in hrefs if not _is_allowed_href(h, allowed)]
+        invented = [h for h in unknown if h.startswith('/') or _same_site(h, allowed_link_urls)]
+        external = [h for h in unknown if h not in invented]
         if invented:
             warnings.append(
                 f'{len(invented)} internal link(s) not in the supplied list and will be '
                 f'removed: {", ".join(invented[:3])}'
             )
+        if external:
+            warnings.append(
+                f'{len(external)} external link(s) not in the supplied list and will be '
+                f'unlinked: {", ".join(external[:3])}'
+            )
 
     return not errors, errors, warnings
 
 
+def link_host(url):
+    """Lower-case host of an absolute URL without a leading "www.", or ''."""
+    try:
+        host = urlparse(str(url or '').strip()).hostname or ''
+    except (ValueError, TypeError, AttributeError):  # malformed URL: no host
+        return ''
+    return host.lower().removeprefix('www.')
+
+
+def _normalize_host(value):
+    """A host given as a URL or as a bare domain, in link_host() form."""
+    value = str(value or '').strip()
+    if '//' in value:
+        return link_host(value)
+    return value.lower().removeprefix('www.').split('/')[0]
+
+
+def normalize_link_url(url):
+    """Comparable form of a link: http/https, "www." and a trailing slash do not matter."""
+    url = str(url or '').strip()
+    host = link_host(url) if '//' in url else ''
+    if not host:
+        return url.rstrip('/')
+    parsed = urlparse(url)
+    normalized = host + (parsed.path.rstrip('/') or '')
+    if parsed.query:
+        normalized += '?' + parsed.query
+    return normalized
+
+
 def _same_site(href, allowed_urls):
     """True when href shares a host with one of the allowed URLs."""
-    try:
-        host = urlparse(href).netloc
-    except (ValueError, TypeError, AttributeError):  # malformed or non-string URL: not ours
-        return False
+    host = link_host(href)
     if not host:
         return False
-    for url in allowed_urls:
-        try:
-            if urlparse(url).netloc == host:
-                return True
-        except (ValueError, TypeError, AttributeError):
-            continue
-    return False
+    return any(link_host(url) == host for url in allowed_urls or [])
 
 
-def strip_invalid_internal_links(content, allowed_link_urls):
-    """Unwrap <a> tags whose href was invented by the model.
+def _is_allowed_href(href, allowed):
+    """In the supplied (normalized) list, or an in-page anchor (#section), which cannot leak anywhere."""
+    href = (href or '').strip()
+    return href.startswith('#') or normalize_link_url(href) in allowed
 
-    Keeps the anchor text, drops the broken link.
+
+def strip_invalid_internal_links(content, allowed_link_urls, allowed_hosts=None):
+    """Unwrap <a> tags whose href is not in allowed_link_urls.
+
+    Keeps the anchor text, drops the link. Covers internal URLs the model
+    invented and external URLs, which may have been planted in the scraped
+    research the prompt contains. URLs in allowed_link_urls (internal posts, or
+    any evidence/source URL a caller adds to it) are kept, regardless of
+    http/https, "www." or a trailing slash. Absolute links to a host in
+    allowed_hosts (e.g. the site's own domain) are always kept. None means "no
+    list was built" and leaves content untouched; an empty list unlinks
+    everything else.
     """
-    if not allowed_link_urls:
+    if allowed_link_urls is None:
         return content
 
-    allowed = {u.rstrip('/') for u in allowed_link_urls if u}
+    allowed = {normalize_link_url(u) for u in allowed_link_urls if u}
+    hosts = {_normalize_host(h) for h in allowed_hosts or [] if h} - {''}
 
     def replace(match):
         href = match.group(1)
         inner = match.group(2)
-        if href.rstrip('/') in allowed:
+        if _is_allowed_href(href, allowed) or (hosts and link_host(href) in hosts):
             return match.group(0)
-        if not (href.startswith('/') or _same_site(href, allowed)):
-            return match.group(0)  # external link, leave alone
-        logger.info(f'Removing hallucinated internal link: {href}')
+        if href.startswith('/') or _same_site(href, allowed_link_urls):
+            logger.info(f'Removing hallucinated internal link: {href}')
+        else:
+            logger.info(f'Unlinking external link not in the allowed list: {href}')
         return inner
 
     return re.sub(

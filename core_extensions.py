@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 # Initialize Redis & Queue
 redis_conn = Redis.from_url(Config.REDIS_URL, protocol=2)
 q = Queue('default', connection=redis_conn)
+# Research runs for many minutes; its own queue (served by the research-worker
+# service) keeps it from delaying article posting on the default queue.
+RESEARCH_QUEUE_NAME = 'research'
+research_q = Queue(RESEARCH_QUEUE_NAME, connection=redis_conn)
 
 # Initialize database using Config
 db = Database(Config.DATABASE_URL)

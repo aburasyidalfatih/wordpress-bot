@@ -28,13 +28,14 @@ lalu menyebarkannya ke berbagai platform sosial. Monetisasi lewat sistem kredit.
             Twitter/X, Threads, Pinterest
 ```
 
-Tiga proses aplikasi berjalan dari image yang sama:
+Empat proses aplikasi berjalan dari image yang sama:
 
 | Service | Command | Fungsi |
 |---|---|---|
 | `web` | `gunicorn ... app:app` | REST API + serve SPA |
 | `worker` | `rq worker --with-scheduler` | Eksekusi job generate & post |
-| `scheduler` | `python dispatcher.py` | Loop 60 detik, enqueue job terjadwal |
+| `research-worker` | `rq worker research` | Riset kategori (manual & terjadwal), terpisah agar tidak memblokir posting |
+| `scheduler` | `python dispatcher.py` | Loop 60 detik: posting terjadwal, riset harian, pembersihan data |
 
 ## Struktur Project
 
@@ -177,11 +178,17 @@ Data Search Console tidak lagi sekadar ditampilkan — ia masuk ke pemilihan top
 ke prompt artikel sebagai bukti first-party. Setiap peluang dipetakan ke aksi yang
 tepat di `services/content_planner.py`:
 
-| Peluang | Aksi | Alasan |
+| Peluang (urutan klasifikasi) | Aksi | Alasan |
 |---|---|---|
-| `quick_win` (posisi 4–20) | Artikel baru / pendukung | Permintaan terbukti, tinggal diperkuat |
-| `low_ctr` (posisi ≤10, CTR <2%) | Rewrite title & meta | Sudah ranking; artikel baru justru bersaing sendiri |
 | `declining` (klik turun >20%) | Refresh artikel lama | Kontennya usang, bukan kurang konten |
+| `low_ctr` (posisi ≤10, CTR <2%) | Rewrite title & meta | Sudah ranking; artikel baru justru bersaing sendiri |
+| `quick_win` (posisi 4–20, selain dua di atas) | Artikel baru / pendukung | Permintaan terbukti, tinggal diperkuat |
+
+Hanya `quick_win` yang menjadi kandidat artikel/judul baru. Data Search Console
+bersifat site-wide, jadi untuk satu kategori atau topik hanya query yang relevan
+yang dipakai (`filter_opportunities_for_topic`): harus ada kata khas yang sama
+(≥4 huruf, bukan kata umum seperti "tips", "cara", "online", "terbaik") atau nama
+kategori muncul utuh di query.
 
 Tambahan lain: impressions GSC dipakai sebagai proxy volume pencarian, content gap
 dihitung dari heading kompetitor vs judul yang sudah terbit, search intent
@@ -189,12 +196,45 @@ dihitung dari heading kompetitor vs judul yang sudah terbit, search intent
 artikel, dan Google Trends kini juga mengambil jendela 12 bulan untuk mendeteksi
 pola musiman.
 
-Judul baru di-dedup terhadap seluruh antrean dan artikel terbit di situs itu —
-lintas kategori — supaya dua kategori tidak menghasilkan judul yang bersaing.
+Judul baru di-dedup terhadap 300 judul antrean terbaru (kecuali yang `failed`) dan
+artikel terbit di situs itu — lintas kategori — supaya dua kategori tidak
+menghasilkan judul yang bersaing.
 
-Auto-post memakai gate bukti yang **sama** dengan jalur manual: riset harus
-berconfidence high/medium/low dan berumur maksimal `MAX_RESEARCH_AGE_DAYS` (7 hari).
-Kalau tidak ada yang memenuhi, sistem jatuh ke rotasi kategori biasa.
+Auto-post, item Antrean, dan generate judul memakai gate bukti yang **sama**
+(`database.is_research_fresh`): riset harus berconfidence high/medium/low dan
+berumur maksimal `MAX_RESEARCH_AGE_DAYS` (7 hari). Item Antrean juga memakai riset
+kategorinya sebagai latar (judul item diriset sebagai topik, di depan). Kalau tidak
+ada riset yang memenuhi, sistem jatuh ke rotasi kategori biasa.
+
+### Menjalankan riset
+
+- **Manual** (`POST /manual-research`): 1 kredit per kategori unik (nama
+  dibandingkan tanpa spasi tepi dan tanpa beda huruf besar/kecil). Kredit untuk
+  kategori yang gagal atau tidak sempat diriset dikembalikan. Hanya satu riset per
+  website pada satu waktu (`research_lock:{site_id}` di Redis, sibuk selama job-nya
+  antre atau berjalan); permintaan kedua dijawab 409 tanpa memotong kredit. Tanpa
+  research worker aktif, permintaan ditolak 503 tanpa biaya. Progres dan hasil dibaca dari
+  `GET /api/job-status/<job_id>`; job yang sedang berjalan untuk sebuah website dari
+  `GET /api/research/active?site_id=`.
+- **Terjadwal** (dispatcher): sekali sehari pukul 00:00–00:59 zona waktu website
+  (tiap website pada menit `site_id % 50`, agar tidak serentak),
+  untuk website aktif dengan auto-post dan kategori terpilih, hanya kategori yang
+  riset terakhirnya belum ada atau lebih dari 6 hari — sehari sebelum kedaluwarsa.
+  Gratis (tidak memotong/mengembalikan kredit) dan dilewati selama riset lain
+  masih berjalan untuk website itu.
+- Semua riset berjalan di queue RQ `research` yang dilayani service
+  `research-worker`, sehingga tidak pernah menunda posting artikel di queue
+  `default`. Untuk development jalankan juga `rq worker research`.
+- Reservasi kredit riset manual dicatat di Redis (`research_charge:{job_id}`). Jika
+  worker mati mendadak (SIGKILL/OOM), dispatcher mengembalikan kredit kategori yang
+  belum diriset tepat satu kali dan melepas lock website. Job yang antre lebih dari
+  6 jam (tidak ada worker) dibatalkan lalu dikembalikan kreditnya.
+- Riset yang tidak menemukan topik artikel tetap disimpan (keyword, pertanyaan, dan
+  kompetitornya tetap berguna) tetapi dilewati saat memilih topik auto-post. Topik
+  riset baru benar-benar terpakai saat artikelnya terbit; jika gagal karena
+  kontennya topik dianggap terpakai, kegagalan lain mengembalikannya (maks. 2 kali).
+- Retensi: dispatcher menghapus riset lebih dari 90 hari setiap hari, kecuali dua
+  riset terakhir per website + kategori.
 
 ## Monitoring
 

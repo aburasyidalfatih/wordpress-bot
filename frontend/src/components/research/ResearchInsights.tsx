@@ -3,11 +3,34 @@ import { BarChart, MessageCircle, FileText, Video, ShieldCheck, ExternalLink } f
 import type { ResearchStats } from '@/lib/types';
 
 const SOURCE_STATUS: Record<string, { label: string; className: string }> = {
-  real: { label: 'nyata', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
-  partial: { label: 'sebagian', className: 'border-blue-200 bg-blue-50 text-blue-700' },
-  fallback: { label: 'fallback', className: 'border-amber-200 bg-amber-50 text-amber-700' },
+  real: { label: 'Data nyata', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  partial: { label: 'Sebagian', className: 'border-blue-200 bg-blue-50 text-blue-700' },
+  fallback: { label: 'Cadangan (fallback)', className: 'border-amber-200 bg-amber-50 text-amber-700' },
+  unavailable: { label: 'Tidak tersedia', className: 'border-border bg-muted/40 text-muted-foreground' },
 };
 const UNKNOWN_SOURCE_CLASS = 'border-border bg-background text-muted-foreground';
+
+const SOURCE_LABEL: Record<string, string> = {
+  google_trends: 'Google Trends',
+  trend_analysis: 'Analisis tren',
+  google_autocomplete: 'Google Autocomplete',
+  google_related_queries: 'Kueri terkait Google',
+  related_questions: 'Pertanyaan terkait',
+  search_console: 'Search Console',
+  competitors: 'Kompetitor',
+  social: 'Sosial',
+  news: 'Berita',
+  wikipedia: 'Wikipedia',
+  youtube: 'YouTube',
+};
+
+/** Source entries worth a chip: trend_analysis repeats google_trends when both exist. */
+function sourceEntries(metadata: ResearchStats['source_metadata']) {
+  return Object.entries(metadata || {}).filter(([provider, meta]) => (
+    meta && typeof meta === 'object' && 'status' in meta
+    && !(provider === 'trend_analysis' && metadata.google_trends)
+  ));
+}
 
 function SectionTitle({ icon, className, children }: { icon: ReactNode; className: string; children: ReactNode }) {
   return (
@@ -30,7 +53,7 @@ function KeywordsSection({ keywords }: { keywords: ResearchStats['keywords'] }) 
             return (
               <span
                 key={i}
-                title={impressions ? `${impressions} impresi di Search Console` : undefined}
+                title={impressions ? `${impressions.toLocaleString('id-ID')} impresi di Search Console` : undefined}
                 className="text-xs px-2.5 py-1 bg-background border shadow-sm rounded-full text-foreground/80 hover:text-foreground transition-colors inline-flex items-center gap-1.5"
               >
                 {text}
@@ -104,7 +127,7 @@ function CompetitorsSection({ outlines }: { outlines: ResearchStats['competitor_
 
 function VideoSection({ videos }: { videos: ResearchStats['youtube_insights'] }) {
   return (
-    <div className="p-6 space-y-4 bg-red-50/30">
+    <div className="p-6 space-y-4 bg-red-50/30 dark:bg-red-950/10">
       <SectionTitle icon={<Video className="h-4 w-4" />} className="text-red-600">Insight Video</SectionTitle>
       <div className="space-y-3">
         {videos && videos.length > 0 ? (
@@ -136,17 +159,19 @@ function SourceTransparency({ stats }: { stats: ResearchStats }) {
         Transparansi Sumber
       </div>
       <div className="flex flex-wrap gap-2">
-        {Object.entries(stats.source_metadata || {})
-          .filter(([, meta]) => meta && typeof meta === 'object' && 'status' in meta)
-          .map(([provider, meta]) => {
-            const status = meta.status ? SOURCE_STATUS[meta.status] : undefined;
-            return (
-              <span key={provider} className={`rounded-full border px-2.5 py-1 text-xs ${status?.className ?? UNKNOWN_SOURCE_CLASS}`}>
-                {provider.replaceAll('_', ' ')}: {status?.label ?? meta.status ?? 'tidak diketahui'}
-                {typeof meta.count === 'number' ? ` (${meta.count})` : ''}
-              </span>
-            );
-          })}
+        {sourceEntries(stats.source_metadata).map(([provider, meta]) => {
+          const status = meta.status ? SOURCE_STATUS[meta.status] : undefined;
+          return (
+            <span
+              key={provider}
+              title={meta.reason ? `Alasan: ${meta.reason}` : undefined}
+              className={`rounded-full border px-2.5 py-1 text-xs ${status?.className ?? UNKNOWN_SOURCE_CLASS}`}
+            >
+              {SOURCE_LABEL[provider] ?? provider.replaceAll('_', ' ')}: {status?.label ?? meta.status ?? 'Tidak diketahui'}
+              {typeof meta.count === 'number' ? ` (${meta.count.toLocaleString('id-ID')})` : ''}
+            </span>
+          );
+        })}
       </div>
 
       {stats.long_tail_keywords?.length > 0 && (

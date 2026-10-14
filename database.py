@@ -1,4 +1,6 @@
+import json
 import os
+import time
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
@@ -21,13 +23,234 @@ MIGRATION_LOCK_ID = 4207311001
 
 # Bump this whenever a new migration step is added to _run_migrations_locked so
 # that already-migrated databases re-run the set exactly once.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SCHEMA_VERSION_KEY = '__schema_version__'
 
 # Research older than this is not used to drive new articles. Shared by the
 # automated path and the manual title generator so both apply the same bar.
 MAX_RESEARCH_AGE_DAYS = 7
 USABLE_CONFIDENCE_LEVELS = ('high', 'medium', 'low')
+
+# The scheduler refreshes a category once its latest research is this old, one
+# day before MAX_RESEARCH_AGE_DAYS would make it unusable.
+SCHEDULED_RESEARCH_REFRESH_DAYS = 6
+# Research rows older than this are deleted, except the latest few per
+# site + category (the Research page compares the latest run with the previous).
+RESEARCH_RETENTION_DAYS = 90
+RESEARCH_KEEP_LATEST_RUNS = 2
+
+# Generous per-category budget: a category can spend ~20-30s across Trends,
+# autocomplete, competitor scraping, social, YouTube and news, and a slow or
+# rate-limited provider stretches that further.
+RESEARCH_SECONDS_PER_CATEGORY = 180
+RESEARCH_MIN_TIMEOUT_SECONDS = 600
+# The per-site research lock is only a safety net against a lost release: its
+# liveness comes from the RQ status of its job (queued/started/... = busy), so
+# a job waiting behind a long research backlog never loses its lock and the
+# user cannot be charged twice for the same site.
+RESEARCH_LOCK_TTL_SECONDS = 24 * 3600
+# A research job still 'queued' (never started) after this long means no
+# research worker is serving the queue: the dispatcher cancels and refunds it.
+RESEARCH_MAX_QUEUE_WAIT_SECONDS = 6 * 3600
+# A reservation record is kept at most this long if nothing ever settles it.
+RESEARCH_CHARGE_RECORD_TTL_SECONDS = 7 * 24 * 3600
+
+
+def research_fresh_cutoff(now=None):
+    """Oldest researched_at still usable. researched_at is written with local,
+    naive datetime.now() (see save_research_data), so the cutoff uses the same clock."""
+    return (now or datetime.now()) - timedelta(days=MAX_RESEARCH_AGE_DAYS)
+
+
+def is_research_fresh(researched_at, now=None):
+    """True while research is young enough to drive titles and articles.
+
+    The single freshness rule shared by the title gate, the article pipeline and
+    the Research page (is_stale), so they can never disagree.
+    """
+    if researched_at is None:
+        return False
+    return researched_at >= research_fresh_cutoff(now)
+
+
+def category_key(name):
+    """Normalized category name used for every comparison (route, job, scheduler).
+
+    Category names are stored as typed; comparing some places exactly and others
+    case-folded made a valid request research nothing. strip() + lower() is the
+    frontend's normalization too (name.trim().toLowerCase()), so the credit
+    count it shows matches what is charged.
+    """
+    return str(name or '').strip().lower()
+
+
+def research_job_timeout(category_count):
+    """RQ job timeout (seconds) for researching category_count categories."""
+    return max(RESEARCH_MIN_TIMEOUT_SECONDS, int(category_count or 0) * RESEARCH_SECONDS_PER_CATEGORY)
+
+
+# ---- Research job bookkeeping in Redis ----
+# Shared by the web app, the research job and the dispatcher (which does not
+# import core_extensions), so the functions take the Redis connection.
+#
+# research_lock:{site_id}     -> "job_id|created_epoch" of the research job queued/running for the site
+# research_charge:{job_id}    -> JSON reservation of a manual run, deleted when settled
+
+# Deletes the lock only while it belongs to ARGV[1] (value "job_id" or "job_id|epoch").
+_COMPARE_AND_DELETE_LUA = (
+    "local v = redis.call('GET', KEYS[1]) "
+    "if v and (v == ARGV[1] or string.sub(v, 1, string.len(ARGV[1]) + 1) == ARGV[1] .. '|') then "
+    "return redis.call('DEL', KEYS[1]) end return 0"
+)
+
+
+def _as_text(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    return value
+
+
+def research_lock_key(site_id):
+    return f"research_lock:{site_id}"
+
+
+def research_charge_key(job_id):
+    return f"research_charge:{job_id}"
+
+
+def acquire_research_lock(conn, site_id, job_id, ttl_seconds=None, now=None):
+    """Take the site's research lock for job_id. False when another job holds it.
+
+    The value records when the lock was taken, so a lock whose job never
+    appeared is recognised as stale after a fixed grace period.
+    """
+    created = int(now if now is not None else time.time())
+    return bool(conn.set(research_lock_key(site_id), f"{job_id}|{created}", nx=True,
+                         ex=int(ttl_seconds or RESEARCH_LOCK_TTL_SECONDS)))
+
+
+def read_research_lock(conn, site_id):
+    """(job_id, created_epoch or None) of the site's research lock, or (None, None)."""
+    raw = _as_text(conn.get(research_lock_key(site_id)))
+    if not raw:
+        return None, None
+    job_id, _, created = raw.rpartition('|')
+    if not job_id:  # value written before the creation time was recorded
+        return raw, None
+    try:
+        return job_id, float(created)
+    except ValueError:
+        return raw, None
+
+
+def get_research_lock(conn, site_id):
+    """Id of the job holding the site's research lock, or None."""
+    return read_research_lock(conn, site_id)[0]
+
+
+def release_research_lock(conn, site_id, job_id):
+    """Release the lock only while job_id still holds it (atomic compare-and-delete)."""
+    if conn is None or not site_id or not job_id:
+        return False
+    return bool(conn.eval(_COMPARE_AND_DELETE_LUA, 1, research_lock_key(site_id), job_id))
+
+
+RQ_LIVE_JOB_STATUSES = frozenset({'queued', 'started', 'scheduled', 'deferred', 'created'})
+# The route takes the lock a moment before it enqueues the job, so a lock whose
+# job does not exist (yet) is only treated as stale after this fixed grace period.
+RESEARCH_LOCK_GRACE_SECONDS = 120
+
+LOCK_FREE = 'free'
+LOCK_ACTIVE = 'active'
+LOCK_STARTING = 'starting'
+
+
+def research_lock_state(conn, site_id, job_status, now=None):
+    """State of the site's research lock: (LOCK_FREE, None), (LOCK_ACTIVE, job_id)
+    while its job is queued/started/deferred/scheduled, or (LOCK_STARTING, job_id)
+    while the lock is fresh but its job does not exist yet (being enqueued).
+
+    job_status(job_id) returns the RQ status string, or 'missing'. A lock whose
+    job ended (finished/failed/canceled/stopped) or never appeared within the
+    grace period is cleared and reported free.
+    """
+    holder, created = read_research_lock(conn, site_id)
+    if not holder:
+        return LOCK_FREE, None
+    status = job_status(holder)
+    if status in RQ_LIVE_JOB_STATUSES:
+        return LOCK_ACTIVE, holder
+    if status == 'missing' and created is not None:
+        age = (now if now is not None else time.time()) - created
+        if age < RESEARCH_LOCK_GRACE_SECONDS:
+            return LOCK_STARTING, holder
+    release_research_lock(conn, site_id, holder)
+    return LOCK_FREE, None
+
+
+def active_research_job_id(conn, site_id, job_status, now=None):
+    """Id of the research job holding the site (queued, running or being enqueued), or None."""
+    return research_lock_state(conn, site_id, job_status, now)[1]
+
+
+def record_research_charge(conn, job_id, user_id, site_id, charged, job_timeout, now=None):
+    """Record a manual run's credit reservation so it can be reconciled if the
+    job is killed without running its own refund (SIGKILL, OOM)."""
+    record = {
+        'user_id': user_id,
+        'site_id': site_id,
+        'charged': int(charged),
+        'successful': 0,
+        'created_at': float(now if now is not None else time.time()),
+        'timeout': int(job_timeout),
+    }
+    conn.set(research_charge_key(job_id), json.dumps(record), ex=RESEARCH_CHARGE_RECORD_TTL_SECONDS)
+    return record
+
+
+def read_research_charge(conn, job_id):
+    raw = conn.get(research_charge_key(job_id))
+    return json.loads(_as_text(raw)) if raw else None
+
+
+def update_research_charge(conn, job_id, record):
+    """Overwrite a reservation record (progress) only while it still exists, so a
+    record already settled by someone else is never resurrected."""
+    return bool(conn.set(research_charge_key(job_id), json.dumps(record), xx=True, keepttl=True))
+
+
+def take_research_charge(conn, job_id):
+    """Atomically remove and return a reservation record (None if already taken).
+
+    Whoever takes the record settles the reservation, so the job and the
+    dispatcher sweep can never both refund it.
+    """
+    raw = conn.getdel(research_charge_key(job_id))
+    return json.loads(_as_text(raw)) if raw else None
+
+
+def restore_research_charge(conn, job_id, record, owed=None):
+    """Put a taken reservation record back after its refund failed, so the
+    dispatcher's reconciliation retries it (needs_refund: even if the job
+    finished). owed is what is still to be refunded."""
+    record = dict(record)
+    record['needs_refund'] = True
+    if owed is not None:
+        record['owed'] = int(owed)
+    return bool(conn.set(research_charge_key(job_id), json.dumps(record), nx=True,
+                         ex=RESEARCH_CHARGE_RECORD_TTL_SECONDS))
+
+
+def research_charge_owed(record):
+    """Credits a reservation record still owes the user."""
+    if record.get('owed') is not None:
+        return max(0, int(record['owed']))
+    return max(0, int(record.get('charged') or 0) - int(record.get('successful') or 0))
+
+
+def research_charge_job_ids(conn):
+    prefix = research_charge_key('')
+    return [_as_text(key)[len(prefix):] for key in conn.scan_iter(match=prefix + '*', count=200)]
 
 
 
@@ -358,6 +581,11 @@ class Database:
                 'CREATE INDEX IF NOT EXISTS idx_research_researched_at '
                 'ON research_data (researched_at)'
             ))
+            # Serves "latest runs per category" (Research page, retention cleanup).
+            session.execute(text(
+                'CREATE INDEX IF NOT EXISTS idx_research_site_category_created '
+                'ON research_data (site_id, category, created_at)'
+            ))
 
     def migrate_search_console_foundation(self):
         """Add encrypted GSC connection fields and analytics snapshot table."""
@@ -687,44 +915,55 @@ class Database:
             research.quality_score = int(quality_score or 0)
             research.confidence_level = confidence_level or 'unknown'
             research.is_fallback = bool(is_fallback)
+            # Local naive time, the clock is_research_fresh() compares against.
             research.researched_at = researched_at or datetime.now()
 
             session.add(research)
             session.commit()
             logger.info(f"Research data saved for category: {category}")
 
-    def get_unused_research_topic(self, user_id, site_id, category):
+    def get_unused_research_topic(self, user_id, site_id, category, return_claim=False):
         """Pick the next researched topic for an automated post.
 
         Applies the same evidence bar as the manual /api/generate-titles route.
         Auto-posting runs unattended, so it must not be looser than the path a
         human is watching: stale or low-confidence research is skipped entirely.
+
+        The topic is taken off the row under a row lock so two concurrent jobs
+        cannot pop the same one. With return_claim=True the result is
+        (research_id, topic_text, raw_topic) so the caller can hand the topic
+        back with restore_research_topic() if its article fails.
         """
-        cutoff = datetime.now() - timedelta(days=MAX_RESEARCH_AGE_DAYS)
         with self.get_session() as session:
-            # Newest first, locked so two concurrent jobs cannot pop the same topic.
-            # A row with no usable topics left is marked used and skipped; it used
-            # to be returned as "nothing available" and so hid every older row.
+            # Newest first. A row whose topics ran out is marked used and skipped;
+            # it used to be returned as "nothing available" and so hid every
+            # older row. A row saved without any topic (the research found
+            # evidence but no topic) is skipped without being consumed.
             candidates = session.query(ResearchData).filter(
                 ResearchData.user_id == user_id,
                 ResearchData.site_id == site_id,
                 ResearchData.category == category,
                 ResearchData.used.is_(False),
                 ResearchData.confidence_level.in_(USABLE_CONFIDENCE_LEVELS),
-                ResearchData.researched_at >= cutoff
+                ResearchData.researched_at >= research_fresh_cutoff()
             ).order_by(ResearchData.created_at.desc()).with_for_update().all()
 
             for research in candidates:
                 topics_list = list(research.suggested_topics or [])
+                if not topics_list:
+                    continue
                 topic_text = None
+                raw_topic = None
                 while topics_list and not topic_text:
-                    topic = topics_list.pop(0)
-                    value = topic.get('topic') if isinstance(topic, dict) else topic
+                    raw_topic = topics_list.pop(0)
+                    value = raw_topic.get('topic') if isinstance(raw_topic, dict) else raw_topic
                     topic_text = str(value).strip() if value else None
                 research.suggested_topics = topics_list
                 if not topics_list:
                     research.used = True
                 if topic_text:
+                    if return_claim:
+                        return research.id, topic_text, raw_topic
                     return topic_text
 
             logger.info(
@@ -732,6 +971,62 @@ class Database:
                 f"(site_id={site_id}); falling back to category rotation."
             )
             return None
+
+    def restore_research_topic(self, research_id, raw_topic, max_restores=2):
+        """Put a topic taken by get_unused_research_topic back at the front of its row.
+
+        Called when the article written from it failed for a reason unrelated to
+        its content. The topic records how often it was handed back
+        (restore_count); once it has been restored max_restores times it is
+        consumed instead, so one topic cannot block the category for days.
+        Returns True when the topic was put back.
+        """
+        if not research_id or raw_topic is None:
+            return False
+        topic = dict(raw_topic) if isinstance(raw_topic, dict) else {'topic': str(raw_topic)}
+        restores = int(topic.get('restore_count') or 0)
+        if restores >= max_restores:
+            return False
+        topic['restore_count'] = restores + 1
+        with self.get_session() as session:
+            research = session.query(ResearchData).filter(
+                ResearchData.id == research_id
+            ).with_for_update().first()
+            if research is None:
+                return False
+            research.suggested_topics = [topic] + list(research.suggested_topics or [])
+            research.used = False
+            return True
+
+    def latest_research_times(self, user_id, site_id):
+        """{category: newest researched_at} over usable research rows of a site."""
+        from sqlalchemy import func
+        with self.get_session() as session:
+            rows = session.query(
+                ResearchData.category, func.max(ResearchData.researched_at)
+            ).filter(
+                ResearchData.user_id == user_id,
+                ResearchData.site_id == site_id,
+                ResearchData.confidence_level.in_(USABLE_CONFIDENCE_LEVELS),
+            ).group_by(ResearchData.category).all()
+            return {category: researched_at for category, researched_at in rows}
+
+    def cleanup_old_research(self, max_age_days=RESEARCH_RETENTION_DAYS,
+                             keep_latest=RESEARCH_KEEP_LATEST_RUNS, now=None):
+        """Delete research older than max_age_days, keeping the latest runs per
+        site + category. Returns the number of rows deleted."""
+        cutoff = (now or datetime.now()) - timedelta(days=max_age_days)
+        with self.get_session() as session:
+            result = session.execute(text(
+                "DELETE FROM research_data WHERE id IN ("
+                " SELECT id FROM ("
+                "  SELECT id, created_at, ROW_NUMBER() OVER ("
+                "   PARTITION BY user_id, site_id, category"
+                "   ORDER BY created_at DESC, id DESC) AS rn"
+                "  FROM research_data) ranked"
+                " WHERE ranked.rn > :keep AND ranked.created_at < :cutoff)"
+            ), {'keep': int(keep_latest), 'cutoff': cutoff})
+            return result.rowcount or 0
 
     def get_latest_research(self, user_id, site_id, category):
         with self.get_session() as session:

@@ -188,15 +188,18 @@ def build_search_opportunities(current_rows, previous_rows, limit=20):
         click_change = clicks - previous_clicks
         position_change = previous_position - position if previous_position else None
 
-        if 4 <= position <= 20:
-            opportunity_type = 'quick_win'
-            rationale = 'Impression sudah ada dan posisi berada pada rentang 4–20.'
-        elif position <= 10 and ctr < .02:
-            opportunity_type = 'low_ctr'
-            rationale = 'Sudah berada di halaman pertama tetapi CTR masih di bawah 2%.'
-        elif previous_clicks > 0 and click_change < -(previous_clicks * .2):
+        # Most specific problem first. A page that is losing clicks or already on
+        # page one with a weak CTR needs its existing article fixed; classifying
+        # it as a quick win (4-20) first turned it into a new competing article.
+        if previous_clicks > 0 and click_change < -(previous_clicks * .2):
             opportunity_type = 'declining'
             rationale = 'Klik turun lebih dari 20% dibanding periode sebelumnya.'
+        elif 0 < position <= 10 and ctr < .02:
+            opportunity_type = 'low_ctr'
+            rationale = 'Sudah berada di halaman pertama tetapi CTR masih di bawah 2%.'
+        elif 4 <= position <= 20:
+            opportunity_type = 'quick_win'
+            rationale = 'Impression sudah ada dan posisi berada pada rentang 4–20.'
         else:
             continue
 
