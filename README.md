@@ -34,7 +34,7 @@ Empat proses aplikasi berjalan dari image yang sama:
 |---|---|---|
 | `web` | `gunicorn ... app:app` | REST API + serve SPA |
 | `worker` | `rq worker --with-scheduler` | Eksekusi job generate & post |
-| `research-worker` | `rq worker research` | Riset kategori (manual & terjadwal), terpisah agar tidak memblokir posting |
+| `research-worker`, `research-worker-2` | `rq worker research` | Riset kategori (manual & terjadwal), terpisah agar tidak memblokir posting; dua worker agar antrean riset panjang tidak melewati batas tunggu 6 jam |
 | `scheduler` | `python dispatcher.py` | Loop 60 detik: posting terjadwal, riset harian, pembersihan data |
 
 ## Struktur Project
@@ -51,7 +51,7 @@ autowp/
 ├── urllib3_compat.py       # Patch kompatibilitas urllib3 untuk pytrends
 ├── dispatcher.py           # Scheduler auto-post + reaper item nyangkut
 ├── ml_optimizer.py         # Reorder kategori berdasarkan engagement
-├── seo_research.py         # SEO research (DuckDuckGo, YouTube, scraping)
+├── seo_research.py         # SEO research (Claude web / DuckDuckGo, YouTube, scraping)
 ├── trending_research.py    # Google Trends (pytrends)
 ├── routes/                 # Blueprint API
 │   ├── auth.py             # Google OAuth + login, JWT
@@ -68,6 +68,7 @@ autowp/
 ├── services/
 │   ├── article_generator.py# Generate artikel & gambar via Gemini
 │   ├── article_prompts.py  # Template prompt artikel & gambar
+│   ├── claude_research.py  # Riset web via web_search/web_fetch Claude + validasi
 │   ├── quality_gate.py     # Validasi kualitas artikel sebelum publish
 │   ├── content_planner.py  # Peluang konten dari Search Console
 │   ├── search_console.py   # Klien Google Search Console
@@ -176,6 +177,28 @@ Riset berjalan dua tahap. `research_category()` mengumpulkan bukti di level kate
 saat topik spesifik sudah dipilih, `research_topic()` meriset topik itu sendiri dan
 hasilnya digabung di depan bukti kategori. Semua provider dijalankan paralel.
 
+Mesin riset bersifat hybrid. Kalau konfigurasi AI efektif punya API key Anthropic
+(key admin yang dibagikan lewat `merge_shared_ai_config` juga berlaku),
+`services/claude_research.py` memakai tool server-side Claude `web_search` dan
+`web_fetch` (satu request per riset, total maks. 5 pencarian + 4 fetch termasuk
+lanjutan `pause_turn`, prompt caching otomatis, batas waktu keras 240 detik) untuk
+kompetitor, sumber resmi (.go.id / .gov), berita, dan konteks Wikipedia. Hasilnya
+divalidasi di kode, bukan dipercaya begitu saja: URL harus benar-benar muncul di
+hasil pencarian/fetch request itu, judul/sumber/tanggal berita diambil dari hasil
+pencarian (bukan dari teks model), setiap kutipan harus ada kata per kata di teks
+halaman yang di-fetch (kompetitor tanpa kutipan terverifikasi tidak dipakai; kurang
+dari 2 kompetitor dilengkapi scraping klasik), dan
+filter lama tetap berlaku (host resmi, domain milik sendiri, spam, URL bersih,
+batas panjang). Status `claude_web` dicatat di metadata sumber. DuckDuckGo + Jina
+Reader kini menjadi **cadangan**: dijalankan hanya untuk bagian yang tidak
+dikembalikan Claude, atau semuanya bila tidak ada key Anthropic, Claude gagal,
+atau `CLAUDE_WEB_RESEARCH=false`. Kegagalan Claude tidak pernah menggagalkan
+artikel atau job riset. Autocomplete, pertanyaan terkait, Google Trends,
+transkrip YouTube, dan insight sosial tetap memakai provider klasik. Biaya
+tambahan per riset: pencarian web $10 per 1.000 pencarian (maks. $0,05) ditambah
+token; konten halaman yang di-fetch dihitung sebagai token input. Perkiraan biaya
+per panggilan (harga Opus 5.5) dicatat di log.
+
 Data Search Console tidak lagi sekadar ditampilkan — ia masuk ke pemilihan topik dan
 ke prompt artikel sebagai bukti first-party. Setiap peluang dipetakan ke aksi yang
 tepat di `services/content_planner.py`:
@@ -225,7 +248,8 @@ ada riset yang memenuhi, sistem jatuh ke rotasi kategori biasa.
   Gratis (tidak memotong/mengembalikan kredit) dan dilewati selama riset lain
   masih berjalan untuk website itu.
 - Semua riset berjalan di queue RQ `research` yang dilayani service
-  `research-worker`, sehingga tidak pernah menunda posting artikel di queue
+  `research-worker` dan `research-worker-2` (lock per website tetap menjamin satu
+  riset per website; throttle Google Trends/DuckDuckGo berlaku per proses), sehingga tidak pernah menunda posting artikel di queue
   `default`. Untuk development jalankan juga `rq worker research`.
 - Reservasi kredit riset manual dicatat di Redis (`research_charge:{job_id}`). Jika
   worker mati mendadak (SIGKILL/OOM), dispatcher mengembalikan kredit kategori yang

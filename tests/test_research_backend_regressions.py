@@ -44,6 +44,14 @@ class LockStateTests(unittest.TestCase):
     def state(self, now):
         return database.research_lock_state(self.redis, 1, self.status, now=now)
 
+    def test_lock_ttl_outlives_queue_wait_plus_job_timeout(self):
+        self.assertEqual(database.research_lock_ttl(1), database.RESEARCH_LOCK_TTL_SECONDS)
+        for count in (1, 10, 60, 300):
+            self.assertGreaterEqual(database.research_lock_ttl(count),
+                                    database.RESEARCH_MAX_QUEUE_WAIT_SECONDS + database.research_job_timeout(count))
+        database.acquire_research_lock(self.redis, 1, 'big-job', ttl_seconds=database.research_lock_ttl(300))
+        self.assertEqual(self.redis.ttl('research_lock:1'), database.research_lock_ttl(300))
+
     def test_states(self):
         self.assertEqual(self.state(0), (database.LOCK_FREE, None))
         database.acquire_research_lock(self.redis, 1, 'job', now=1000)

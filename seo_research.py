@@ -47,7 +47,6 @@ try:
     from rq import get_current_job
 except ImportError:
     get_current_job = None
-
 logger = logging.getLogger(__name__)
 
 # Google Trends seasonality lookup doubles the request rate per category. Enable
@@ -610,6 +609,9 @@ OFFICIAL_DOMAIN_SUFFIXES = {
     'en': ('gov',),
 }
 OFFICIAL_SOURCE_LIMIT = 3
+# Claude research counts as the competitor source only with at least this many
+# competitors backed by verified passages; fewer are topped up by the classic scrape.
+CLAUDE_MIN_COMPETITORS = 2
 # More results than sources wanted: non-official hosts are dropped.
 OFFICIAL_SEARCH_RESULTS = 8
 OFFICIAL_FETCH_TIMEOUT = 15
@@ -635,9 +637,16 @@ def is_official_url(url, language='id'):
 
 
 class SEOResearch:
-    """Advanced Research using DDGS, Pytrends, and YouTube Transcripts"""
+    """Advanced Research using DDGS, Pytrends, and YouTube Transcripts.
 
-    def __init__(self, exclude_hosts=None):
+    With a Claude engine (services.claude_research.ClaudeWebResearch, set when
+    the AI config has an Anthropic key) competitors, official sources, news and
+    the Wikipedia background come from Claude's web_search/web_fetch tools; the
+    DuckDuckGo + Jina Reader providers for those parts only run as a fallback,
+    for each part Claude did not return. Without one, research is unchanged.
+    """
+
+    def __init__(self, exclude_hosts=None, claude=None):
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -646,6 +655,8 @@ class SEOResearch:
         self._status_lock = Lock()
         # Default for every exclude_hosts parameter below (see normalize_hosts).
         self.exclude_hosts = exclude_hosts
+        # Optional ClaudeWebResearch; None keeps every provider classic.
+        self.claude = claude
 
     def _excluded(self, exclude_hosts=None):
         """Normalized hosts to exclude: the argument, else the instance default."""
@@ -720,6 +731,134 @@ class SEOResearch:
                 except Exception as exc:
                     logger.error(f"DuckDuckGo provider group failed{label}: {exc}")
 
+        return collected
+
+    def _claude_research(self, topic, language, excluded, **options):
+        """Claude's validated web research parts, or None (failed / nothing usable).
+
+        Records a 'claude_web' source entry either way and never raises. It runs
+        on a worker thread (see _run_with_claude), where RQ's job timeout never
+        fires: RQ signals the job's main thread, which is waiting in
+        claude_future.result() or in a classic provider and propagates it there.
+        """
+        try:
+            result = self.claude.research(topic, language, exclude_hosts=excluded, **options)
+        except Exception as e:  # the engine should not raise; never let it fail research
+            logger.error(f"Claude web research raised for '{topic}': {type(e).__name__}: {e}")
+            result = None
+
+        model = getattr(self.claude, 'model', None)
+        if not isinstance(result, dict):
+            reason = getattr(self.claude, 'last_error', None) or 'Riset web Claude gagal; memakai sumber cadangan.'
+            self._mark_source('claude_web', 'unavailable', count=0, model=model, reason=reason)
+            return None
+        stats = result.get('stats') or {}
+        counts = {
+            'competitors': len(self._verified_competitors(result)),
+            'official_sources': len(result.get('official_sources') or []),
+            'news': len(result.get('news') or []),
+            'wikipedia': 1 if result.get('wikipedia') else 0,
+        }
+        total = sum(counts.values())
+        details = {'count': total, 'model': stats.get('model', model), 'searches': stats.get('searches'),
+                   'fetches': stats.get('fetches'), 'estimated_cost_usd': stats.get('estimated_cost_usd'),
+                   **{f'{part}_count': n for part, n in counts.items()}}
+        if not total:
+            details['reason'] = 'Tidak ada sumber dari Claude yang lolos validasi; memakai sumber cadangan.'
+        self._mark_source('claude_web', 'real' if total else 'unavailable', **details)
+        return result
+
+    @staticmethod
+    def _verified_competitors(claude):
+        """Claude competitors backed by fetched content (at least one verified passage)."""
+        return [item for item in (claude or {}).get('competitors') or []
+                if isinstance(item, dict) and item.get('key_passages')]
+
+    def _claude_part(self, claude, provider):
+        """The classic-provider value for provider from Claude's result, or None.
+
+        provider is a provider name of the research methods ('competitors',
+        'official_sources', 'news', 'wikipedia'); its source status is marked
+        real when Claude supplied it, the same way the classic provider would.
+        Competitors only count with verified passages; fewer than
+        CLAUDE_MIN_COMPETITORS of them are topped up by _run_with_claude.
+        """
+        if not claude:
+            return None
+        if provider == 'wikipedia':
+            wiki = claude.get('wikipedia')
+            if not wiki or not wiki.get('extract'):
+                return None
+            self._mark_source('wikipedia', 'real', count=1, title=wiki.get('title'), url=wiki.get('url'),
+                              via='claude_web')
+            return wiki['extract']
+        if provider == 'competitors':
+            items = self._verified_competitors(claude)
+            if len(items) < CLAUDE_MIN_COMPETITORS:
+                return None
+        else:
+            items = list(claude.get(provider) or [])
+            if not items:
+                return None
+        self._mark_source(provider, 'real', count=len(items), via='claude_web')
+        return items
+
+    def _top_up_competitors(self, claude_items, classic_items, limit):
+        """Claude's verified competitors first, then classic ones, deduplicated by URL."""
+        merged = self._deduplicate(list(claude_items) + list(classic_items or []),
+                                   key=lambda item: item.get('url') if isinstance(item, dict) else item)[:limit]
+        self._mark_source('competitors', 'real', count=len(merged), via='claude_web+duckduckgo',
+                          claude_count=len(claude_items))
+        return merged
+
+    def _run_with_claude(self, topic, language, excluded, independent, duckduckgo, replaceable, claude_options,
+                         label='', competitor_limit=4):
+        """Run the research providers, letting Claude replace the web-reading ones.
+
+        replaceable names the providers (keys of independent/duckduckgo) that
+        Claude's result can supply. Without a Claude engine this is exactly
+        _run_providers. With one, Claude runs alongside the classic-only
+        providers (so its latency overlaps theirs); then the classic provider
+        runs for each replaceable part Claude did not return. Fewer than
+        CLAUDE_MIN_COMPETITORS verified Claude competitors are topped up with
+        the classic scrape (up to competitor_limit).
+        """
+        if not self.claude:
+            return self._run_providers(independent, duckduckgo, label=label)
+
+        def only(group, names):
+            return {name: fn for name, fn in group.items() if name in names}
+
+        classic_only = (set(independent) | set(duckduckgo)) - set(replaceable)
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            claude_future = pool.submit(self._claude_research, topic, language, excluded, **claude_options)
+            collected = self._run_providers(only(independent, classic_only), only(duckduckgo, classic_only),
+                                            label=label)
+            # RQ's job timeout is raised here, in the main thread, while waiting.
+            claude = claude_future.result()
+        finally:
+            # Never block on the Claude thread, e.g. when the job timeout fired above.
+            pool.shutdown(wait=False)
+
+        missing = set()
+        for name in replaceable:
+            value = self._claude_part(claude, name)
+            if value is None:
+                missing.add(name)
+            else:
+                collected[name] = value
+        if missing:
+            fallback_ddg = only(duckduckgo, missing)
+            if fallback_ddg and only(duckduckgo, classic_only):
+                # Keep the DuckDuckGo spacing across the two groups.
+                time.sleep(DDG_CALL_SPACING_SECONDS + random.uniform(0, 1))
+            collected.update(self._run_providers(only(independent, missing), fallback_ddg,
+                                                 label=f"{label} (Claude fallback)"))
+        claude_competitors = self._verified_competitors(claude)
+        if 'competitors' in missing and claude_competitors:
+            collected['competitors'] = self._top_up_competitors(
+                claude_competitors, collected.get('competitors'), competitor_limit)
         return collected
 
     def _mark_source(self, provider, status, **details):
@@ -1452,7 +1591,8 @@ class SEOResearch:
         logger.info(f"Topic-level research: '{topic}' (category={category_name})")
         self.source_status = {}
 
-        collected = self._run_providers(
+        collected = self._run_with_claude(
+            topic, language, excluded,
             independent={
                 'suggestions': lambda: self.get_keyword_suggestions(topic, limit=10, language=language),
                 'questions': lambda: self.get_related_questions(topic, limit=8, language=language),
@@ -1464,6 +1604,10 @@ class SEOResearch:
                                                                       exclude_hosts=excluded),
                 'social': lambda: self.get_social_insights(topic, language=language),
             },
+            replaceable=('competitors', 'official_sources'),
+            claude_options={'category': category_name, 'want_news': False, 'want_wikipedia': False,
+                            'competitor_limit': 3},
+            competitor_limit=3,
             label=f" for '{topic}'",
         )
 
@@ -1505,7 +1649,8 @@ class SEOResearch:
 
         # Shown to the user by the research job status endpoint.
         update_progress(30, f'Mengumpulkan bukti untuk {category_name}...')
-        collected = self._run_providers(
+        collected = self._run_with_claude(
+            category_name, language, excluded,
             independent={
                 'suggestions': lambda: self.get_keyword_suggestions(category_name, limit=10, language=language),
                 'trend_analysis': lambda: self.get_trend_analysis(category_name, language=language),
@@ -1519,6 +1664,9 @@ class SEOResearch:
                 'youtube': lambda: self.get_youtube_insights(category_name, language=language),
                 'news': lambda: self.get_latest_news(category_name, limit=3, language=language),
             },
+            replaceable=('competitors', 'news', 'wikipedia'),
+            # Official pages are only looked up per article topic (research_topic).
+            claude_options={'want_official': False},
             label=f" for {category_name}",
         )
         update_progress(90, f'Menilai bukti untuk {category_name}...')

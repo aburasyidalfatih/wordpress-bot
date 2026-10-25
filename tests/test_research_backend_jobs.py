@@ -178,6 +178,40 @@ class ProgressTests(ResearchJobTestCase):
         self.assertEqual(self.job.snapshots[-1]['progress'], 100)
 
 
+class ClaudeEngineTests(ResearchJobTestCase):
+    def run_with(self, from_config):
+        created = []
+        original_init = getattr(FakeSEO, '__init__')
+
+        def init(seo):
+            original_init(seo)
+            created.append(seo)
+
+        factory = types.ModuleType('services.claude_research')
+        factory.from_config = from_config
+        self.add_site(['Keuangan'])
+        config = {'ai_text_provider': 'gemini', 'anthropic_api_key': 'shared-admin-key'}
+        with patch.object(FakeSEO, '__init__', init), \
+                patch.object(rj.core_extensions, 'load_config', Mock(return_value=config)) as load, \
+                patch.dict(sys.modules, {'services.claude_research': factory}):
+            result = rj.deep_research_job(1, False, 1, None)
+        return result, created, load
+
+    def test_engine_from_the_users_effective_config(self):
+        engine = object()
+        from_config = Mock(return_value=engine)
+        result, created, load = self.run_with(from_config)
+        load.assert_called_once_with(1)
+        from_config.assert_called_once_with(load.return_value)
+        self.assertIs(created[0].claude, engine)
+        self.assertEqual(result['successful_categories'], 1)
+
+    def test_factory_failure_keeps_classic_research(self):
+        result, created, _ = self.run_with(Mock(side_effect=RuntimeError('broken')))
+        self.assertFalse(hasattr(created[0], 'claude'))
+        self.assertEqual(result['successful_categories'], 1)
+
+
 class TopicTests(ResearchJobTestCase):
     def test_observed_evidence_is_passed_to_supported_parameters(self):
         self.add_site(['Keuangan'])

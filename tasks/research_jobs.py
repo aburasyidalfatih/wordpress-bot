@@ -458,6 +458,24 @@ def _load_research_plan(user_id, site_id, category, categories, force, refund):
         return site_config, site.language or 'id', selected_categories, skip_reason
 
 
+def _claude_research_engine(user_id):
+    """Claude web research engine for user_id's effective AI config, or None.
+
+    load_config merges the admin's shared AI config (merge_shared_ai_config),
+    the same config article jobs use for the text provider, so the shared
+    Anthropic key enables Claude research for every user. Any failure means
+    classic research, never a failed job.
+    """
+    try:
+        from services.claude_research import from_config
+        return from_config(core_extensions.load_config(user_id))
+    except BaseTimeoutException:
+        raise
+    except Exception as e:
+        logger.warning(f"Claude web research unavailable for user {user_id}, using classic research: {e}")
+        return None
+
+
 def _research_categories(job, refund, outcome, user_id, site_id, site_name, language, selected_categories,
                          exclude_hosts=None):
     """Research each category in turn, recording progress and outcome.
@@ -475,6 +493,11 @@ def _research_categories(job, refund, outcome, user_id, site_id, site_name, lang
     # The site's own pages must not be researched as its competitors. Set as an
     # attribute (the default for every SEOResearch lookup), not passed per call.
     seo.exclude_hosts = exclude_hosts
+    claude = _claude_research_engine(user_id)
+    if claude is not None:
+        # Competitors, news and Wikipedia via Claude's web tools; DuckDuckGo and
+        # Jina Reader only for the parts it does not return.
+        seo.claude = claude
 
     # Loaded once for the whole job rather than per category.
     gsc_queries = _load_search_console_queries(user_id, site_id)

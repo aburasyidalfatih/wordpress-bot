@@ -17,7 +17,7 @@ from routes.prompts import check_ai_helper_quota
 from database import (
     LOCK_ACTIVE, LOCK_FREE, LOCK_STARTING, MAX_RESEARCH_AGE_DAYS, USABLE_CONFIDENCE_LEVELS,
     acquire_research_lock, category_key, is_research_fresh, record_research_charge, release_research_lock,
-    research_job_timeout, research_lock_state, restore_research_charge, take_research_charge,
+    research_job_timeout, research_lock_state, research_lock_ttl, restore_research_charge, take_research_charge,
 )
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from services.ai_providers import describe_provider_error, text_provider_name
@@ -629,7 +629,7 @@ def _start_manual_research(user_id, site_id, category_name, required_credits):
     state, holder = _research_lock_state(site_id)
     if state != LOCK_FREE:
         return _research_busy_response(state, holder)
-    if not acquire_research_lock(conn, site_id, job_id):
+    if not acquire_research_lock(conn, site_id, job_id, ttl_seconds=research_lock_ttl(required_credits)):
         return _research_busy_response(*_research_lock_state(site_id))
 
     try:

@@ -136,6 +136,41 @@ services:
       redis:
         condition: service_healthy
 
+  # Second consumer of the research queue. Safe with several workers: the
+  # per-site research lock (Redis SET NX) keeps one job per site, credit
+  # reservations are settled per job with an atomic GETDEL, and the dispatcher
+  # only checks that at least one research worker exists. Two workers halve the
+  # backlog, so long multi-category jobs (360 s per category) are less likely to
+  # make a queued job hit RESEARCH_MAX_QUEUE_WAIT_SECONDS and be cancelled.
+  # Note: Google Trends / DuckDuckGo throttling is per process, so two jobs can
+  # scrape them at the same time from this server's IP.
+  research-worker-2:
+    build: .
+    restart: unless-stopped
+    command: rq worker -u redis://redis:6379/0 research
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-autowp}:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/${POSTGRES_DB:-autowpdb}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-}
+      - FERNET_KEY=${FERNET_KEY:-}
+      - AUTOWP_RUNTIME_DIR=/app/runtime
+    volumes:
+      - autowp_runtime:/app/runtime
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   scheduler:
     build: .
     restart: unless-stopped

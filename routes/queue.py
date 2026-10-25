@@ -522,12 +522,18 @@ def job_status(user_id, job_id):
         elif status == 'queued':
             message = meta.get('message') or 'Menunggu giliran di antrean...'
 
+        try:
+            timeout_seconds = int(job.timeout) if job.timeout else None
+        except (TypeError, ValueError):
+            timeout_seconds = None
         return jsonify({
             'success': True,
             'status': status,
             'progress': progress,
             'message': message,
             'result': result,
+            # The job's RQ timeout, so the UI can size how long it keeps polling.
+            'timeout_seconds': timeout_seconds,
         })
     except NoSuchJobError:
         return _error('Tugas tidak ditemukan.', 404)

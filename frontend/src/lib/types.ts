@@ -309,6 +309,8 @@ export interface JobStatusResponse {
   progress: number;
   message: string;
   result?: ResearchJobResult | null;
+  /** The job's RQ timeout (seconds), when the backend reports it. */
+  timeout_seconds?: number | null;
   error?: string;
 }
 

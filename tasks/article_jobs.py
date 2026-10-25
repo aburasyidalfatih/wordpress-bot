@@ -99,11 +99,29 @@ def _without_own_pages(seo_data, own_hosts):
     return filtered
 
 
-def _merge_topic_research(seo_data, topic, category_name, language='id', exclude_hosts=None):
+def _claude_research_engine(ai_config):
+    """Claude web research engine for the effective AI config, or None (classic research).
+
+    ai_config is the job's load_config() result, so the admin's shared
+    Anthropic key (merge_shared_ai_config) enables it for every user.
+    """
+    if not ai_config:
+        return None
+    try:
+        from services.claude_research import from_config
+        return from_config(ai_config)
+    except Exception as e:
+        logger.warning(f"Claude web research unavailable, using classic research: {e}")
+        return None
+
+
+def _merge_topic_research(seo_data, topic, category_name, language='id', exclude_hosts=None, ai_config=None):
     """Run topic-level research and merge it ahead of the category-level evidence.
 
     exclude_hosts: the site's own host(s); its pages are not used as competitors
     or sources.
+    ai_config: the effective AI config; with an Anthropic key, competitors and
+    official sources come from Claude's web tools (classic providers as fallback).
 
     Returns seo_data unchanged on failure; this is an enrichment step and must not
     be able to fail an article.
@@ -112,8 +130,12 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
         # Local import: seo_research pulls in pytrends/pandas, which are heavy
         # and do not import in every environment.
         from seo_research import SEOResearch
-        topic_data = SEOResearch().research_topic(topic, category_name, language=language,
-                                                  exclude_hosts=exclude_hosts or None)
+        research = SEOResearch()
+        claude = _claude_research_engine(ai_config)
+        if claude is not None:
+            research.claude = claude
+        topic_data = research.research_topic(topic, category_name, language=language,
+                                             exclude_hosts=exclude_hosts or None)
     except JobTimeoutException:
         raise  # the RQ job ran out of time: the job's own failure handling settles it
     except Exception as e:
@@ -889,6 +911,8 @@ class _ArticlePostJob:
 
     def _run_pipeline(self):
         config = load_config(self.user_id)
+        # Topic research uses it to pick Claude web research (see _merge_topic_research).
+        self.ai_config = config
         if not self._load_site():
             return
 
@@ -1195,7 +1219,8 @@ class _ArticlePostJob:
         # evidence about what it is really about.
         if self.custom_topic:
             seo_data = _merge_topic_research(seo_data, self.custom_topic, category_name,
-                                             self.site_config.get('language', 'id'), exclude_hosts=own_hosts)
+                                             self.site_config.get('language', 'id'), exclude_hosts=own_hosts,
+                                             ai_config=getattr(self, 'ai_config', None))
         # Before the content gaps are derived from the competitors below.
         seo_data = _without_own_pages(seo_data, own_hosts)
 
@@ -1612,7 +1637,8 @@ def regenerate_article_job(user_id, log_id):
 
 def _regenerate_article(user_id, log_id):
     try:
-        generator = _build_generator(load_config(user_id))
+        config = load_config(user_id)
+        generator = _build_generator(config)
         target = _load_regeneration_target(user_id, log_id)
         if target is None:
             db.refund_user_credits(user_id, 1)
@@ -1629,7 +1655,8 @@ def _regenerate_article(user_id, log_id):
         # quality assessment and the reviewer all work from it.
         seo_data = _load_category_research(user_id, target['site_id'], target['category_name'])
         own_hosts = _site_hosts(target['wordpress_url'])
-        seo_data = _merge_topic_research(seo_data, title, target['category_name'], language, exclude_hosts=own_hosts)
+        seo_data = _merge_topic_research(seo_data, title, target['category_name'], language, exclude_hosts=own_hosts,
+                                         ai_config=config)
         seo_data = _without_own_pages(seo_data, own_hosts)
         brief_text = _writing_brief(
             generator, title, seo_data, language=language, category_name=target['category_name'],

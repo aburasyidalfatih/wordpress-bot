@@ -18,6 +18,7 @@ const SOURCE_LABEL: Record<string, string> = {
   related_questions: 'Pertanyaan terkait',
   search_console: 'Search Console',
   competitors: 'Kompetitor',
+  claude_web: 'Riset web Claude',
   social: 'Sosial',
   news: 'Berita',
   wikipedia: 'Wikipedia',

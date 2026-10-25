@@ -147,6 +147,31 @@ class GeminiText:
         return TextResult(response.text or '', truncated)
 
 
+def claude_output_config(model):
+    """output_config for model, or None when the model rejects effort."""
+    return {'effort': CLAUDE_EFFORT} if _CLAUDE_EFFORT_MODELS.match(model or '') else None
+
+
+def open_claude_stream(client, kwargs, **request_options):
+    """The (not yet entered) stream manager for one Messages request.
+
+    Models that support it get the server-side refusal fallback: if a safety
+    classifier declines, the API re-runs the request on a fallback model inside
+    the same call instead of just refusing. request_options are SDK per-request
+    options such as timeout.
+    """
+    if kwargs.get('model') in _CLAUDE_FALLBACK_MODELS:
+        return client.beta.messages.stream(
+            betas=[CLAUDE_FALLBACK_BETA], fallbacks='default', **kwargs, **request_options)
+    return client.messages.stream(**kwargs, **request_options)
+
+
+def stream_claude_message(client, kwargs, **request_options):
+    """Final message of one streamed Messages request (see open_claude_stream)."""
+    with open_claude_stream(client, kwargs, **request_options) as active:
+        return active.get_final_message()
+
+
 class AnthropicText:
     """Claude via the Messages API.
 
@@ -170,21 +195,13 @@ class AnthropicText:
         }
         if system:
             kwargs['system'] = system
-        if _CLAUDE_EFFORT_MODELS.match(self.model):
-            kwargs['output_config'] = {'effort': CLAUDE_EFFORT}
+        output_config = claude_output_config(self.model)
+        if output_config:
+            kwargs['output_config'] = output_config
         return kwargs
 
     def generate(self, prompt, system=None, max_tokens=8192, temperature=None, top_p=None):
-        kwargs = self._request_kwargs(prompt, system, max_tokens)
-        if self.model in _CLAUDE_FALLBACK_MODELS:
-            # If a safety classifier declines, the API re-runs the request on a
-            # fallback model inside the same call instead of just refusing.
-            stream = self.client.beta.messages.stream(
-                betas=[CLAUDE_FALLBACK_BETA], fallbacks='default', **kwargs)
-        else:
-            stream = self.client.messages.stream(**kwargs)
-        with stream as active:
-            message = active.get_final_message()
+        message = stream_claude_message(self.client, self._request_kwargs(prompt, system, max_tokens))
 
         if message.stop_reason == 'refusal':
             details = getattr(message, 'stop_details', None)

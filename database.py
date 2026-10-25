@@ -41,8 +41,10 @@ RESEARCH_KEEP_LATEST_RUNS = 2
 
 # Generous per-category budget: a category can spend ~20-30s across Trends,
 # autocomplete, competitor scraping, social, YouTube and news, and a slow or
-# rate-limited provider stretches that further.
-RESEARCH_SECONDS_PER_CATEGORY = 180
+# rate-limited provider stretches that further. Claude web research (when an
+# Anthropic key is configured) may take up to its 240 s budget, after which the
+# classic fallback for the parts it did not return still has to fit.
+RESEARCH_SECONDS_PER_CATEGORY = 360
 RESEARCH_MIN_TIMEOUT_SECONDS = 600
 # The per-site research lock is only a safety net against a lost release: its
 # liveness comes from the RQ status of its job (queued/started/... = busy), so
@@ -87,6 +89,23 @@ def category_key(name):
 def research_job_timeout(category_count):
     """RQ job timeout (seconds) for researching category_count categories."""
     return max(RESEARCH_MIN_TIMEOUT_SECONDS, int(category_count or 0) * RESEARCH_SECONDS_PER_CATEGORY)
+
+
+# Slack between the longest a job can legitimately hold its site lock (queue
+# wait plus run time) and the lock's expiry.
+RESEARCH_LOCK_TTL_MARGIN_SECONDS = 3600
+
+
+def research_lock_ttl(category_count):
+    """TTL (seconds) of the site research lock for a job of category_count categories.
+
+    Never shorter than the job can be queued (until the dispatcher cancels it)
+    plus its timeout, so the lock cannot expire under a live job however many
+    categories it researches.
+    """
+    return max(RESEARCH_LOCK_TTL_SECONDS,
+               RESEARCH_MAX_QUEUE_WAIT_SECONDS + research_job_timeout(category_count)
+               + RESEARCH_LOCK_TTL_MARGIN_SECONDS)
 
 
 # ---- Research job bookkeeping in Redis ----

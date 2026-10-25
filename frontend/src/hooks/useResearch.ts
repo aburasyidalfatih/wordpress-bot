@@ -8,9 +8,15 @@ import type { JobStatusResponse, ResearchDataResponse, ResearchJobResult } from 
 
 const JOB_POLL_INTERVAL_MS = 2000;
 // Safety net so the UI never spins forever. Normal ends (finished, failed,
-// timed out, missing job) are reported by /api/job-status; the backend allows
-// 180 s per category and the job may also wait behind others in the queue.
-const JOB_MAX_DURATION_MS = 3 * 60 * 60 * 1000;
+// timed out, missing job) are reported by /api/job-status. Mirrors the backend
+// (database.py): a job may wait RESEARCH_MAX_QUEUE_WAIT_SECONDS (6 h) in the
+// queue before the dispatcher cancels it, then runs for its RQ timeout,
+// research_job_timeout(n) = max(600 s, n x 360 s per category). /api/job-status
+// reports the real timeout, which replaces the default below once known.
+const RESEARCH_QUEUE_WAIT_MS = 6 * 60 * 60 * 1000;
+const RESEARCH_MIN_TIMEOUT_MS = 600 * 1000;
+const JOB_DURATION_MARGIN_MS = 15 * 60 * 1000;
+const JOB_MAX_DURATION_MS = RESEARCH_QUEUE_WAIT_MS + RESEARCH_MIN_TIMEOUT_MS + JOB_DURATION_MARGIN_MS;
 // Consecutive failed status checks (network error, 5xx, non-JSON body) tolerated
 // before polling gives up. A 404 ends polling at once: the job does not exist.
 const MAX_POLL_FAILURES = 3;
@@ -240,6 +246,7 @@ export function useResearch(siteId: number | null) {
 
     const controller = new AbortController();
     const startedAt = Date.now();
+    let maxDurationMs = JOB_MAX_DURATION_MS;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let failures = 0;
     let stopped = false;
@@ -277,7 +284,7 @@ export function useResearch(siteId: number | null) {
 
     const poll = async () => {
       if (stopped) return;
-      if (Date.now() - startedAt > JOB_MAX_DURATION_MS) {
+      if (Date.now() - startedAt > maxDurationMs) {
         stopPolling({ text: 'Riset terlalu lama dan pemantauan dihentikan. Muat ulang halaman untuk melihat hasil terbaru.', tone: 'error' });
         return;
       }
@@ -302,6 +309,11 @@ export function useResearch(siteId: number | null) {
         return;
       }
       failures = 0;
+      const timeoutSeconds = Number(payload.timeout_seconds);
+      if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
+        maxDurationMs = Math.max(JOB_MAX_DURATION_MS,
+          RESEARCH_QUEUE_WAIT_MS + timeoutSeconds * 1000 + JOB_DURATION_MARGIN_MS);
+      }
 
       if (payload.status === 'finished') {
         stopPolling(describeJobOutcome(payload.result));

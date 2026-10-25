@@ -15,7 +15,7 @@ from database import (
     Database, add_credits, RESEARCH_MAX_QUEUE_WAIT_SECONDS, RESEARCH_MIN_TIMEOUT_SECONDS,
     RQ_LIVE_JOB_STATUSES, SCHEDULED_RESEARCH_REFRESH_DAYS, acquire_research_lock,
     active_research_job_id, category_key, read_research_charge, read_research_lock, release_research_lock,
-    research_charge_job_ids, research_charge_owed, research_job_timeout, research_lock_key,
+    research_charge_job_ids, research_charge_owed, research_job_timeout, research_lock_key, research_lock_ttl,
     restore_research_charge, take_research_charge,
 )
 from models import ContentQueue, WordPressSite, User
@@ -410,7 +410,7 @@ def _schedule_daily_research(site, now_site=None):
 
         job_id = f"research-sched-{site_id}-{uuid.uuid4().hex}"
         timeout_seconds = research_job_timeout(len(stale))
-        if not acquire_research_lock(redis_conn, site_id, job_id):
+        if not acquire_research_lock(redis_conn, site_id, job_id, ttl_seconds=research_lock_ttl(len(stale))):
             return None
         if not redis_conn.set(schedule_key, job_id, nx=True, ex=RESEARCH_SCHEDULE_KEY_TTL_SECONDS):
             release_research_lock(redis_conn, site_id, job_id)

@@ -312,6 +312,30 @@ class TopicResearchMergeTests(unittest.TestCase):
             jobs._merge_topic_research({}, 'Dana darurat', 'Keuangan', exclude_hosts=['example.com'])
         self.assertEqual(research.call_args.kwargs['exclude_hosts'], ['example.com'])
 
+    def test_claude_engine_comes_from_the_effective_ai_config(self):
+        instances = []
+
+        def make_research():
+            instance = Mock(research_topic=Mock(return_value={}), claude=None)
+            instances.append(instance)
+            return instance
+
+        seo = types.ModuleType('seo_research')
+        seo.SEOResearch = make_research
+        engine = object()
+        factory = types.ModuleType('services.claude_research')
+        factory.from_config = Mock(side_effect=lambda config: engine if config.get('anthropic_api_key') else None)
+        config = {'ai_text_provider': 'gemini', 'anthropic_api_key': 'shared-admin-key'}
+        with patch.dict(sys.modules, {'seo_research': seo, 'services.claude_research': factory}):
+            jobs._merge_topic_research({}, 'Dana darurat', 'Keuangan', ai_config=config)
+            jobs._merge_topic_research({}, 'Dana darurat', 'Keuangan', ai_config={'gemini_api_key': 'g'})
+            jobs._merge_topic_research({}, 'Dana darurat', 'Keuangan')
+        self.assertIs(instances[0].claude, engine)
+        self.assertIsNone(instances[1].claude)
+        self.assertIsNone(instances[2].claude)
+        factory.from_config.assert_any_call(config)
+        self.assertEqual(factory.from_config.call_count, 2)  # no config: not even asked
+
     def test_rq_job_timeout_is_not_swallowed(self):
         seo = types.ModuleType('seo_research')
         seo.SEOResearch = lambda: Mock(research_topic=Mock(side_effect=JobTimeoutException('timeout')))
