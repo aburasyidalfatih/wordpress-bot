@@ -17,6 +17,7 @@ from database import (
 )
 from models import WordPressSite
 from services.content_planner import load_search_metrics, text_matches_topic
+from services.research_notes import evidence_warnings
 from services.wp_publisher import WordPressPublisher
 
 MIN_RESEARCH_QUALITY_SCORE = 35
@@ -288,14 +289,12 @@ def _research_category(seo, user_id, site_id, category_name, language, gsc_queri
         trend_score=trend_score,
         semantic_context=seo_data.get('semantic_context', ''),
         news_insights=seo_data.get('news_insights', []),
+        official_sources=seo_data.get('official_sources') or [],
         source_metadata=source_metadata,
         quality_score=quality_score,
         confidence_level=confidence_level,
-        is_fallback=any(
-            meta.get('status') == 'fallback'
-            for meta in source_metadata.values()
-            if isinstance(meta, dict)
-        ),
+        # Only missing writer evidence counts, not optional sources (see research_notes).
+        is_fallback=bool(evidence_warnings(source_metadata)),
     )
     if suggestions:
         logger.info(f"Research completed for {category_name}: {len(suggestions)} topics found")
@@ -467,8 +466,11 @@ def _claude_research_engine(user_id):
     classic research, never a failed job.
     """
     try:
+        config = core_extensions.load_config(user_id)
+        if not (isinstance(config, dict) and config.get('anthropic_api_key')):
+            return None  # no key: classic research, without importing the SDK
         from services.claude_research import from_config
-        return from_config(core_extensions.load_config(user_id))
+        return from_config(config)
     except BaseTimeoutException:
         raise
     except Exception as e:

@@ -610,8 +610,28 @@ OFFICIAL_DOMAIN_SUFFIXES = {
 }
 OFFICIAL_SOURCE_LIMIT = 3
 # Claude research counts as the competitor source only with at least this many
-# competitors backed by verified passages; fewer are topped up by the classic scrape.
+# good competitors (CLAUDE_GOOD_PASSAGES or more verified passages each); fewer
+# are topped up by the classic scrape. Thin pages (fewer passages: a meta
+# description, a script-rendered page) never count towards it.
 CLAUDE_MIN_COMPETITORS = 2
+CLAUDE_GOOD_PASSAGES = 2
+# Verified reader questions Claude needs to replace Google Suggest questions.
+CLAUDE_MIN_QUESTIONS = 3
+# Source status key of each part Claude can supply (the rest use the part name).
+CLAUDE_PART_SOURCES = {'questions': 'related_questions'}
+# A category name with no Google Trends data is retried once with its first
+# significant words ("Emergency Fund and Financial Safety" -> "emergency fund").
+TREND_HEAD_TERM_WORDS = 2
+
+
+def trend_head_term(name, language='id', words=TREND_HEAD_TERM_WORDS):
+    """The first `words` significant words of name, lower-cased; '' when that is not shorter."""
+    raw = re.findall(r"[^\W_]+", str(name or ''))
+    picked = [word.lower() for word in raw if significant_tokens(word, language)][:words]
+    term = ' '.join(picked)
+    return term if term and term != ' '.join(word.lower() for word in raw) else ''
+
+
 # More results than sources wanted: non-official hosts are dropped.
 OFFICIAL_SEARCH_RESULTS = 8
 OFFICIAL_FETCH_TIMEOUT = 15
@@ -753,13 +773,17 @@ class SEOResearch:
             self._mark_source('claude_web', 'unavailable', count=0, model=model, reason=reason)
             return None
         stats = result.get('stats') or {}
+        good, thin = self._split_claude_competitors(result)
         counts = {
-            'competitors': len(self._verified_competitors(result)),
+            'competitors': len(good) + len(thin),
+            'thin_competitors': len(thin),
             'official_sources': len(result.get('official_sources') or []),
             'news': len(result.get('news') or []),
-            'wikipedia': 1 if result.get('wikipedia') else 0,
+            'social': len(result.get('social') or []),
+            'questions': len(result.get('questions') or []),
+            'youtube': len(result.get('youtube') or []),
         }
-        total = sum(counts.values())
+        total = sum(n for part, n in counts.items() if part != 'thin_competitors')
         details = {'count': total, 'model': stats.get('model', model), 'searches': stats.get('searches'),
                    'fetches': stats.get('fetches'), 'estimated_cost_usd': stats.get('estimated_cost_usd'),
                    **{f'{part}_count': n for part, n in counts.items()}}
@@ -769,46 +793,59 @@ class SEOResearch:
         return result
 
     @staticmethod
-    def _verified_competitors(claude):
-        """Claude competitors backed by fetched content (at least one verified passage)."""
-        return [item for item in (claude or {}).get('competitors') or []
-                if isinstance(item, dict) and item.get('key_passages')]
+    def _split_claude_competitors(claude):
+        """(good, thin) Claude competitors: good ones have CLAUDE_GOOD_PASSAGES or
+        more verified passages, thin ones fewer (but at least one)."""
+        good, thin = [], []
+        for item in (claude or {}).get('competitors') or []:
+            if not isinstance(item, dict) or not item.get('key_passages'):
+                continue
+            (good if len(item['key_passages']) >= CLAUDE_GOOD_PASSAGES else thin).append(item)
+        return good, thin
 
-    def _claude_part(self, claude, provider):
-        """The classic-provider value for provider from Claude's result, or None.
+    def _claude_part(self, claude, name, language='id'):
+        """The classic-provider value for provider `name` from Claude's result, or None.
 
-        provider is a provider name of the research methods ('competitors',
-        'official_sources', 'news', 'wikipedia'); its source status is marked
-        real when Claude supplied it, the same way the classic provider would.
-        Competitors only count with verified passages; fewer than
-        CLAUDE_MIN_COMPETITORS of them are topped up by _run_with_claude.
+        name is a provider key of the research methods ('competitors',
+        'official_sources', 'news', 'social', 'questions', 'youtube'); its
+        source status is marked the same way the classic provider would. None
+        means the classic provider runs instead:
+          - competitors: fewer than CLAUDE_MIN_COMPETITORS good pages (thin pages
+            never count; _run_with_claude tops them up);
+          - questions: fewer than CLAUDE_MIN_QUESTIONS verified questions;
+          - youtube: no video; the videos' transcripts are fetched here.
         """
         if not claude:
             return None
-        if provider == 'wikipedia':
-            wiki = claude.get('wikipedia')
-            if not wiki or not wiki.get('extract'):
-                return None
-            self._mark_source('wikipedia', 'real', count=1, title=wiki.get('title'), url=wiki.get('url'),
-                              via='claude_web')
-            return wiki['extract']
-        if provider == 'competitors':
-            items = self._verified_competitors(claude)
+        if name == 'competitors':
+            items = self._split_claude_competitors(claude)[0]
             if len(items) < CLAUDE_MIN_COMPETITORS:
                 return None
+        elif name == 'questions':
+            items = [q for q in claude.get('questions') or [] if isinstance(q, str) and q]
+            if len(items) < CLAUDE_MIN_QUESTIONS:
+                return None
+        elif name == 'youtube':
+            videos = [v for v in claude.get('youtube') or [] if isinstance(v, dict) and v.get('url')]
+            if not videos:
+                return None
+            return self.youtube_insights_for([(v['url'], v.get('title')) for v in videos], language=language,
+                                             via='claude_web')
         else:
-            items = list(claude.get(provider) or [])
+            items = list(claude.get(name) or [])
             if not items:
                 return None
-        self._mark_source(provider, 'real', count=len(items), via='claude_web')
+        self._mark_source(CLAUDE_PART_SOURCES.get(name, name), 'real', count=len(items), via='claude_web')
         return items
 
-    def _top_up_competitors(self, claude_items, classic_items, limit):
-        """Claude's verified competitors first, then classic ones, deduplicated by URL."""
-        merged = self._deduplicate(list(claude_items) + list(classic_items or []),
+    def _top_up_competitors(self, good, classic_items, thin, limit):
+        """Good Claude competitors, then classic ones, then thin Claude ones; by URL, up to limit."""
+        merged = self._deduplicate(list(good) + list(classic_items or []) + list(thin),
                                    key=lambda item: item.get('url') if isinstance(item, dict) else item)[:limit]
-        self._mark_source('competitors', 'real', count=len(merged), via='claude_web+duckduckgo',
-                          claude_count=len(claude_items))
+        # Only thin pages (one verified passage each) are partial evidence.
+        status = 'real' if (good or classic_items) else 'partial'
+        self._mark_source('competitors', status, count=len(merged), via='claude_web+duckduckgo',
+                          claude_count=len(good), thin_count=len(thin))
         return merged
 
     def _run_with_claude(self, topic, language, excluded, independent, duckduckgo, replaceable, claude_options,
@@ -819,9 +856,9 @@ class SEOResearch:
         Claude's result can supply. Without a Claude engine this is exactly
         _run_providers. With one, Claude runs alongside the classic-only
         providers (so its latency overlaps theirs); then the classic provider
-        runs for each replaceable part Claude did not return. Fewer than
-        CLAUDE_MIN_COMPETITORS verified Claude competitors are topped up with
-        the classic scrape (up to competitor_limit).
+        runs for each replaceable part Claude did not return. When Claude has
+        fewer than CLAUDE_MIN_COMPETITORS good competitors, the classic scrape
+        tops them up (up to competitor_limit), with thin Claude pages last.
         """
         if not self.claude:
             return self._run_providers(independent, duckduckgo, label=label)
@@ -843,7 +880,7 @@ class SEOResearch:
 
         missing = set()
         for name in replaceable:
-            value = self._claude_part(claude, name)
+            value = self._claude_part(claude, name, language)
             if value is None:
                 missing.add(name)
             else:
@@ -855,10 +892,10 @@ class SEOResearch:
                 time.sleep(DDG_CALL_SPACING_SECONDS + random.uniform(0, 1))
             collected.update(self._run_providers(only(independent, missing), fallback_ddg,
                                                  label=f"{label} (Claude fallback)"))
-        claude_competitors = self._verified_competitors(claude)
-        if 'competitors' in missing and claude_competitors:
-            collected['competitors'] = self._top_up_competitors(
-                claude_competitors, collected.get('competitors'), competitor_limit)
+        good, thin = self._split_claude_competitors(claude)
+        if 'competitors' in missing and (good or thin):
+            collected['competitors'] = self._top_up_competitors(good, collected.get('competitors'), thin,
+                                                                competitor_limit)
         return collected
 
     def _mark_source(self, provider, status, **details):
@@ -1137,6 +1174,27 @@ class SEOResearch:
             logger.error(f"Pytrends error for {keyword}: {e}")
             self._mark_source('google_trends', 'unavailable', reason=type(e).__name__)
         return unavailable
+
+    def get_category_trend(self, category_name, language='id'):
+        """get_trend_analysis for category_name, retried once with its head term.
+
+        Long category names ("Emergency Fund and Financial Safety") often have no
+        Trends data; the shorter head term ("emergency fund") usually does. The
+        term actually scored is recorded as trend_term (source metadata and the
+        analysis), so the UI can say which term the score is for.
+        """
+        analysis = self.get_trend_analysis(category_name, language=language)
+        reason = (self.source_status.get('google_trends') or {}).get('reason')
+        head = trend_head_term(category_name, language)
+        if analysis.get('status') == 'real' or reason not in ('no_data', 'no_interest') or not head:
+            return analysis
+        logger.info(f"No Google Trends data for '{category_name}'; retrying with head term '{head}'.")
+        retried = self.get_trend_analysis(head, language=language)
+        if retried.get('status') == 'real':
+            with self._status_lock:
+                self.source_status['google_trends']['trend_term'] = head
+            return {**retried, 'term': head}
+        return analysis
 
     @staticmethod
     def _get_seasonality(pytrends, keyword, geo):
@@ -1426,7 +1484,6 @@ class SEOResearch:
 
     def get_youtube_insights(self, keyword, language='id', max_videos=2):
         """Find top YouTube videos and get a transcript excerpt for each"""
-        insights = []
         ddgs = self._new_ddgs()
         if not ddgs or not YouTubeTranscriptApi:
             self._mark_source('youtube', 'unavailable', count=0)
@@ -1441,24 +1498,36 @@ class SEOResearch:
             self._mark_source('youtube', 'unavailable', count=0, reason=type(e).__name__)
             return []
 
+        return self.youtube_insights_for([(res.get('href', ''), res.get('title')) for res in results],
+                                         language=language, max_videos=max_videos)
+
+    def youtube_insights_for(self, videos, language='id', max_videos=2, **status_details):
+        """Transcript excerpts for (url, title) video candidates, in order.
+
+        A video whose transcript cannot be fetched (none published, disabled,
+        or YouTube blocking this server's IP) is kept title-only with
+        transcript_available False; nothing is invented. Marks the 'youtube'
+        source: real with a transcript, partial with videos only.
+        """
+        insights = []
         langs = ['en', 'id'] if language == 'en' else ['id', 'en']
         seen_ids = set()
-        for res in results:
-            url = res.get('href', '')
+        for url, title in videos:
             video_id = extract_youtube_video_id(url)
             if not video_id or video_id in seen_ids:
                 continue
             seen_ids.add(video_id)
             snippets = ''
-            try:
-                snippets = transcript_excerpt(self._fetch_transcript(video_id, langs))
-            except Exception as ex:
-                # NoTranscriptFound, TranscriptsDisabled, IpBlocked, ... all
-                # subclass CouldNotRetrieveTranscript; network errors land here too.
-                logger.warning(f"No transcript for video {video_id}: {type(ex).__name__}: {ex}")
+            if YouTubeTranscriptApi:
+                try:
+                    snippets = transcript_excerpt(self._fetch_transcript(video_id, langs))
+                except Exception as ex:
+                    # NoTranscriptFound, TranscriptsDisabled, IpBlocked, ... all
+                    # subclass CouldNotRetrieveTranscript; network errors land here too.
+                    logger.warning(f"No transcript for video {video_id}: {type(ex).__name__}: {ex}")
             insights.append({
                 'video_id': video_id,
-                'title': res.get('title'),
+                'title': title,
                 'url': url,
                 'snippets': snippets,
                 'transcript_available': bool(snippets),
@@ -1471,7 +1540,7 @@ class SEOResearch:
             status = 'unavailable'
         else:
             status = 'real' if transcript_count else 'partial'
-        self._mark_source('youtube', status, count=len(insights), transcripts=transcript_count)
+        self._mark_source('youtube', status, count=len(insights), transcripts=transcript_count, **status_details)
         return insights
 
     def _real_only(self, provider, items):
@@ -1604,9 +1673,9 @@ class SEOResearch:
                                                                       exclude_hosts=excluded),
                 'social': lambda: self.get_social_insights(topic, language=language),
             },
-            replaceable=('competitors', 'official_sources'),
-            claude_options={'category': category_name, 'want_news': False, 'want_wikipedia': False,
-                            'competitor_limit': 3},
+            replaceable=('competitors', 'official_sources', 'social', 'questions'),
+            claude_options={'category': category_name, 'want_news': False, 'want_youtube': False,
+                            'competitor_limit': 3, 'question_limit': 8},
             competitor_limit=3,
             label=f" for '{topic}'",
         )
@@ -1649,24 +1718,30 @@ class SEOResearch:
 
         # Shown to the user by the research job status endpoint.
         update_progress(30, f'Mengumpulkan bukti untuk {category_name}...')
+        duckduckgo = {
+            'competitors': lambda: self.analyze_competitors(category_name, language=language,
+                                                            exclude_hosts=excluded),
+            'social': lambda: self.get_social_insights(category_name, language=language),
+            'youtube': lambda: self.get_youtube_insights(category_name, language=language),
+            'news': lambda: self.get_latest_news(category_name, limit=3, language=language),
+        }
+        if self.claude:
+            # Official pages per category come with Claude research; the classic
+            # lookup only runs as its fallback (classic research is unchanged).
+            duckduckgo['official_sources'] = lambda: self.get_official_sources(
+                category_name, language=language, exclude_hosts=excluded)
         collected = self._run_with_claude(
             category_name, language, excluded,
             independent={
                 'suggestions': lambda: self.get_keyword_suggestions(category_name, limit=10, language=language),
-                'trend_analysis': lambda: self.get_trend_analysis(category_name, language=language),
+                'trend_analysis': lambda: self.get_category_trend(category_name, language=language),
                 'questions': lambda: self.get_related_questions(category_name, limit=10, language=language),
+                # Always the free Wikipedia API (no DuckDuckGo, no Claude fetch).
                 'wikipedia': lambda: self.get_wikipedia_context(category_name, language=language),
             },
-            duckduckgo={
-                'competitors': lambda: self.analyze_competitors(category_name, language=language,
-                                                                exclude_hosts=excluded),
-                'social': lambda: self.get_social_insights(category_name, language=language),
-                'youtube': lambda: self.get_youtube_insights(category_name, language=language),
-                'news': lambda: self.get_latest_news(category_name, limit=3, language=language),
-            },
-            replaceable=('competitors', 'news', 'wikipedia'),
-            # Official pages are only looked up per article topic (research_topic).
-            claude_options={'want_official': False},
+            duckduckgo=duckduckgo,
+            replaceable=('competitors', 'official_sources', 'news', 'social', 'questions', 'youtube'),
+            claude_options={'want_youtube': True, 'question_limit': 10},
             label=f" for {category_name}",
         )
         update_progress(90, f'Menilai bukti untuk {category_name}...')
@@ -1675,6 +1750,7 @@ class SEOResearch:
         trend_analysis = collected.get('trend_analysis') or {'score': None, 'status': 'unavailable'}
         trend_score = trend_analysis.get('score') or 0
         competitor_outlines = collected.get('competitors') or []
+        official_sources = collected.get('official_sources') or []
         social_insights = collected.get('social') or []
         youtube_insights = collected.get('youtube') or []
         questions = collected.get('questions') or []
@@ -1709,6 +1785,7 @@ class SEOResearch:
             'trend_score': trend_score,
             'trend_analysis': trend_analysis,
             'competitor_outlines': competitor_outlines,
+            'official_sources': official_sources,
             'social_insights': social_insights,
             'youtube_insights': youtube_insights,
             # May contain offline fallback phrases; UI hints only.

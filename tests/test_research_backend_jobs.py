@@ -178,6 +178,36 @@ class ProgressTests(ResearchJobTestCase):
         self.assertEqual(self.job.snapshots[-1]['progress'], 100)
 
 
+class SavedEvidenceTests(ResearchJobTestCase):
+    def run_with(self, extra_metadata, **extra):
+        original = FakeSEO.research_category
+
+        def research_category(seo, name, language='id'):
+            data = original(seo, name, language)
+            data['source_metadata'].update(extra_metadata)
+            data.update(extra)
+            return data
+
+        self.add_site(['Keuangan'])
+        with patch.object(FakeSEO, 'research_category', research_category):
+            rj.deep_research_job(1, False, 1, None)
+        with self.db.get_session() as s:
+            row = s.query(ResearchData).first()
+            return row.is_fallback, row.official_sources
+
+    def test_optional_sources_missing_is_not_fallback(self):
+        official = [{'title': 'OJK', 'url': 'https://www.ojk.go.id/x', 'passages': ['p']}]
+        is_fallback, saved = self.run_with({'social': {'status': 'unavailable'}, 'youtube': {'status': 'unavailable'},
+                                            'related_questions': {'status': 'real'}}, official_sources=official)
+        self.assertFalse(is_fallback)
+        self.assertEqual(saved, official)
+
+    def test_template_questions_are_flagged(self):
+        is_fallback, saved = self.run_with({'related_questions': {'status': 'fallback'}})
+        self.assertTrue(is_fallback)
+        self.assertEqual(saved, [])
+
+
 class ClaudeEngineTests(ResearchJobTestCase):
     def run_with(self, from_config):
         created = []

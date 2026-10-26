@@ -53,13 +53,24 @@ export function EmptyCategoryCard({ category, researching, isResearchingThis, on
   );
 }
 
-/** Every caveat that applies to the research; age and fallback can both apply. */
+/** Every caveat that applies to the research; age and missing evidence can both apply. */
 function researchWarnings(stats: ResearchStats): string[] {
   const warnings: string[] = [];
   if (stats.is_stale) warnings.push('Data ini berusia lebih dari 7 hari. Riset ulang sebelum membuat keputusan konten.');
   else if (stats.confidence_level === 'unknown') warnings.push('Data ini dibuat sebelum sistem quality scoring tersedia. Riset ulang untuk hasil terverifikasi.');
-  if (stats.is_fallback) warnings.push('Sebagian data memakai fallback dan tidak dianggap sebagai bukti sumber nyata.');
+  if (stats.fallback_warnings) {
+    // Names the writer evidence that is missing; optional sources are shown separately.
+    warnings.push(...stats.fallback_warnings);
+  } else if (stats.is_fallback) {
+    warnings.push('Sebagian data memakai fallback dan tidak dianggap sebagai bukti sumber nyata.');
+  }
   return warnings;
+}
+
+/** "Skor Tren (emergency fund):" when the score was measured for the shorter head term. */
+function trendLabel(stats: ResearchStats): string {
+  const term = stats.source_metadata?.google_trends?.trend_term;
+  return term ? `Skor Tren (${term}):` : 'Skor Tren:';
 }
 
 interface CategoryResearchCardProps extends CategoryActions {
@@ -90,7 +101,7 @@ export function CategoryResearchCard({
             <CardTitle className="text-2xl capitalize mb-2 group-hover:text-primary transition-colors">{name}</CardTitle>
             <CardDescription className="flex flex-wrap items-center gap-2">
               <TrendingUp className="h-4 w-4 text-green-500" />
-              Skor Tren: <span className="font-bold text-foreground">{trendScore > 0 ? `${trendScore}/100` : 'Tidak tersedia'}</span>
+              {trendLabel(stats)} <span className="font-bold text-foreground">{trendScore > 0 ? `${trendScore}/100` : 'Tidak tersedia'}</span>
               <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${CONFIDENCE_CLASS[stats.confidence_level] || CONFIDENCE_CLASS.unknown}`}>
                 <ShieldCheck className="h-3 w-3" />
                 Keyakinan {CONFIDENCE_LABEL[stats.confidence_level] || 'Data lama'} · {qualityScore}/100

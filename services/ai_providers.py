@@ -14,6 +14,7 @@ import openai
 from google import genai
 from google.genai import types
 
+from services.ai_costs import record_usage
 from config import (
     DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_IMAGE_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_IMAGE_PROVIDER,
     DEFAULT_OPENAI_IMAGE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_TEXT_PROVIDER, IMAGE_PROVIDERS, TEXT_PROVIDERS,
@@ -53,6 +54,17 @@ class AIProviderError(Exception):
 class TextResult:
     text: str
     truncated: bool = False
+    # Token counts the SDK reported (input_tokens, output_tokens and, for
+    # Claude, cache_read_input_tokens / cache_creation_input_tokens), or None.
+    usage: dict | None = None
+    # Estimated USD cost (services.ai_costs), None when the model is not priced.
+    cost_usd: float | None = None
+
+
+def _token_counts(**fields):
+    """The integer token counts among fields; None when there are none."""
+    counts = {name: value for name, value in fields.items() if isinstance(value, int)}
+    return counts or None
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +156,16 @@ class GeminiText:
             'MAX_TOKENS' in str(getattr(candidate, 'finish_reason', '') or '').upper()
             for candidate in getattr(response, 'candidates', None) or []
         )
-        return TextResult(response.text or '', truncated)
+        meta = getattr(response, 'usage_metadata', None)
+        thoughts = getattr(meta, 'thoughts_token_count', None)
+        candidates = getattr(meta, 'candidates_token_count', None)
+        usage = _token_counts(
+            input_tokens=getattr(meta, 'prompt_token_count', None),
+            # Thinking tokens are billed as output.
+            output_tokens=(candidates or 0) + (thoughts or 0) if isinstance(candidates, int) else None,
+        )
+        cost = record_usage(self.provider, self.model, usage)
+        return TextResult(response.text or '', truncated, usage, cost)
 
 
 def claude_output_config(model):
@@ -200,8 +221,21 @@ class AnthropicText:
             kwargs['output_config'] = output_config
         return kwargs
 
+    @staticmethod
+    def usage_of(message):
+        usage = getattr(message, 'usage', None)
+        return _token_counts(
+            input_tokens=getattr(usage, 'input_tokens', None),
+            output_tokens=getattr(usage, 'output_tokens', None),
+            cache_read_input_tokens=getattr(usage, 'cache_read_input_tokens', None),
+            cache_creation_input_tokens=getattr(usage, 'cache_creation_input_tokens', None),
+        )
+
     def generate(self, prompt, system=None, max_tokens=8192, temperature=None, top_p=None):
         message = stream_claude_message(self.client, self._request_kwargs(prompt, system, max_tokens))
+        # Recorded before the refusal check: a refused request is billed too.
+        usage = self.usage_of(message)
+        cost = record_usage(self.provider, self.model, usage)
 
         if message.stop_reason == 'refusal':
             details = getattr(message, 'stop_details', None)
@@ -212,7 +246,7 @@ class AnthropicText:
                 + '. Ubah topik atau gunakan provider lain.'
             )
         text = ''.join(block.text for block in message.content if block.type == 'text')
-        return TextResult(text, message.stop_reason == 'max_tokens')
+        return TextResult(text, message.stop_reason == 'max_tokens', usage, cost)
 
 
 class OpenAIText:
@@ -237,7 +271,11 @@ class OpenAIText:
         response = self.client.responses.create(**kwargs)
         reason = getattr(getattr(response, 'incomplete_details', None), 'reason', None)
         truncated = response.status == 'incomplete' and reason == 'max_output_tokens'
-        return TextResult(response.output_text or '', truncated)
+        usage = getattr(response, 'usage', None)
+        usage = _token_counts(input_tokens=getattr(usage, 'input_tokens', None),
+                              output_tokens=getattr(usage, 'output_tokens', None))
+        cost = record_usage(self.provider, self.model, usage)
+        return TextResult(response.output_text or '', truncated, usage, cost)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +338,8 @@ class GeminiImage:
         self.model = model
 
     def attempt(self, prompt, timeout_ms):
+        # Image calls are counted in the job's cost ledger; their price is not tracked.
+        record_usage(self.provider, self.model, None)
         if self.model.startswith('imagen-'):
             return self._imagen_attempt(prompt, timeout_ms)
         return self._gemini_image_attempt(prompt, timeout_ms)
@@ -346,6 +386,8 @@ class OpenAIImage:
         self.model = model
 
     def attempt(self, prompt, timeout_ms):
+        # Image calls are counted in the job's cost ledger; their price is not tracked.
+        record_usage(self.provider, self.model, None)
         kwargs = {'model': self.model, 'prompt': prompt, 'n': 1, 'timeout': timeout_ms / 1000}
         if self.model.startswith('dall-e'):
             # DALL-E returns URLs unless asked for base64; 1792x1024 is its 16:9-ish size.

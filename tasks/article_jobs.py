@@ -16,6 +16,7 @@ from core_extensions import (
 )
 from database import USABLE_CONFIDENCE_LEVELS, add_credits, debit_credits, research_fresh_cutoff
 from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
+from services.ai_costs import add_cost, cost_stage, track_costs
 from services.ai_providers import AIProviderError
 from services.article_generator import ArticleGenerator, ArticleQualityError
 from services.article_quality import ArticleQualityRejected, RewriteFailed, improve_article
@@ -31,7 +32,7 @@ from services.content_planner import (
 )
 from services.quality_gate import check_article, link_host, strip_invalid_internal_links
 from services.search_console import build_search_opportunities
-from services.topic_similarity import find_similar_published
+from services.topic_similarity import find_similar_published, significant_tokens
 from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result
 
 # RQ statuses in which a job may still run or is running.
@@ -105,8 +106,8 @@ def _claude_research_engine(ai_config):
     ai_config is the job's load_config() result, so the admin's shared
     Anthropic key (merge_shared_ai_config) enables it for every user.
     """
-    if not ai_config:
-        return None
+    if not (isinstance(ai_config, dict) and ai_config.get('anthropic_api_key')):
+        return None  # no key: classic research, without importing the SDK
     try:
         from services.claude_research import from_config
         return from_config(ai_config)
@@ -142,6 +143,11 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
         logger.warning(f"Topic-level research failed for '{topic}': {e}")
         return seo_data
 
+    claude_meta = ((topic_data.get('source_metadata') or {}).get('claude_web') or {}) \
+        if isinstance(topic_data, dict) else {}
+    if isinstance(claude_meta.get('estimated_cost_usd'), (int, float)):
+        add_cost('riset', claude_meta['estimated_cost_usd'])
+
     merged = dict(seo_data or {})
 
     def combine(key, limit, category_key=None):
@@ -166,7 +172,10 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
     # Category research stores these as 'long_tail' (see _load_category_research).
     merged['long_tail'] = combine('long_tail_keywords', 12, category_key='long_tail')
     # Official pages (government, regulators, primary sources) found for this
-    # topic, with the passages taken from them.
+    # topic, with the passages taken from them. Category-level pages are about
+    # the broad category and the prompt prefers official figures, so they only
+    # backfill when they mention one of the topic's significant words.
+    merged['official_sources'] = _relevant_official_sources(merged.get('official_sources'), topic, language)
     merged['official_sources'] = combine('official_sources', 3)
     logger.info(
         f"Merged topic research for '{topic}': "
@@ -174,6 +183,21 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
         f"{len(merged['official_sources'])} official sources"
     )
     return merged
+
+
+def _relevant_official_sources(sources, topic, language='id'):
+    """Category official sources that mention a significant word of the topic."""
+    words = set(significant_tokens(topic, language))
+    if not words:
+        return list(sources or [])
+    relevant = []
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        text = ' '.join([str(source.get('title') or '')] + [str(p) for p in source.get('passages') or []])
+        if words & set(significant_tokens(text, language)):
+            relevant.append(source)
+    return relevant
 
 
 def _attach_search_evidence(seo_data, user_id, site_id, category_name, topic=None, language='id'):
@@ -305,6 +329,9 @@ def _load_category_research(user_id, site_id, category_name):
                 'youtube_insights': research.youtube_insights or [],
                 'semantic_context': research.semantic_context or '',
                 'news_insights': research.news_insights or [],
+                # Government pages found for the category; topic research adds
+                # its own in front (_merge_topic_research).
+                'official_sources': research.official_sources or [],
                 # Where the evidence came from (e.g. which Wikipedia article the
                 # background text is from), so the prompt can list it as a source.
                 'source_metadata': research.source_metadata if isinstance(research.source_metadata, dict) else {},
@@ -484,6 +511,14 @@ def _build_generator(config):
     return ArticleGenerator.from_config(config)
 
 
+def _log_ai_costs(ledger, label):
+    """One summary line with the estimated AI cost of an article job, per step (logs only)."""
+    try:
+        logger.info(ledger.summary(label))
+    except Exception as e:  # never let cost logging fail a job
+        logger.warning(f"Could not log the AI cost summary: {e}")
+
+
 def _recent_posts_for_links(publisher):
     """Recent posts for internal linking: [] when the site has none, None when the
     fetch failed (then the article's links are left alone instead of every link
@@ -588,11 +623,12 @@ def _review_generated_article(generator, article, seo_data, *, language, categor
     Raises ArticleReviewRejected (content failure) or ArticleReviewUnavailable.
     """
     evidence = build_review_evidence(seo_data, language, source_urls=_cited_source_urls(article, internal_posts))
-    result = review_article(
-        generator, article, evidence, language=language, category=category_name, site_name=site_name,
-        publisher_context=build_publisher_context(article_prompt, category_description),
-        protected_links=_protected_review_links(internal_posts, extra_allowed_urls, allowed_hosts),
-    )
+    with cost_stage('cek fakta'):
+        result = review_article(
+            generator, article, evidence, language=language, category=category_name, site_name=site_name,
+            publisher_context=build_publisher_context(article_prompt, category_description),
+            protected_links=_protected_review_links(internal_posts, extra_allowed_urls, allowed_hosts),
+        )
     logger.info(f"AI review ({context}): {result.log_line()}")
     if result.changed:
         try:
@@ -612,11 +648,12 @@ def _writing_brief(generator, topic, seo_data, *, language, category_name, site_
     is written without one (build_content_brief logs why).
     """
     try:
-        brief = build_content_brief(
-            generator, topic, seo_data, language=language, category=category_name, site_name=site_name,
-            category_description=category_description, article_prompt=article_prompt,
-            published_titles=published_titles,
-        )
+        with cost_stage('brief'):
+            brief = build_content_brief(
+                generator, topic, seo_data, language=language, category=category_name, site_name=site_name,
+                category_description=category_description, article_prompt=article_prompt,
+                published_titles=published_titles,
+            )
     except JobTimeoutException:
         raise
     except Exception as e:
@@ -639,8 +676,9 @@ def _improve_generated_article(generator, article, generation_args, generation_o
     Raises ArticleQualityRejected (content failure) or ArticleQualityUnavailable.
     """
     def rewrite(revision_request):
-        rewritten = generator.generate_article(*generation_args, revision_request=revision_request,
-                                               **generation_options)
+        with cost_stage('revisi'):
+            rewritten = generator.generate_article(*generation_args, revision_request=revision_request,
+                                                   **generation_options)
         if links_unknown:
             rewritten['allowed_link_urls'] = None
         try:
@@ -651,10 +689,11 @@ def _improve_generated_article(generator, article, generation_args, generation_o
         return rewritten
 
     evidence = build_review_evidence(seo_data, language, source_urls=_cited_source_urls(article, internal_posts))
-    outcome = improve_article(
-        generator, article, rewrite=rewrite, topic=topic, language=language, brief_text=brief_text,
-        evidence=evidence, site_name=site_name, category=category_name,
-    )
+    with cost_stage('nilai'):
+        outcome = improve_article(
+            generator, article, rewrite=rewrite, topic=topic, language=language, brief_text=brief_text,
+            evidence=evidence, site_name=site_name, category=category_name,
+        )
     logger.info(f"Quality ({context}): {outcome.log_line()}")
     return outcome
 
@@ -699,13 +738,14 @@ def _generate_featured_image(generator, publisher, category_name, article, custo
     image_data = None
     try:
         logger.info("Generating featured image...")
-        image_data = generator.generate_image(
-            category_name,
-            article.get('title', ''),
-            article.get('content', ''),
-            custom_prompt=custom_prompt,
-            site_name=site_name
-        )
+        with cost_stage('gambar'):
+            image_data = generator.generate_image(
+                category_name,
+                article.get('title', ''),
+                article.get('content', ''),
+                custom_prompt=custom_prompt,
+                site_name=site_name
+            )
         if not image_data:
             return None, None, True
         logger.info("Uploading featured image...")
@@ -900,14 +940,24 @@ class _ArticlePostJob:
     def run(self):
         if self.item_id and not self.claim_item():
             return
-        try:
-            # Everything that can fail runs inside this try: load_config and the
-            # site's encrypted fields (decrypt can raise ValueError) used to run
-            # before it, so a failure there leaked the reserved credit and left the
-            # queue item stuck in 'posting'.
-            self._run_pipeline()
-        except Exception as e:
-            self._handle_failure(e)
+        with track_costs() as ledger:
+            try:
+                # Everything that can fail runs inside this try: load_config and the
+                # site's encrypted fields (decrypt can raise ValueError) used to run
+                # before it, so a failure there leaked the reserved credit and left the
+                # queue item stuck in 'posting'.
+                self._run_pipeline()
+            except Exception as e:
+                self._handle_failure(e)
+            finally:
+                _log_ai_costs(ledger, self._cost_label())
+
+    def _cost_label(self):
+        """Post log id (and title) for the AI cost summary line."""
+        title = (self.article or {}).get('title') or self.custom_topic or ''
+        log_id = getattr(self, 'log_id', None)
+        prefix = f"{log_id}" if log_id else f"(site {self.site_id}, tanpa log)"
+        return f"{prefix} '{title}'" if title else prefix
 
     def _run_pipeline(self):
         config = load_config(self.user_id)
@@ -1045,8 +1095,9 @@ class _ArticlePostJob:
 
     def _similar_published(self, generator, title):
         """(published title, score) that `title` would cannibalize, or None."""
-        return find_similar_published(title, self.published_titles, language=self._language(),
-                                      generator=generator)
+        with cost_stage('cek kemiripan'):
+            return find_similar_published(title, self.published_titles, language=self._language(),
+                                          generator=generator)
 
     def _check_topic_is_new(self, generator, topic):
         match = self._similar_published(generator, topic)
@@ -1113,8 +1164,9 @@ class _ArticlePostJob:
             return
         # Niche-word weights from the whole history, as in the main check; only
         # the new titles are matched.
-        match = find_similar_published(self.article.get('title', ''), new_titles, language=self._language(),
-                                       generator=generator, corpus=list(self.published_titles) + new_titles)
+        with cost_stage('cek kemiripan'):
+            match = find_similar_published(self.article.get('title', ''), new_titles, language=self._language(),
+                                           generator=generator, corpus=list(self.published_titles) + new_titles)
         if match:
             logger.warning(f"'{self.article.get('title')}' repeats '{match[0]}', published by another job "
                            "while this article was written.")
@@ -1260,7 +1312,8 @@ class _ArticlePostJob:
             # Remembered so the quality rewrite repeats exactly this call.
             args, kwargs = (category_name, titles, self.custom_topic, seo_data), dict(extra, **options)
             self.generation = (args, kwargs)
-            return generator.generate_checked_article(*args, **kwargs)
+            with cost_stage('tulis'):
+                return generator.generate_checked_article(*args, **kwargs)
 
         if self.avoid_titles:
             # No distinct research topic was found: this is a category article
@@ -1323,7 +1376,7 @@ class _ArticlePostJob:
 
         self._settle_after_publish(success, unconfirmed, post_url)
 
-        db.add_log(
+        self.log_id = db.add_log(
             self.user_id,
             self.site_id,
             category['id'],
@@ -1418,7 +1471,7 @@ class _ArticlePostJob:
         )
         # Add to history so the user sees the failure.
         try:
-            db.add_log(
+            self.log_id = db.add_log(
                 user_id=self.user_id,
                 site_id=self.site_id,
                 category_id=log_category_id,
@@ -1556,13 +1609,14 @@ def regenerate_image_job(user_id, log_id):
         publisher = _target_publisher(target)
 
         logger.info(f"Regenerating image for post {target['post_id']} - {target['title']}")
-        image_data = generator.generate_image(
-            target['category_name'],
-            target['title'],
-            "",
-            custom_prompt=target['image_prompt'] or None,
-            site_name=target['site_name']
-        )
+        with cost_stage('gambar'):
+            image_data = generator.generate_image(
+                target['category_name'],
+                target['title'],
+                "",
+                custom_prompt=target['image_prompt'] or None,
+                site_name=target['site_name']
+            )
         if not image_data:
             raise Exception("Model gambar Gemini tidak menghasilkan data gambar (cek API key / model gambar).")
 
@@ -1630,7 +1684,11 @@ def regenerate_article_job(user_id, log_id):
         db.refund_user_credits(user_id, 1)
         return
     try:
-        _regenerate_article(user_id, log_id)
+        with track_costs() as ledger:
+            try:
+                _regenerate_article(user_id, log_id)
+            finally:
+                _log_ai_costs(ledger, f"{log_id} (regenerasi)")
     finally:
         _release_regeneration_lock(log_id)
 
@@ -1673,7 +1731,8 @@ def _regenerate_article(user_id, log_id):
             internal_links_context=recent_posts,
             content_brief=brief_text,
         )
-        article = generator.generate_checked_article(*generation_args, **generation_options)
+        with cost_stage('tulis'):
+            article = generator.generate_checked_article(*generation_args, **generation_options)
         if recent_posts is None:
             article['allowed_link_urls'] = None  # fetch failed: leave links alone
         extra_urls, hosts = _link_allowances(target['article_prompt'], target['wordpress_url'])

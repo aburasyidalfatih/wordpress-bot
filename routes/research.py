@@ -20,6 +20,7 @@ from database import (
     research_job_timeout, research_lock_state, research_lock_ttl, restore_research_charge, take_research_charge,
 )
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
+from services.research_notes import evidence_warnings, optional_notes
 from services.ai_providers import describe_provider_error, text_provider_name
 from services.article_generator import ArticleGenerator
 from services.search_console import build_search_opportunities
@@ -206,6 +207,8 @@ def _research_entry(latest, previous, now):
     # now and researched_at are both local naive time (see database.is_research_fresh).
     age_hours = max(0, int((now - researched_at).total_seconds() / 3600)) if researched_at else None
     block_reason = _title_block_reason(latest, now)
+    source_metadata = latest.source_metadata if isinstance(latest.source_metadata, dict) else {}
+    warnings = evidence_warnings(source_metadata)
     return {
         'trending_count': len(latest.trending_topics) if latest.trending_topics else 0,
         'rising_count': len(latest.rising_topics) if latest.rising_topics else 0,
@@ -222,11 +225,17 @@ def _research_entry(latest, previous, now):
         'youtube_insights': latest.youtube_insights or [],
         'long_tail_keywords': latest.long_tail_keywords or [],
         'news_insights': latest.news_insights or [],
+        'official_sources': latest.official_sources or [],
         'semantic_context': latest.semantic_context or '',
-        'source_metadata': latest.source_metadata or {},
+        'source_metadata': source_metadata,
         'quality_score': latest.quality_score or 0,
         'confidence_level': latest.confidence_level or 'unknown',
-        'is_fallback': bool(latest.is_fallback),
+        # Which writer evidence is missing (warning) and which optional sources
+        # were unavailable (information); derived from the stored provider
+        # statuses so older rows get the precise wording too.
+        'is_fallback': bool(warnings) if source_metadata else bool(latest.is_fallback),
+        'fallback_warnings': warnings,
+        'missing_optional_sources': optional_notes(source_metadata),
         'age_hours': age_hours,
         'is_stale': not is_research_fresh(researched_at, now),
         'created_at': researched_at.strftime(RESEARCH_DATE_FORMAT) if researched_at else None,

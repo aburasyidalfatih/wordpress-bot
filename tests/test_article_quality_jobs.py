@@ -14,7 +14,7 @@ from datetime import datetime
 from unittest.mock import Mock, patch
 
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
-from services import article_quality, article_review, content_brief, job_locks
+from services import ai_costs, article_quality, article_review, content_brief, job_locks
 from services.article_quality import ArticleQualityRejected, ArticleQualityUnavailable
 from rq.timeouts import JobTimeoutException
 
@@ -291,6 +291,63 @@ class RegenerationQualityTests(QualityJobTestCase):
             'Regenerasi artikel gagal: Artikel ditolak penilai kualitas AI: skor 2,0/5'))
 
 
+class AICostSummaryTests(QualityJobTestCase):
+    """One log line per article job with the estimated AI cost of each step."""
+
+    COSTS = {'brief': 25_000, 'generate': 50_000, 'assess': 10_000, 'rewrite': 30_000, 'review': 40_000,
+             'similar': 5_000}
+
+    def setUp(self):
+        super().setUp()
+        reply, write, rewrite = self.model_reply, self.write, self.rewrite
+
+        def billed(kind, result):
+            # 1M Opus input tokens cost $4, so 25_000 tokens are $0.10.
+            ai_costs.record_usage('anthropic', 'claude-opus-5-5', {'input_tokens': self.COSTS[kind]})
+            return result
+
+        def model_reply(prompt, system=None, **kwargs):
+            result = reply(prompt, system=system, **kwargs)
+            return billed(self.order[-1] if self.order and self.order[-1] in self.COSTS else 'similar', result)
+
+        self.generator.generate_text.side_effect = model_reply
+        self.generator.generate_checked_article.side_effect = lambda *a, **k: billed('generate', write(*a, **k))
+        self.generator.generate_article.side_effect = lambda *a, **k: billed('rewrite', rewrite(*a, **k))
+
+    def summary(self, logs):
+        lines = [line for line in logs.output if 'Biaya AI artikel' in line]
+        self.assertEqual(len(lines), 1)
+        return lines[0]
+
+    def test_published_article_cost_per_step(self):
+        with self.assertLogs(jobs.logger, 'INFO') as logs:
+            self.post()
+        line = self.summary(logs)
+        log_id = self.last_log().id
+        self.assertIn(f"Biaya AI artikel {log_id} 'Strategi Melunasi Utang Keluarga'", line)
+        for part in ('riset $0.00', 'brief $0.10', 'tulis $0.20', 'nilai $0.04', 'revisi $0.00', 'cek fakta $0.16'):
+            self.assertIn(part, line)
+        self.assertIn('total $0.50', line)
+
+    def test_rewrite_and_research_costs_are_attributed(self):
+        self.replies['assess'] = [scores(2), scores(5)]
+        with self.assertLogs(jobs.logger, 'INFO') as logs:
+            with patch.object(jobs, '_merge_topic_research',
+                              lambda seo, *a, **k: ai_costs.add_cost('riset', 0.62) or seo):
+                self.post()
+        line = self.summary(logs)
+        self.assertIn('nilai $0.08', line)  # two assessments
+        self.assertIn('revisi $0.12', line)
+
+    def test_failed_job_still_logs_its_cost(self):
+        self.replies['review'] = [json.dumps({'verdict': 'reject', 'reasons': ['Klaim tanpa sumber']})]
+        with self.assertLogs(jobs.logger, 'INFO') as logs:
+            self.post()
+        line = self.summary(logs)
+        self.assertIn('cek fakta $0.16', line)
+        self.assertIn(f"Biaya AI artikel {self.last_log().id} ", line)
+
+
 class TopicResearchMergeTests(unittest.TestCase):
     def test_official_sources_reach_seo_data(self):
         official = [{'title': f'Sumber {i}', 'url': f'https://ojk.go.id/{i}', 'passages': [f'Kutipan {i}']}
@@ -334,7 +391,7 @@ class TopicResearchMergeTests(unittest.TestCase):
         self.assertIsNone(instances[1].claude)
         self.assertIsNone(instances[2].claude)
         factory.from_config.assert_any_call(config)
-        self.assertEqual(factory.from_config.call_count, 2)  # no config: not even asked
+        self.assertEqual(factory.from_config.call_count, 1)  # no Anthropic key: not even asked
 
     def test_rq_job_timeout_is_not_swallowed(self):
         seo = types.ModuleType('seo_research')

@@ -180,24 +180,45 @@ hasilnya digabung di depan bukti kategori. Semua provider dijalankan paralel.
 Mesin riset bersifat hybrid. Kalau konfigurasi AI efektif punya API key Anthropic
 (key admin yang dibagikan lewat `merge_shared_ai_config` juga berlaku),
 `services/claude_research.py` memakai tool server-side Claude `web_search` dan
-`web_fetch` (satu request per riset, total maks. 5 pencarian + 4 fetch termasuk
+`web_fetch` (satu request per riset, total maks. 9 pencarian + 6 fetch termasuk
 lanjutan `pause_turn`, prompt caching otomatis, batas waktu keras 240 detik) untuk
-kompetitor, sumber resmi (.go.id / .gov), berita, dan konteks Wikipedia. Hasilnya
-divalidasi di kode, bukan dipercaya begitu saja: URL harus benar-benar muncul di
-hasil pencarian/fetch request itu, judul/sumber/tanggal berita diambil dari hasil
-pencarian (bukan dari teks model), setiap kutipan harus ada kata per kata di teks
-halaman yang di-fetch (kompetitor tanpa kutipan terverifikasi tidak dipakai; kurang
-dari 2 kompetitor dilengkapi scraping klasik), dan
-filter lama tetap berlaku (host resmi, domain milik sendiri, spam, URL bersih,
-batas panjang). Status `claude_web` dicatat di metadata sumber. DuckDuckGo + Jina
-Reader kini menjadi **cadangan**: dijalankan hanya untuk bagian yang tidak
-dikembalikan Claude, atau semuanya bila tidak ada key Anthropic, Claude gagal,
-atau `CLAUDE_WEB_RESEARCH=false`. Kegagalan Claude tidak pernah menggagalkan
-artikel atau job riset. Autocomplete, pertanyaan terkait, Google Trends,
-transkrip YouTube, dan insight sosial tetap memakai provider klasik. Biaya
-tambahan per riset: pencarian web $10 per 1.000 pencarian (maks. $0,05) ditambah
-token; konten halaman yang di-fetch dihitung sebagai token input. Perkiraan biaya
-per panggilan (harga Opus 5.5) dicatat di log.
+kompetitor, sumber resmi (.go.id / .gov, kini juga per kategori), berita, diskusi
+sosial (reddit, quora, kaskus, forum), pertanyaan nyata pembaca, dan video YouTube
+(transkripnya lalu diambil lewat youtube-transcript-api; kalau YouTube memblokir
+IP server, video tetap tampil tanpa transkrip). Hasilnya divalidasi di kode, bukan
+dipercaya begitu saja: URL harus benar-benar muncul di hasil pencarian/fetch
+request itu; judul/sumber/tanggal berita diambil dari hasil pencarian (bukan dari
+teks model); setiap kutipan dan heading harus ada kata per kata di teks halaman yang
+di-fetch; teks diskusi dan pertanyaan harus ada kata per kata di judul hasil
+pencarian atau teks halaman, pertanyaan harus berbentuk pertanyaan dan relevan
+dengan topik; video harus URL YouTube dari hasil pencarian. Kompetitor dengan kurang
+dari 2 kutipan terverifikasi dianggap tipis: tidak dihitung, dan hanya dipakai bila
+kompetitor yang baik kurang dari 2 (dilengkapi scraping klasik). Filter lama tetap
+berlaku (host resmi, domain milik sendiri, spam, URL bersih, batas panjang). Status
+`claude_web` dicatat di metadata sumber. DuckDuckGo + Jina Reader dan Google Suggest
+kini menjadi **cadangan**: dijalankan hanya untuk bagian yang tidak dikembalikan
+Claude (pertanyaan pembaca butuh minimal 3 yang terverifikasi), atau semuanya bila
+tidak ada key Anthropic, Claude gagal, atau `CLAUDE_WEB_RESEARCH=false`. Kegagalan
+Claude tidak pernah menggagalkan artikel atau job riset. Konteks Wikipedia selalu
+memakai API Wikipedia (gratis, tanpa DuckDuckGo), dan autocomplete serta Google
+Trends tetap klasik. Kalau Google Trends tidak punya data untuk nama kategori yang
+panjang, riset mencoba sekali lagi dengan istilah inti dua kata (mis. "emergency
+fund"); istilah yang dipakai dicatat sebagai `trend_term` dan ditampilkan di kartu
+riset. Biaya tambahan per riset: pencarian web $10 per 1.000 pencarian (maks.
+$0,09) ditambah token; konten halaman yang di-fetch dihitung sebagai token input.
+Perkiraan biaya per panggilan dicatat di log.
+
+Peringatan di kartu riset kini menyebut bukti penulis yang benar-benar kurang
+(`services/research_notes.py`: kompetitor, pertanyaan pembaca, saran kata kunci),
+mis. "Pertanyaan pembaca memakai template cadangan"; sumber opsional yang tidak
+tersedia (diskusi sosial, YouTube, berita, Wikipedia, Trends) hanya ditampilkan
+sebagai informasi. Data template tidak pernah diberikan ke penulis.
+
+Setiap job artikel menulis satu baris log perkiraan biaya AI per tahap
+(`services/ai_costs.py`), mis. `Biaya AI artikel 123: riset $0.62, brief $0.09,
+tulis $0.27, nilai $0.12, revisi $0.00, cek fakta $0.16, total $1.26`. Tarif hanya
+untuk model Claude bawaan (Opus 5.5, Sonnet 5.5, Haiku 5.5); panggilan Gemini/OpenAI
+dan gambar dihitung tanpa tarif. Harga kredit tidak berubah.
 
 Data Search Console tidak lagi sekadar ditampilkan — ia masuk ke pemilihan topik dan
 ke prompt artikel sebagai bukti first-party. Setiap peluang dipetakan ke aksi yang

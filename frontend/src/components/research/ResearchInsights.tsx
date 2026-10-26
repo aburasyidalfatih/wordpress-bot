@@ -175,6 +175,27 @@ function SourceTransparency({ stats }: { stats: ResearchStats }) {
         })}
       </div>
 
+      {stats.missing_optional_sources && stats.missing_optional_sources.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Sumber opsional tidak tersedia (tidak mengurangi keabsahan bukti): {stats.missing_optional_sources.join(', ')}.
+        </p>
+      )}
+
+      {stats.official_sources && stats.official_sources.length > 0 && (
+        <div>
+          <p className="mb-2 text-sm font-semibold">Sumber resmi</p>
+          <ul className="space-y-1">
+            {stats.official_sources.map((source, index) => (
+              <li key={index} className="text-sm">
+                <a href={source.url} target="_blank" rel="noreferrer" className="hover:underline">
+                  {source.title} <ExternalLink className="inline h-3 w-3" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {stats.long_tail_keywords?.length > 0 && (
         <div>
           <p className="mb-2 text-sm font-semibold">Peluang long-tail</p>

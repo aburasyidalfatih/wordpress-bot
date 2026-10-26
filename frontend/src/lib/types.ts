@@ -263,6 +263,10 @@ export interface ResearchStats {
   quality_score: number;
   confidence_level: ConfidenceLevel;
   is_fallback: boolean;
+  /** Writer evidence that is missing or template-only, in Indonesian. Older APIs omit it. */
+  fallback_warnings?: string[];
+  /** Optional sources (social, YouTube, ...) that were unavailable; information only. */
+  missing_optional_sources?: string[];
   is_stale: boolean;
   age_hours: number | null;
   /** False when the research is too weak to generate titles from. Older APIs omit it. */
@@ -272,7 +276,13 @@ export interface ResearchStats {
   long_tail_keywords: string[];
   semantic_context: string;
   news_insights: { title: string; source?: string; url?: string; published_at?: string }[];
-  source_metadata: Record<string, { status?: string; count?: number; checked_at?: string; reason?: string }>;
+  /** Government pages for the category (Claude web research). Older APIs omit it. */
+  official_sources?: { title: string; url: string; passages?: string[] }[];
+  source_metadata: Record<string, {
+    status?: string; count?: number; checked_at?: string; reason?: string;
+    /** Google Trends: the shorter head term the score was measured for. */
+    trend_term?: string;
+  }>;
   social_insights: ({ text: string; url?: string; provider?: string } | string)[];
   competitor_outlines: {
     title: string;

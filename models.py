@@ -317,6 +317,7 @@ class ResearchData(Base):
     trend_score = Column(Integer, default=0)
     semantic_context = Column(Text)
     news_insights = Column(JSON)
+    official_sources = Column(JSON)
     source_metadata = Column(JSON)
     quality_score = Column(Integer, default=0)
     confidence_level = Column(String(20), default='unknown')

@@ -2,10 +2,11 @@
 
 SEOResearch uses this engine, when the effective AI config has an Anthropic API
 key, for the parts of research that read the web: competitor pages, official
-(government) sources, recent news and the Wikipedia background. Keyword
-suggestions, related questions, Google Trends, YouTube transcripts and social
-insights stay on the classic providers, and every part this engine does not
-return falls back to DuckDuckGo + Jina Reader.
+(government) sources, recent news, social discussions, real reader questions
+and YouTube videos (whose transcripts SEOResearch then fetches). Keyword
+suggestions, Google Trends and the Wikipedia background stay on the classic
+providers, and every part this engine does not return falls back to them
+(DuckDuckGo + Jina Reader, Google Suggest).
 
 One research call is one Messages request (plus pause_turn continuations) with
 both tools. The model is asked for a strict JSON object of URLs, headings and
@@ -14,9 +15,12 @@ quotes; trust comes from the validation here, not from the model:
     web_fetch result block), so invented URLs are dropped;
   - titles, news sources and dates come from the retrieved results (or the
     host), never from the model's text;
-  - every passage, heading and Wikipedia summary must appear verbatim in the
-    text web_fetch returned for that URL; a competitor without a verified
-    passage is not used at all (search result content is encrypted);
+  - every passage and heading must appear verbatim in the text web_fetch
+    returned for that URL; a competitor without a verified passage is not used
+    at all (search result content is encrypted);
+  - social texts and reader questions must appear verbatim in that URL's
+    search-result title or fetched text; videos must be YouTube URLs from the
+    search results;
   - the classic filters still apply: official host check, the publisher's own
     hosts, spam markers, citable-URL cleaning and the same size caps.
 
@@ -46,10 +50,11 @@ import anthropic
 from config import DEFAULT_ANTHROPIC_MODEL
 from seo_research import (
     KEY_PASSAGE_LIMIT, KEY_PASSAGE_MAX_CHARS, KEY_PASSAGES_PAGE_MAX_CHARS, MAX_PAGE_CONTENT_CHARS,
-    OFFICIAL_SOURCE_LIMIT, WIKIPEDIA_MIN_EXTRACT_CHARS, cut_at_sentence, is_boilerplate_heading, is_excluded_url,
-    is_official_url, is_spam_page, normalize_hosts, official_domain_suffixes, spam_marker_count,
-    strip_markdown_links, url_host,
+    OFFICIAL_SOURCE_LIMIT, cut_at_sentence, extract_youtube_video_id, is_boilerplate_heading, is_excluded_url,
+    is_official_url, is_question_title, is_spam_page, normalize_hosts, official_domain_suffixes,
+    spam_marker_count, strip_markdown_links, title_matches_topic, url_host,
 )
+from services.ai_costs import CLAUDE_PRICES, token_cost_usd
 from services.ai_providers import (
     REASONING_MIN_OUTPUT_TOKENS, claude_output_config, is_retryable_provider_error, open_claude_stream,
 )
@@ -69,9 +74,15 @@ CLAUDE_WEB_RESEARCH_ENABLED = os.getenv('CLAUDE_WEB_RESEARCH', 'true').strip().l
 
 WEB_SEARCH_TOOL_TYPE = 'web_search_20260209'
 WEB_FETCH_TOOL_TYPE = 'web_fetch_20260209'
-# Totals for one research call, across pause_turn continuations.
-WEB_SEARCH_MAX_USES = 5
-WEB_FETCH_MAX_USES = 4
+# Totals for one research call, across pause_turn continuations: enough
+# searches for competitors, official pages, news, discussions, questions and
+# videos, and fetches for competitors and official pages (thin pages are
+# replaced by another candidate). Wikipedia uses the free Wikipedia API instead.
+WEB_SEARCH_MAX_USES = 9
+WEB_FETCH_MAX_USES = 6
+# Thin pages in production were short (about 2,500 words, well under this
+# limit) or script-rendered, not cut off, so a larger limit would only add
+# input cost.
 WEB_FETCH_MAX_CONTENT_TOKENS = 6000
 TOOL_LIMITS = {'web_search': WEB_SEARCH_MAX_USES, 'web_fetch': WEB_FETCH_MAX_USES}
 # Only the model may call the tools, not code it writes (dynamic filtering).
@@ -95,14 +106,30 @@ MIN_CONTINUATION_SECONDS = 60
 MAX_CONTINUATIONS = 3
 RETRY_DELAY_SECONDS = 3
 
-# USD per million tokens for the cost estimate in the log (Claude Opus 5.5,
-# the configured research model): input $4, output $20, cache read $0.20,
-# cache write 1.25x input. Searches are $10 per 1,000.
-PRICE_PER_MTOK = {'input': 4.0, 'output': 20.0, 'cache_read': 0.20, 'cache_write': 5.0}
+# Token prices come from services.ai_costs (models without a price are
+# estimated at Claude Opus 5.5 rates, the configured research model).
+# Searches are $10 per 1,000.
+DEFAULT_PRICED_MODEL = 'claude-opus-5-5'
 PRICE_PER_SEARCH = 0.01
 
 COMPETITOR_LIMIT = 4
 NEWS_LIMIT = 3
+SOCIAL_LIMIT = 5
+QUESTION_LIMIT = 10
+YOUTUBE_LIMIT = 2
+# A competitor with fewer verified passages than this is thin (see SEOResearch).
+MIN_GOOD_PASSAGES = 2
+MIN_SOCIAL_CHARS = 15
+MAX_SOCIAL_CHARS = 300
+MIN_QUESTION_CHARS = 10
+MAX_QUESTION_CHARS = 200
+MAX_QUESTION_CANDIDATES = 15
+YOUTUBE_HOSTS = ('youtube.com', 'm.youtube.com', 'youtu.be')
+# Hosts and URL words that mark a page as a public discussion.
+DISCUSSION_HOSTS = {'reddit.com': 'reddit', 'quora.com': 'quora', 'kaskus.co.id': 'kaskus',
+                    'stackexchange.com': 'forum', 'tripadvisor.com': 'forum'}
+_DISCUSSION_URL_RE = re.compile(r'forum|community|komunitas|discuss|diskusi|/threads?/|/t/|/r/',
+                                re.IGNORECASE)
 NEWS_MAX_AGE_DAYS = 400
 MIN_PASSAGE_CHARS = 60
 MIN_HEADING_CHARS = 3
@@ -115,7 +142,6 @@ MAX_HEADING_CHARS = 120
 MAX_HEADING_LINE_CHARS = 140
 MAX_TITLE_CHARS = 200
 MAX_SOURCE_CHARS = 40
-WIKIPEDIA_MAX_CHARS = 1500
 # Items read from the model's JSON per part before validation; the rest is ignored.
 MAX_CANDIDATES = 10
 
@@ -129,12 +155,14 @@ Rules:
 - Searches and fetches are limited and expensive. Pick from the search results only the most promising pages to fetch, never fetch the same page twice, and stop as soon as you have enough material.
 - Copy every passage VERBATIM from a page you fetched with web_fetch, character for character. You may only shorten a passage by dropping whole sentences at its start or end. Never paraphrase, translate, merge, correct or invent text. Keep each passage under 600 characters.
 - Copy headings exactly as they appear on the fetched page.
+- A fetched page that yields fewer than 2 substantial passages (script-rendered, paywalled, behind a cookie wall, a calculator or tool) is thin: fetch another candidate from your search results instead.
+- Copy discussion texts and reader questions VERBATIM from a search-result title or from a page you fetched, together with that page's URL.
 - Only return URLs that appeared in your web_search results or that you fetched, written exactly as they appeared.
 - Prefer specific, substantive passages: definitions, figures, rates, fees, dates, deadlines, requirements and steps. Skip navigation, ads, cookie notices, comments and author bios.
 - Skip pages that look like gambling, adult or pharma spam, including hacked government sites.
 - When you are done, reply with ONLY one JSON object (no prose, no code fences) in exactly this shape:
-{"competitors": [{"url": "", "headings": [""], "passages": [""]}], "official": [{"url": "", "passages": [""]}], "news": [{"url": ""}], "wikipedia": {"url": "", "summary": ""}}
-Use an empty list (or null for wikipedia) for any part you could not find or were not asked for."""
+{"competitors": [{"url": "", "headings": [""], "passages": [""]}], "official": [{"url": "", "passages": [""]}], "news": [{"url": ""}], "social": [{"url": "", "text": ""}], "questions": [{"url": "", "text": ""}], "youtube": [{"url": ""}]}
+Use an empty list for any part you could not find or were not asked for."""
 
 
 class ResearchFailed(Exception):
@@ -166,13 +194,26 @@ def from_config(config):
         return None
 
 
-def estimate_cost_usd(usage, searches):
-    """Estimated USD cost of a call at the PRICE_PER_MTOK rates."""
-    tokens = (usage['input_tokens'] * PRICE_PER_MTOK['input']
-              + usage['output_tokens'] * PRICE_PER_MTOK['output']
-              + usage['cache_read_input_tokens'] * PRICE_PER_MTOK['cache_read']
-              + usage['cache_creation_input_tokens'] * PRICE_PER_MTOK['cache_write'])
-    return tokens / 1_000_000 + (searches or 0) * PRICE_PER_SEARCH
+def estimate_cost_usd(usage, searches, model=DEFAULT_PRICED_MODEL):
+    """Estimated USD cost of a call: tokens at the model's price, plus searches."""
+    priced = model if model in CLAUDE_PRICES else DEFAULT_PRICED_MODEL
+    return token_cost_usd(priced, usage) + (searches or 0) * PRICE_PER_SEARCH
+
+
+def is_discussion_url(url):
+    """True for public discussions: reddit, quora, kaskus, Q&A sites and forums."""
+    host = url_host(url)
+    if any(host == known or host.endswith('.' + known) for known in DISCUSSION_HOSTS):
+        return True
+    return bool(_DISCUSSION_URL_RE.search(host + (urlsplit(str(url)).path or '')))
+
+
+def discussion_provider(url):
+    host = url_host(url)
+    for known, name in DISCUSSION_HOSTS.items():
+        if host == known or host.endswith('.' + known):
+            return name
+    return 'forum'
 
 
 # ---------------------------------------------------------------------------
@@ -279,11 +320,23 @@ def _parse_json_object(text):
     return None
 
 
-def _items(data, key):
+def _items(data, key, limit=MAX_CANDIDATES):
     value = data.get(key)
     if not isinstance(value, list):
         return []
-    return [item for item in value[:MAX_CANDIDATES] if isinstance(item, dict)]
+    return [item for item in value[:limit] if isinstance(item, dict)]
+
+
+def _in_titles(page, text):
+    """True when text appears verbatim in the page's search-result or document title."""
+    needle = comparable_text(text)
+    return bool(needle) and any(needle in comparable_text(title) for title in (page.search_title, page.doc_title)
+                                if title)
+
+
+def _verbatim_on_page(page, text, min_chars):
+    """True when text appears verbatim in the page's titles or fetched text."""
+    return _in_titles(page, text) or page.contains(text, min_chars)
 
 
 def _source_name(title, url):
@@ -338,6 +391,10 @@ class _Page:
         needle = comparable_text(_EDGE_ELLIPSIS_RE.sub('', str(quote or '').strip()))
         return len(needle) >= min_chars and bool(self.text) and needle in self.comparable()
 
+    def is_heading_line(self, heading):
+        """True when heading equals one of the page's heading lines."""
+        return bool(self.text) and comparable_text(heading).rstrip(' :') in self.heading_lines()
+
     def has_heading(self, heading):
         if not self.text:
             return False
@@ -351,7 +408,7 @@ class _Page:
 # ---------------------------------------------------------------------------
 
 class ClaudeWebResearch:
-    """Competitors, official sources, news and Wikipedia via Claude's web tools."""
+    """Competitors, official sources, news, discussions, questions and videos via Claude's web tools."""
 
     def __init__(self, api_key, model=DEFAULT_ANTHROPIC_MODEL, client=None):
         # max_retries=0: the single retry is done here (_send), and only when no
@@ -391,9 +448,10 @@ class ClaudeWebResearch:
         english = language == 'en'
         lang_label = 'English (pages for readers in the United States)' if english else \
             'Indonesian (pages for readers in Indonesia)'
-        wiki_host = 'en.wikipedia.org' if english else 'id.wikipedia.org'
         suffix = official_domain_suffixes(language)[0]
         site_filter = 'site:.gov' if english else 'site:go.id'
+        forums = 'reddit.com, quora.com or relevant forums' if english else \
+            'reddit.com, quora.com, kaskus.co.id or other Indonesian forums and communities'
         lines = [f'Research topic: "{topic}"']
         if category and category != topic:
             lines.append(f'Category: "{category}"')
@@ -404,29 +462,38 @@ class ClaudeWebResearch:
             '',
             'Tasks:',
         ]
-        step = 1
+        tasks = []
         if wants['competitors']:
-            lines.append(
-                f'{step}. Competitors: find the top {limits["competitors"]} ranking pages for the topic (search the '
-                'way a reader would). Fetch the most useful ones; for each, list its H2/H3 headings and up to '
-                f'{KEY_PASSAGE_LIMIT} verbatim passages most relevant to the topic.')
-            step += 1
+            tasks.append(
+                f'Competitors: find the top {limits["competitors"]} ranking pages for the topic (search the way a '
+                'reader would). Fetch the most useful ones; for each, list its H2/H3 headings and up to '
+                f'{KEY_PASSAGE_LIMIT} verbatim passages most relevant to the topic. If a fetched page is thin '
+                '(fewer than 2 substantial passages), fetch another candidate instead.')
         if wants['official']:
-            lines.append(
-                f'{step}. Official sources: find up to {limits["official"]} official government pages about the '
-                f'topic (search with {site_filter}). Only hosts ending in .{suffix} count. Fetch them and quote up '
-                f'to {KEY_PASSAGE_LIMIT} verbatim passages each with the rules, rates, fees, dates or '
-                'requirements they state.')
-            step += 1
+            tasks.append(
+                f'Official sources: find up to {limits["official"]} official government pages about the topic '
+                f'(search with {site_filter}). Only hosts ending in .{suffix} count. Fetch them and quote up to '
+                f'{KEY_PASSAGE_LIMIT} verbatim passages each with the rules, rates, fees, dates or requirements '
+                'they state.')
         if wants['news']:
-            lines.append(
-                f'{step}. News: find up to {limits["news"]} news articles about the topic from the last 12 months. '
-                'List their URLs from the search results; do not fetch them.')
-            step += 1
-        if wants['wikipedia']:
-            lines.append(
-                f'{step}. Wikipedia: find the {wiki_host} article on the topic, fetch it and copy its first two '
-                'or three sentences verbatim as "summary". Use null when there is no matching article.')
+            tasks.append(
+                f'News: find up to {limits["news"]} news articles about the topic from the last 12 months. List '
+                'their URLs from the search results; do not fetch them.')
+        if wants['social']:
+            tasks.append(
+                f'Social listening: find up to {limits["social"]} real discussions about the topic on {forums}. '
+                'For each, give the discussion URL and the question or pain point copied verbatim from its '
+                'search-result title or the fetched page. Prefer search results; fetch only if needed.')
+        if wants['questions']:
+            tasks.append(
+                f'Reader questions: list up to {limits["questions"]} real questions people ask about the topic, '
+                'copied verbatim, each with the URL where it appears: question-form search-result titles, FAQ or '
+                'question headings on fetched pages, and forum thread titles.')
+        if wants['youtube']:
+            tasks.append(
+                f'Videos: find up to {limits["youtube"]} relevant YouTube videos (youtube.com/watch or youtu.be '
+                'URLs from the search results). Do not fetch them.')
+        lines += [f'{number}. {task}' for number, task in enumerate(tasks, 1)]
         lines += [
             '',
             f'Budget: at most {WEB_SEARCH_MAX_USES} searches and {WEB_FETCH_MAX_USES} fetches in total. Fetch only '
@@ -700,7 +767,8 @@ class ClaudeWebResearch:
         return headings
 
     def _competitors(self, data, pages, topic, excluded, limit):
-        """Competitors with at least one verified passage; search-only pages are not used."""
+        """Competitors with at least one verified passage (search-only pages are not used),
+        good pages (MIN_GOOD_PASSAGES or more) first."""
         competitors, seen = [], set()
         for item in _items(data, 'competitors'):
             url, page = self._lookup(pages, item.get('url'), excluded)
@@ -729,9 +797,9 @@ class ClaudeWebResearch:
                 'key_passages': passages,
                 'retrieved_via': 'claude_web',
             })
-            if len(competitors) >= limit:
-                break
-        return competitors
+        # Pages with enough verified passages first (stable), then thin ones.
+        competitors.sort(key=lambda item: len(item['key_passages']) < MIN_GOOD_PASSAGES)
+        return competitors[:limit]
 
     def _official(self, data, pages, topic, language, excluded, limit):
         sources, seen = [], set()
@@ -785,45 +853,94 @@ class ClaudeWebResearch:
                 break
         return news
 
-    @staticmethod
-    def _wikipedia(data, pages, topic, language, excluded):
-        item = data.get('wikipedia')
-        if not isinstance(item, dict):
-            return None
-        url, page = ClaudeWebResearch._lookup(pages, item.get('url'), excluded)
-        wiki_host = f"{'en' if language == 'en' else 'id'}.wikipedia.org"
-        if not url or (urlsplit(url).hostname or '') != wiki_host or not urlsplit(url).path.startswith('/wiki/'):
-            return None
-        summary = ' '.join(str(item.get('summary') or '').split())
-        if len(summary) < WIKIPEDIA_MIN_EXTRACT_CHARS or not page.contains(summary):
-            return None
-        if spam_marker_count(summary, topic):
-            return None
-        title = unquote(urlsplit(url).path.removeprefix('/wiki/')).replace('_', ' ').strip()
-        # Footnote markers are dropped from the stored extract too.
-        extract = ' '.join(_FOOTNOTE_RE.sub(' ', _FOOTNOTE_LINK_RE.sub(' ', summary)).split())
-        return {'title': title, 'url': url, 'extract': cut_at_sentence(extract, WIKIPEDIA_MAX_CHARS)}
+    def _social(self, data, pages, topic, excluded, limit):
+        """Discussions (reddit, quora, forums) with the question or pain point
+        found verbatim in that page's search-result title or fetched text."""
+        insights, seen = [], set()
+        for item in _items(data, 'social'):
+            url, page = self._lookup(pages, item.get('url'), excluded)
+            if not url or not is_discussion_url(url):
+                continue
+            text = _clean_line(item.get('text'), MAX_SOCIAL_CHARS)
+            marker = comparable_text(text)
+            if len(marker) < MIN_SOCIAL_CHARS or marker in seen or not _verbatim_on_page(page, text, MIN_SOCIAL_CHARS):
+                continue
+            if spam_marker_count(text, topic) or spam_marker_count(page.title, topic):
+                continue
+            seen.add(marker)
+            insights.append({'text': text, 'url': url, 'provider': discussion_provider(url)})
+            if len(insights) >= limit:
+                break
+        return insights
+
+    def _questions(self, data, pages, topic, language, excluded, limit):
+        """Real reader questions, each verbatim in a retrieved title, heading or
+        page text, in question form and about the topic."""
+        questions, seen = [], set()
+        for item in _items(data, 'questions', MAX_QUESTION_CANDIDATES):
+            url, page = self._lookup(pages, item.get('url'), excluded)
+            if not url:
+                continue
+            text = _clean_line(item.get('text'), MAX_QUESTION_CHARS).strip(' -*#')
+            marker = comparable_text(text)
+            if len(marker) < MIN_QUESTION_CHARS or marker.rstrip('?') in seen:
+                continue
+            is_heading = _in_titles(page, text) or page.is_heading_line(text)
+            if not (is_heading or page.contains(text, MIN_QUESTION_CHARS)):
+                continue
+            # A question mark, or a question-form heading / title ("Cara ...", "What is ...").
+            if not (text.endswith('?') or (is_heading and is_question_title(text, language))):
+                continue
+            if not title_matches_topic(text, topic, language) or spam_marker_count(text, topic):
+                continue
+            seen.add(marker.rstrip('?'))
+            questions.append(text)
+            if len(questions) >= limit:
+                break
+        return questions
+
+    def _youtube(self, data, pages, excluded, limit):
+        """YouTube videos that appeared in this call's search results."""
+        videos, seen = [], set()
+        for item in _items(data, 'youtube'):
+            url, page = self._lookup(pages, item.get('url'), excluded)
+            if not url or not page.searched:
+                continue
+            video_id = extract_youtube_video_id(url)
+            if not video_id or video_id in seen or url_host(url) not in YOUTUBE_HOSTS:
+                continue
+            seen.add(video_id)
+            videos.append({'video_id': video_id, 'title': page.search_title or url_host(url), 'url': url})
+            if len(videos) >= limit:
+                break
+        return videos
 
     # -- entry point ----------------------------------------------------------
 
     def research(self, topic, language='id', *, category=None, exclude_hosts=None, want_competitors=True,
-                 want_official=True, want_news=True, want_wikipedia=True, competitor_limit=COMPETITOR_LIMIT,
-                 official_limit=OFFICIAL_SOURCE_LIMIT, news_limit=NEWS_LIMIT):
+                 want_official=True, want_news=True, want_social=True, want_questions=True, want_youtube=False,
+                 competitor_limit=COMPETITOR_LIMIT, official_limit=OFFICIAL_SOURCE_LIMIT, news_limit=NEWS_LIMIT,
+                 social_limit=SOCIAL_LIMIT, question_limit=QUESTION_LIMIT, youtube_limit=YOUTUBE_LIMIT):
         """Validated research parts, or None when the call failed.
 
-        Returns {'competitors': [...], 'official_sources': [...], 'news': [...],
-        'wikipedia': {'title', 'url', 'extract'} | None, 'stats': {...}} in the
-        shapes analyze_competitors / get_official_sources / get_latest_news /
-        get_wikipedia_context produce. Parts not requested are empty.
+        Returns {'competitors', 'official_sources', 'news', 'social', 'questions',
+        'youtube', 'stats'} in the shapes analyze_competitors /
+        get_official_sources / get_latest_news / get_social_insights /
+        get_related_questions produce; 'youtube' is [{'video_id', 'title', 'url'}]
+        for SEOResearch to fetch transcripts for. Parts not requested are empty.
+        Wikipedia is not researched here: the free Wikipedia API does it.
         """
         self.last_error = None
         language = 'en' if language == 'en' else 'id'
         excluded = normalize_hosts(exclude_hosts)
-        wants = {'competitors': want_competitors, 'official': want_official,
-                 'news': want_news, 'wikipedia': want_wikipedia}
+        wants = {'competitors': want_competitors, 'official': want_official, 'news': want_news,
+                 'social': want_social, 'questions': want_questions, 'youtube': want_youtube}
         limits = {'competitors': max(1, min(COMPETITOR_LIMIT, competitor_limit)),
                   'official': max(1, min(OFFICIAL_SOURCE_LIMIT, official_limit)),
-                  'news': max(1, min(NEWS_LIMIT, news_limit))}
+                  'news': max(1, min(NEWS_LIMIT, news_limit)),
+                  'social': max(1, min(SOCIAL_LIMIT, social_limit)),
+                  'questions': max(1, min(QUESTION_LIMIT, question_limit)),
+                  'youtube': max(1, min(YOUTUBE_LIMIT, youtube_limit))}
         started = _now()
         try:
             prompt = self.build_prompt(topic, language, category, excluded, wants, limits)
@@ -838,20 +955,26 @@ class ClaudeWebResearch:
             data = _parse_json_object(self._final_text(final))
             if data is None:
                 raise ResearchFailed('final reply is not a JSON object')
-            pages, tool_errors, calls = self._retrieved_pages(messages)
+            pages, tool_errors, _calls = self._retrieved_pages(messages)
             usage = self._usage(messages)
             requests = {name: 0 for name in TOOL_LIMITS}
             for message in messages:
                 for name, count in self._tool_requests(message).items():
                     requests[name] += count
 
+            def part(name, build):
+                return build() if wants[name] else []
+
             result = {
-                'competitors': self._competitors(data, pages, topic, excluded, limits['competitors'])
-                if want_competitors else [],
-                'official_sources': self._official(data, pages, topic, language, excluded, limits['official'])
-                if want_official else [],
-                'news': self._news(data, pages, topic, excluded, limits['news']) if want_news else [],
-                'wikipedia': self._wikipedia(data, pages, topic, language, excluded) if want_wikipedia else None,
+                'competitors': part('competitors', lambda: self._competitors(
+                    data, pages, topic, excluded, limits['competitors'])),
+                'official_sources': part('official', lambda: self._official(
+                    data, pages, topic, language, excluded, limits['official'])),
+                'news': part('news', lambda: self._news(data, pages, topic, excluded, limits['news'])),
+                'social': part('social', lambda: self._social(data, pages, topic, excluded, limits['social'])),
+                'questions': part('questions', lambda: self._questions(
+                    data, pages, topic, language, excluded, limits['questions'])),
+                'youtube': part('youtube', lambda: self._youtube(data, pages, excluded, limits['youtube'])),
             }
         except BaseTimeoutException:
             # Only reachable when research() runs on the job's main thread (where
@@ -868,7 +991,8 @@ class ClaudeWebResearch:
             return None
 
         searches, fetches = requests['web_search'], requests['web_fetch']
-        cost = estimate_cost_usd(usage, searches)
+        cost = estimate_cost_usd(usage, searches, self.model)
+        thin = sum(1 for item in result['competitors'] if len(item['key_passages']) < MIN_GOOD_PASSAGES)
         result['stats'] = {
             'model': self.model,
             'searches': searches,
@@ -877,6 +1001,7 @@ class ClaudeWebResearch:
             'pages_fetched': sum(1 for page in pages.values() if page.fetched),
             'continuations': len(messages) - 1,
             'tool_errors': tool_errors[:10],
+            'thin_competitors': thin,
             'input_tokens': usage['input_tokens'],
             'output_tokens': usage['output_tokens'],
             'cache_read_input_tokens': usage['cache_read_input_tokens'],
@@ -888,8 +1013,10 @@ class ClaudeWebResearch:
             f"fetches={fetches} pages={len(pages)} continuations={len(messages) - 1} "
             f"input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']} "
             f"cache_read={usage['cache_read_input_tokens']} cache_write={usage['cache_creation_input_tokens']} "
-            f"est_cost=${cost:.2f} (at Opus 5.5 prices) tool_errors={tool_errors[:5]} "
-            f"kept: competitors={len(result['competitors'])} official={len(result['official_sources'])} "
-            f"news={len(result['news'])} wikipedia={bool(result['wikipedia'])} in {_now() - started:.0f}s"
+            f"est_cost=${cost:.2f} tool_errors={tool_errors[:5]} "
+            f"kept: competitors={len(result['competitors'])} (thin {thin}) "
+            f"official={len(result['official_sources'])} news={len(result['news'])} "
+            f"social={len(result['social'])} questions={len(result['questions'])} "
+            f"youtube={len(result['youtube'])} in {_now() - started:.0f}s"
         )
         return result

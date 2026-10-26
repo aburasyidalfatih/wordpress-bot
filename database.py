@@ -23,7 +23,7 @@ MIGRATION_LOCK_ID = 4207311001
 
 # Bump this whenever a new migration step is added to _run_migrations_locked so
 # that already-migrated databases re-run the set exactly once.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SCHEMA_VERSION_KEY = '__schema_version__'
 
 # Research older than this is not used to drive new articles. Shared by the
@@ -43,8 +43,9 @@ RESEARCH_KEEP_LATEST_RUNS = 2
 # autocomplete, competitor scraping, social, YouTube and news, and a slow or
 # rate-limited provider stretches that further. Claude web research (when an
 # Anthropic key is configured) may take up to its 240 s budget, after which the
-# classic fallback for the parts it did not return still has to fit.
-RESEARCH_SECONDS_PER_CATEGORY = 360
+# classic fallback for the parts it did not return (competitors, official,
+# social, YouTube, news, questions, run in sequence) still has to fit.
+RESEARCH_SECONDS_PER_CATEGORY = 480
 RESEARCH_MIN_TIMEOUT_SECONDS = 600
 # The per-site research lock is only a safety net against a lost release: its
 # liveness comes from the RQ status of its job (queued/started/... = busy), so
@@ -590,6 +591,8 @@ class Database:
             'confidence_level': "VARCHAR(20) DEFAULT 'unknown'",
             'is_fallback': 'BOOLEAN DEFAULT FALSE',
             'researched_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+            # Government pages found for the category (Claude web research).
+            'official_sources': 'JSON',
         }
         with self.get_session() as session:
             for name, sql_type in columns.items():
@@ -902,7 +905,7 @@ class Database:
                            social_insights=None, trend_score=0, semantic_context='',
                            news_insights=None, source_metadata=None, quality_score=0,
                            confidence_level='unknown', is_fallback=False,
-                           researched_at=None):
+                           researched_at=None, official_sources=None):
         with self.get_session() as session:
             research = ResearchData(
                 user_id=user_id,
@@ -927,6 +930,8 @@ class Database:
                 research.youtube_insights = youtube_insights
             if social_insights is not None:
                 research.social_insights = social_insights
+            if official_sources is not None:
+                research.official_sources = official_sources
             research.trend_score = trend_score
             research.semantic_context = semantic_context or ''
             research.news_insights = news_insights or []

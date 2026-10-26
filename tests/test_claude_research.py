@@ -56,6 +56,8 @@ COMP_TEXT = (
 )
 COMP_PASSAGE = ("SPT Tahunan adalah surat yang digunakan wajib pajak untuk melaporkan penghasilan, harta, "
                 "dan kewajiban dalam satu tahun pajak.")
+COMP_PASSAGE_2 = ("Wajib pajak orang pribadi harus menyampaikan SPT paling lambat tanggal 31 Maret setiap tahun, "
+                  "sedangkan wajib pajak badan paling lambat 30 April.")
 COMP2_URL = 'https://pajak.example.net/panduan'
 COMP2_TEXT = ("Panduan SPT\nPelaporan SPT Tahunan bagi karyawan cukup memakai formulir 1770 S apabila penghasilan "
               "bruto setahun lebih dari enam puluh juta rupiah.\n")
@@ -193,9 +195,9 @@ def fake_client(*outcomes):
                            beta=SimpleNamespace(messages=SimpleNamespace(stream=mock)))
 
 
-def payload(competitors=(), official=(), news=(), wikipedia=None):
+def payload(competitors=(), official=(), news=(), social=(), questions=(), youtube=()):
     return json.dumps({'competitors': list(competitors), 'official': list(official), 'news': list(news),
-                       'wikipedia': wikipedia})
+                       'social': list(social), 'questions': list(questions), 'youtube': list(youtube)})
 
 
 def research_blocks():
@@ -242,12 +244,12 @@ class RequestShapeTests(unittest.TestCase):
         kwargs = self.run_research()
         search, fetch = kwargs['tools']
         self.assertEqual(search, {
-            'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': 5, 'allowed_callers': ['direct'],
+            'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': 9, 'allowed_callers': ['direct'],
             'user_location': {'type': 'approximate', 'country': 'ID', 'timezone': 'Asia/Jakarta'},
             'blocked_domains': ['situs.example'],
         })
         self.assertEqual(fetch, {
-            'type': 'web_fetch_20260209', 'name': 'web_fetch', 'max_uses': 4, 'max_content_tokens': 6000,
+            'type': 'web_fetch_20260209', 'name': 'web_fetch', 'max_uses': 6, 'max_content_tokens': 6000,
             'citations': {'enabled': True}, 'allowed_callers': ['direct'], 'blocked_domains': ['situs.example'],
         })
         self.assertNotIn('allowed_domains', search)
@@ -271,12 +273,22 @@ class RequestShapeTests(unittest.TestCase):
         self.assertIn('situs.example', prompt)
         self.assertIn('never re-fetch', prompt)
         self.assertIn('never fetch the same page twice', claude_research.SYSTEM_PROMPT)
+        self.assertIn('is thin: fetch another candidate', claude_research.SYSTEM_PROMPT)
+        # Social listening and reader questions are part of the same call; Wikipedia is not.
+        self.assertIn('Social listening', prompt)
+        self.assertIn('kaskus.co.id', prompt)
+        self.assertIn('Reader questions', prompt)
+        self.assertNotIn('Videos:', prompt)
+        self.assertNotIn('wikipedia', prompt.lower())
+        self.assertNotIn('wikipedia', claude_research.SYSTEM_PROMPT.lower())
+        for part in ('"social"', '"questions"', '"youtube"'):
+            self.assertIn(part, claude_research.SYSTEM_PROMPT)
 
     def test_english_uses_us_location_and_gov(self):
         kwargs = self.run_research(language='en')
         self.assertEqual(kwargs['tools'][0]['user_location'], {'type': 'approximate', 'country': 'US'})
         self.assertIn('site:.gov', kwargs['messages'][0]['content'])
-        self.assertIn('en.wikipedia.org', kwargs['messages'][0]['content'])
+        self.assertNotIn('kaskus', kwargs['messages'][0]['content'])
 
     def test_model_without_fallback_uses_plain_stream(self):
         research = engine(message(research_blocks() + [text(payload())]), model='claude-haiku-4-5')
@@ -294,11 +306,17 @@ class RequestShapeTests(unittest.TestCase):
 
     def test_unrequested_parts_are_left_out_of_the_prompt(self):
         research = engine(message(research_blocks() + [text(payload())]))
-        research.research(TOPIC, want_official=False, want_news=False, want_wikipedia=False)
+        research.research(TOPIC, want_official=False, want_news=False, want_social=False, want_questions=False)
         prompt = research.client.messages.stream.call_args.kwargs['messages'][0]['content']
         self.assertNotIn('site:go.id', prompt)
-        self.assertNotIn('wikipedia.org', prompt)
         self.assertNotIn('News:', prompt)
+        self.assertNotIn('Social listening', prompt)
+        self.assertNotIn('Reader questions', prompt)
+        research = engine(message(research_blocks() + [text(payload())]))
+        research.research(TOPIC, want_youtube=True)
+        self.assertIn('2. Official sources', research.client.messages.stream.call_args.kwargs['messages'][0]['content'])
+        self.assertIn('Videos: find up to 2 relevant YouTube videos',
+                      research.client.messages.stream.call_args.kwargs['messages'][0]['content'])
 
 
 class CostTests(unittest.TestCase):
@@ -336,8 +354,8 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(resumed['messages'][1], {'role': 'assistant', 'content': first.content})
         self.assertEqual(len(resumed['messages']), 2)  # no extra "continue" message
         # The search/fetch limits are totals: only what is left is offered.
-        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [3, 4])
-        self.assertEqual([tool['max_uses'] for tool in first_kwargs['tools']], [5, 4])
+        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [7, 6])
+        self.assertEqual([tool['max_uses'] for tool in first_kwargs['tools']], [9, 6])
         self.assertEqual([c['url'] for c in result['competitors']], [COMP_URL])
         self.assertEqual(result['stats']['continuations'], 1)
         self.assertEqual((result['stats']['searches'], result['stats']['fetches']), (2, 3))
@@ -350,16 +368,16 @@ class ContinuationTests(unittest.TestCase):
         self.assertIsNotNone(research.research(TOPIC))
         resumed = research.client.messages.stream.call_args_list[2].kwargs
         self.assertEqual(resumed['messages'][1]['content'], list(first.content) + list(second.content))
-        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [3, 4])
+        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [7, 6])
 
     def test_spent_budget_stops_instead_of_continuing(self):
-        paused = message(research_blocks()[:2], stop_reason='pause_turn', searches=5, fetches=1)
+        paused = message(research_blocks()[:2], stop_reason='pause_turn', searches=9, fetches=1)
         research = engine(paused, message([text(payload())]))
         self.assertIsNone(research.research(TOPIC))
         self.assertEqual(research.client.messages.stream.call_count, 1)
 
     def test_budget_counted_from_result_blocks_without_usage(self):
-        blocks = [search_result(f's{i}', (f'https://e{i}.example.com/', 't', None)) for i in range(5)]
+        blocks = [search_result(f's{i}', (f'https://e{i}.example.com/', 't', None)) for i in range(9)]
         paused = message(blocks, stop_reason='pause_turn')
         paused.usage.server_tool_use = None
         research = engine(paused, message([text(payload())]))
@@ -566,23 +584,15 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(result['news'][0]['source'], 'berita.example.com')
         self.assertEqual(result['news'][0]['published_at'], '2026-10-01')
 
-    def test_wikipedia_with_footnote_markers(self):
-        blocks = research_blocks() + [fetch_result('f4', WIKI_URL, WIKI_TEXT, title='Surat Pemberitahuan - Wikipedia')]
-        result = self.run_payload(payload(wikipedia={'url': WIKI_URL, 'summary': WIKI_SUMMARY}), blocks=blocks)
-        self.assertEqual(result['wikipedia'], {'title': 'Surat Pemberitahuan', 'url': WIKI_URL,
-                                               'extract': WIKI_SUMMARY})
-        # The model copying the markers verifies too, and they are not stored.
-        with_markers = WIKI_SUMMARY.replace('pajak, objek', 'pajak,[1] objek') + '[2]'
-        result = self.run_payload(payload(wikipedia={'url': WIKI_URL, 'summary': with_markers}), blocks=blocks)
-        self.assertNotIn('[1]', result['wikipedia']['extract'])
-
-    def test_wikipedia_summary_must_be_verbatim(self):
-        blocks = research_blocks() + [fetch_result('f4', WIKI_URL, WIKI_TEXT)]
-        result = self.run_payload(payload(wikipedia={
-            'url': WIKI_URL,
-            'summary': 'SPT adalah dokumen pajak yang ' + 'sangat penting dan wajib dilaporkan setiap tahun ' * 5,
-        }), blocks=blocks)
-        self.assertIsNone(result['wikipedia'])
+    def test_footnote_markers_do_not_break_the_verbatim_check(self):
+        url = 'https://id.example.org/spt'
+        page = ('SPT adalah surat yang oleh wajib pajak digunakan untuk melaporkan penghitungan pajak,[1] '
+                'objek pajak dan harta.[2](https://id.example.org/spt#cite_note-2) Lainnya.[catatan 1]\n')
+        quote = ('SPT adalah surat yang oleh wajib pajak digunakan untuk melaporkan penghitungan pajak, '
+                 'objek pajak dan harta.')
+        result = self.run_payload(payload(competitors=[comp(url=url, passages=[quote, quote + '[1]'])]),
+                                  blocks=[fetch_result('f1', url, page, title='SPT')])
+        self.assertEqual(result['competitors'][0]['key_passages'], [quote])
 
     def test_server_tool_errors_do_not_raise(self):
         blocks = [
@@ -722,15 +732,20 @@ class FactoryTests(unittest.TestCase):
 # SEOResearch integration
 # ---------------------------------------------------------------------------
 
-def claude_competitor(url=COMP_URL, passages=(COMP_PASSAGE,)):
+def claude_competitor(url=COMP_URL, passages=(COMP_PASSAGE, COMP_PASSAGE_2)):
     return {'url': url, 'title': 'Cara Lapor', 'headers': ['Syarat'], 'heading_count': 1, 'word_count': 50,
             'published_hint': None, 'key_passages': list(passages), 'retrieved_via': 'claude_web'}
 
 
-CLAUDE_COMPETITORS = [claude_competitor(), claude_competitor(COMP2_URL, (COMP2_PASSAGE,))]
+CLAUDE_COMPETITORS = [claude_competitor(), claude_competitor(COMP2_URL, (COMP2_PASSAGE, COMP_PASSAGE))]
+THIN_COMPETITOR = claude_competitor('https://thin.example.com/x', (COMP_PASSAGE,))
 CLAUDE_OFFICIAL = {'title': 'DJP', 'url': OFFICIAL_URL, 'passages': [OFFICIAL_PASSAGE]}
 CLAUDE_NEWS = {'title': 'Berita SPT', 'source': 'Contoh', 'url': NEWS_URL, 'published_at': '2026-09-20'}
-CLAUDE_WIKI = {'title': 'Surat Pemberitahuan', 'url': WIKI_URL, 'extract': WIKI_SUMMARY}
+CLAUDE_SOCIAL = [{'text': 'Bagaimana cara lapor SPT kalau lupa EFIN?', 'url': 'https://www.reddit.com/r/x/1',
+                  'provider': 'reddit'}]
+CLAUDE_QUESTIONS = ['Kapan batas lapor SPT tahunan?', 'Bagaimana cara lapor SPT tahunan online?',
+                    'Apa sanksi telat lapor SPT tahunan?']
+CLAUDE_VIDEOS = [{'video_id': 'abcdefghijk', 'title': 'Cara lapor SPT', 'url': 'https://www.youtube.com/watch?v=abcdefghijk'}]
 CLASSIC_COMPETITORS = [{'url': COMP_URL, 'title': 'DDG duplikat', 'headers': []},
                        {'url': 'https://ddg.example.com/a', 'title': 'DDG A', 'headers': []},
                        {'url': 'https://ddg.example.com/b', 'title': 'DDG B', 'headers': []},
@@ -815,21 +830,40 @@ class SEOResearchIntegrationTests(unittest.TestCase):
         self.assertEqual(options['exclude_hosts'], frozenset({'situs.example'}))
         self.assertEqual(options['competitor_limit'], 3)
         self.assertFalse(options['want_news'])
-        self.assertFalse(options['want_wikipedia'])
+        self.assertFalse(options['want_youtube'])
+        self.assertEqual(options['question_limit'], 8)
+        self.assertNotIn('want_wikipedia', options)
 
-    def test_one_verified_competitor_is_topped_up_by_the_classic_scrape(self):
-        claude = FakeEngine(claude_result(competitors=[claude_competitor(), claude_competitor(SEARCH_ONLY_URL, ())],
+    def test_one_good_competitor_is_topped_up_by_the_classic_scrape(self):
+        claude = FakeEngine(claude_result(competitors=[claude_competitor(), THIN_COMPETITOR,
+                                                       claude_competitor(SEARCH_ONLY_URL, ())],
                                           official_sources=[CLAUDE_OFFICIAL]))
         result, mocks = self.run_topic(claude, analyze_competitors=CLASSIC_COMPETITORS)
         mocks['analyze_competitors'].assert_called_once()
         mocks['get_official_sources'].assert_not_called()
+        # Good Claude page, then classic ones (the duplicate URL dropped); the thin page did not fit.
         self.assertEqual([c['url'] for c in result['competitor_outlines']],
                          [COMP_URL, 'https://ddg.example.com/a', 'https://ddg.example.com/b'])
         self.assertEqual(result['competitor_outlines'][0]['retrieved_via'], 'claude_web')
         meta = result['source_metadata']['competitors']
-        self.assertEqual((meta['status'], meta['count'], meta['via'], meta['claude_count']),
-                         ('real', 3, 'claude_web+duckduckgo', 1))
-        self.assertEqual(result['source_metadata']['claude_web']['competitors_count'], 1)
+        self.assertEqual((meta['status'], meta['count'], meta['via'], meta['claude_count'], meta['thin_count']),
+                         ('real', 3, 'claude_web+duckduckgo', 1, 1))
+        self.assertEqual(result['source_metadata']['claude_web']['competitors_count'], 2)
+        self.assertEqual(result['source_metadata']['claude_web']['thin_competitors_count'], 1)
+
+    def test_thin_pages_never_count_but_are_kept_when_nothing_better_exists(self):
+        # Two thin pages are not enough to replace the classic scrape...
+        claude = FakeEngine(claude_result(competitors=[THIN_COMPETITOR, claude_competitor(COMP2_URL, (COMP2_PASSAGE,))]))
+        result, mocks = self.run_topic(claude, analyze_competitors=[])
+        mocks['analyze_competitors'].assert_called_once()
+        # ...but with DuckDuckGo blocked they are kept, as partial evidence.
+        self.assertEqual(len(result['competitor_outlines']), 2)
+        self.assertEqual(result['source_metadata']['competitors']['status'], 'partial')
+        # Two good pages replace the scrape and the thin one is dropped.
+        claude = FakeEngine(claude_result(competitors=CLAUDE_COMPETITORS + [THIN_COMPETITOR]))
+        result, mocks = self.run_topic(claude)
+        mocks['analyze_competitors'].assert_not_called()
+        self.assertEqual(result['competitor_outlines'], CLAUDE_COMPETITORS)
 
     def test_missing_part_falls_back_to_classic(self):
         claude = FakeEngine(claude_result(competitors=CLAUDE_COMPETITORS))
@@ -876,39 +910,65 @@ class SEOResearchIntegrationTests(unittest.TestCase):
         self.assertEqual(result['source_metadata']['claude_web']['status'], 'unavailable')
 
     def test_category_research_with_claude(self):
-        claude = FakeEngine(claude_result(competitors=CLAUDE_COMPETITORS, news=[CLAUDE_NEWS], wikipedia=CLAUDE_WIKI))
+        claude = FakeEngine(claude_result(competitors=CLAUDE_COMPETITORS, news=[CLAUDE_NEWS],
+                                          official_sources=[CLAUDE_OFFICIAL], social=CLAUDE_SOCIAL,
+                                          questions=CLAUDE_QUESTIONS, youtube=CLAUDE_VIDEOS))
         research = SEOResearch(claude=claude)
         research.exclude_hosts = ['situs.example']
-        result, mocks = self._run(research, lambda: research.research_category('Pajak'), {})
-        for name in ('analyze_competitors', 'get_latest_news', 'get_wikipedia_context'):
+        with patch.object(research, '_fetch_transcript', side_effect=RuntimeError('IpBlocked')), \
+                patch.object(seo_research, 'YouTubeTranscriptApi', object()):
+            result, mocks = self._run(research, lambda: research.research_category('Pajak'), {})
+        for name in ('analyze_competitors', 'get_latest_news', 'get_official_sources', 'get_social_insights',
+                     'get_related_questions', 'get_youtube_insights'):
             mocks[name].assert_not_called()
-        for name in ('get_keyword_suggestions', 'get_trend_analysis', 'get_related_questions',
-                     'get_social_insights', 'get_youtube_insights'):
+        for name in ('get_keyword_suggestions', 'get_trend_analysis', 'get_wikipedia_context'):
             mocks[name].assert_called_once()
         self.assertEqual(result['competitor_outlines'], CLAUDE_COMPETITORS)
         self.assertEqual(result['news_insights'], [CLAUDE_NEWS])
-        self.assertEqual(result['semantic_context'], WIKI_SUMMARY)
+        self.assertEqual(result['official_sources'], [CLAUDE_OFFICIAL])
+        self.assertEqual(result['social_insights'], CLAUDE_SOCIAL)
+        self.assertEqual(result['questions'], CLAUDE_QUESTIONS)
+        self.assertEqual(result['evidence_questions'], CLAUDE_QUESTIONS)
+        # Wikipedia always comes from the free Wikipedia API.
+        self.assertEqual(result['semantic_context'], 'Konteks klasik')
+        # The transcript was blocked: the video stays, title-only.
+        self.assertEqual(result['youtube_insights'], [{
+            'video_id': 'abcdefghijk', 'title': 'Cara lapor SPT', 'url': CLAUDE_VIDEOS[0]['url'],
+            'snippets': '', 'transcript_available': False}])
         meta = result['source_metadata']
-        self.assertEqual(meta['wikipedia']['title'], 'Surat Pemberitahuan')
+        self.assertEqual((meta['youtube']['status'], meta['youtube']['via']), ('partial', 'claude_web'))
+        self.assertEqual((meta['social']['status'], meta['social']['via']), ('real', 'claude_web'))
+        self.assertEqual((meta['related_questions']['status'], meta['related_questions']['via']), ('real', 'claude_web'))
         self.assertEqual(meta['news']['status'], 'real')
         self.assertEqual(meta['claude_web']['status'], 'real')
-        self.assertFalse(claude.calls[0][2]['want_official'])
+        options = claude.calls[0][2]
+        self.assertTrue(options.get('want_official', True))
+        self.assertTrue(options['want_youtube'])
+        self.assertNotIn('want_wikipedia', options)
         # Claude-supplied parts score like the classic providers.
         self.assertEqual(result['quality'], SEOResearch.evaluate_quality(
-            meta, competitor_count=2, suggestion_count=0, question_count=0))
-        self.assertGreaterEqual(result['quality']['score'], 20 + 4 + 3)
+            meta, competitor_count=2, suggestion_count=0, question_count=3))
+        self.assertGreaterEqual(result['quality']['score'], 20 + 15 + 8 + 4 + 3)
 
     def test_category_falls_back_for_parts_claude_missed(self):
-        claude = FakeEngine(claude_result(competitors=CLAUDE_COMPETITORS))
+        claude = FakeEngine(claude_result(competitors=CLAUDE_COMPETITORS, questions=CLAUDE_QUESTIONS[:2]))
         research = SEOResearch(claude=claude)
         result, mocks = self._run(research, lambda: research.research_category('Pajak'), {})
         mocks['analyze_competitors'].assert_not_called()
-        mocks['get_latest_news'].assert_called_once()
-        mocks['get_wikipedia_context'].assert_called_once()
-        self.assertEqual(result['semantic_context'], 'Konteks klasik')
+        for name in ('get_latest_news', 'get_wikipedia_context', 'get_official_sources', 'get_social_insights',
+                     'get_youtube_insights', 'get_related_questions'):
+            mocks[name].assert_called_once()
+        # Two verified questions are not enough to replace Google Suggest.
+        self.assertEqual(result['questions'], ['apa itu spt?'])
+
+    def test_classic_category_research_has_no_official_lookup(self):
+        research = SEOResearch()
+        result, mocks = self._run(research, lambda: research.research_category('Pajak'), {})
+        mocks['get_official_sources'].assert_not_called()
+        self.assertEqual(result['official_sources'], [])
 
     def test_category_top_up_respects_the_category_limit(self):
-        claude = FakeEngine(claude_result(competitors=[claude_competitor()]))
+        claude = FakeEngine(claude_result(competitors=[claude_competitor(), THIN_COMPETITOR]))
         research = SEOResearch(claude=claude)
         result, _ = self._run(research, lambda: research.research_category('Pajak'),
                               {'analyze_competitors': CLASSIC_COMPETITORS})
@@ -916,8 +976,10 @@ class SEOResearchIntegrationTests(unittest.TestCase):
         self.assertEqual(result['competitor_outlines'][0]['retrieved_via'], 'claude_web')
 
     def test_end_to_end_with_real_engine(self):
-        blocks = research_blocks() + [fetch_result('f9', COMP2_URL, COMP2_TEXT, title='Panduan SPT karyawan')]
-        data = payload(competitors=[comp(), comp(url=COMP2_URL, passages=[COMP2_PASSAGE])],
+        page2 = COMP2_TEXT + COMP_PASSAGE + '\n'
+        blocks = research_blocks() + [fetch_result('f9', COMP2_URL, page2, title='Panduan SPT karyawan')]
+        data = payload(competitors=[comp(passages=[COMP_PASSAGE, COMP_PASSAGE_2]),
+                                    comp(url=COMP2_URL, passages=[COMP2_PASSAGE, COMP_PASSAGE])],
                        official=[{'url': OFFICIAL_URL, 'passages': [OFFICIAL_PASSAGE]}])
         claude = engine(message(blocks + [text(data)]))
         result, mocks = self.run_topic(claude)
