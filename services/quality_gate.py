@@ -28,8 +28,21 @@ SHORT_WORD_COUNT = 600
 
 MIN_HEADINGS = 2
 MAX_TITLE_LENGTH = 70  # the prompt asks for at most 60; some slack before warning
-MIN_META_LENGTH = 80
-MAX_META_LENGTH = 200
+# Search results show roughly 155-160 characters of a meta description. The
+# prompts ask for 140-155; outside 120-160 the gate warns, and the publisher
+# trims anything longer than PUBLISH_META_MAX_CHARS (fit_meta_description).
+MIN_META_LENGTH = 120
+MAX_META_LENGTH = 160
+PUBLISH_META_MAX_CHARS = 158
+# A cut at a sentence end is preferred while it keeps at least this much text.
+MIN_SENTENCE_CUT_CHARS = 100
+
+# Words a trimmed meta description must not end on (English and Indonesian).
+_DANGLING_END_WORDS = frozenset({
+    'a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'as', 'your',
+    'di', 'ke', 'dari', 'untuk', 'dan', 'yang', 'dengan', 'pada', 'atau', 'dalam', 'bagi', 'oleh', 'serta',
+    'agar', 'supaya', 'tentang', 'sebagai',
+})
 
 # Phrases the old prompt actively produced. Their presence means either a stale
 # custom prompt or the model ignoring the evidence policy.
@@ -123,7 +136,8 @@ def check_article(article, focus_keyword=None, allowed_link_urls=None):
     if not meta:
         warnings.append('No meta description.')
     elif not (MIN_META_LENGTH <= len(meta) <= MAX_META_LENGTH):
-        warnings.append(f'Meta description length {len(meta)} outside {MIN_META_LENGTH}-{MAX_META_LENGTH}.')
+        warnings.append(f'Meta description length {len(meta)} outside {MIN_META_LENGTH}-{MAX_META_LENGTH} '
+                        f'(trimmed to {PUBLISH_META_MAX_CHARS} on publish when longer).')
 
     takeaways = article.get('key_takeaways') or []
     if not takeaways:
@@ -352,3 +366,32 @@ def plain_text(value):
     text = re.sub(r'<[^>]*>', ' ', text)
     text = text.replace('<', '').replace('>', '')
     return ' '.join(text.split())
+
+
+_SENTENCE_END_RE = re.compile(r'[.!?](?=\s|$)')
+
+
+def fit_meta_description(text, max_chars=PUBLISH_META_MAX_CHARS):
+    """Meta description of at most max_chars characters.
+
+    Plain text is expected (see plain_text). A longer text is cut at the last
+    sentence end inside the limit when that keeps at least
+    MIN_SENTENCE_CUT_CHARS; otherwise at the last word boundary, dropping
+    trailing punctuation and dangling joining words ("dan", "for"). No ellipsis
+    is added. Shorter text is returned unchanged (whitespace collapsed).
+    """
+    text = ' '.join(str(text or '').split())
+    if len(text) <= max_chars:
+        return text
+    window = text[:max_chars + 1]
+    sentence_ends = [m.end() for m in _SENTENCE_END_RE.finditer(window) if m.end() <= max_chars]
+    if sentence_ends and sentence_ends[-1] >= min(MIN_SENTENCE_CUT_CHARS, max_chars):
+        return window[:sentence_ends[-1]].strip()
+    # Word boundary: the character after the cut must be a space (or the end).
+    cut = window[:max_chars]
+    if not window[max_chars:max_chars + 1].isspace():
+        cut = cut.rsplit(' ', 1)[0] if ' ' in cut else cut
+    words = cut.split()
+    while len(words) > 1 and words[-1].lower().strip(',;:-–—') in _DANGLING_END_WORDS:
+        words.pop()
+    return ' '.join(words).rstrip(' ,;:-–—(')

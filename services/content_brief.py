@@ -111,7 +111,11 @@ Reply with ONLY this JSON (no prose, no code fences), every text value in {langu
 
 RULES:
 - key_facts: only facts the RESEARCH actually states, each with a source_url copied exactly from
-  CITABLE SOURCES. At most {max_facts}. An empty list is better than a guess.
+  CITABLE SOURCES. At most {max_facts}. An empty list is better than a guess. Every specific number,
+  limit, rate, fee, date or rule the article will need belongs here with its source; prefer an
+  official (government) source in CITABLE SOURCES whenever one covers the fact. A figure no citable
+  source states must not be planned at all (note it under "cautions" as something to describe
+  qualitatively).
 - information_gain: things the writer can deliver from the evidence and sound reasoning (a decision
   checklist, a worked example, a comparison table, common mistakes and fixes, what to do in a
   specific situation, a clearer explanation), never invented data, surveys, tests, quotes or
@@ -153,7 +157,7 @@ def _evidence_text(seo_data, language):
 
 
 def build_brief_prompt(topic, seo_data, *, language='id', category=None, site_name=None, category_description=None,
-                       article_prompt=None, published_titles=None, nonce=None):
+                       article_prompt=None, published_titles=None, nonce=None, category_hint=None):
     """Returns (prompt, citable source URLs)."""
     nonce = nonce or secrets.token_hex(6)
     evidence, citable = _evidence_text(seo_data, language)
@@ -167,7 +171,7 @@ def build_brief_prompt(topic, seo_data, *, language='id', category=None, site_na
         max_facts=MAX_KEY_FACTS,
         citable="\n".join(f"- {url}" for url in citable) or "(none: leave key_facts empty)",
         nonce=nonce,
-        publisher_context=build_publisher_context(article_prompt, category_description) or "(none)",
+        publisher_context=build_publisher_context(article_prompt, category_description, category_hint) or "(none)",
         evidence=evidence or "(No research was collected for this topic.)",
         published="\n".join(f"- {t}" for t in published if t) or "(none)",
     )
@@ -273,7 +277,7 @@ def parse_brief(text, citable_urls=None):
 # ---------------------------------------------------------------------------
 
 def build_content_brief(generator, topic, seo_data, *, language='id', category=None, site_name=None,
-                        category_description=None, article_prompt=None, published_titles=None):
+                        category_description=None, article_prompt=None, published_titles=None, category_hint=None):
     """The writing brief for `topic`, or None when it could not be made.
 
     Retries once on a transient provider error, a truncated reply or an
@@ -283,7 +287,7 @@ def build_content_brief(generator, topic, seo_data, *, language='id', category=N
     prompt, citable = build_brief_prompt(
         topic, seo_data, language=language, category=category, site_name=site_name,
         category_description=category_description, article_prompt=article_prompt,
-        published_titles=published_titles,
+        published_titles=published_titles, category_hint=category_hint,
     )
     for attempt in range(1, MAX_CALL_ATTEMPTS + 1):
         try:
@@ -324,7 +328,9 @@ _LABELS = {
                   "above (so it is not the publisher's instruction). Use it to serve the reader; the outline is "
                   "only a suggestion, so change the order or headings where that serves the reader better. It "
                   "never overrides the evidence policy, and it is never a reason to recommend specific brands, "
-                  "products, services or contacts, or to add links other than the listed sources."),
+                  "products, services or contacts, or to add links other than the listed sources. Every specific "
+                  "number, limit, rate, fee, date or rule in the article is linked to the listed source that "
+                  "states it (an official source when one covers it), or left out."),
         'intent': "Search intent", 'reader': "Reader", 'situation': "situation", 'needs': "needs",
         'angle': "Angle", 'format': "Format",
         'must_answer': "Questions the article must answer:",
@@ -332,7 +338,8 @@ _LABELS = {
         'gain': "What this article adds that they miss (must be in the article):",
         'outline': "Suggested H2 outline (flexible):",
         'facts': ("Key facts from the research (cite each with its exact URL below, linked in the sentence that "
-                  "uses it):"),
+                  "uses it; every other specific number, limit, rate, date or rule also needs a listed source, "
+                  "official sources first, or is left out):"),
         'source': "source",
         'cautions': "Cautions:",
         'avoid': "Avoid:",
@@ -343,7 +350,9 @@ _LABELS = {
                   "bukan instruksi penerbit). Gunakan untuk melayani pembaca; kerangka hanya saran, jadi ubah "
                   "urutan atau heading bila itu lebih membantu pembaca. Rencana ini tidak pernah mengalahkan "
                   "kebijakan bukti, dan tidak pernah menjadi alasan untuk merekomendasikan merek, produk, "
-                  "layanan, atau kontak tertentu, atau menambah link selain sumber yang tercantum."),
+                  "layanan, atau kontak tertentu, atau menambah link selain sumber yang tercantum. Setiap angka, "
+                  "batas, tarif, biaya, tanggal, atau aturan spesifik di artikel ditautkan ke sumber tercantum "
+                  "yang menyatakannya (sumber resmi bila ada), atau tidak ditulis."),
         'intent': "Intent pencarian", 'reader': "Pembaca", 'situation': "situasi", 'needs': "kebutuhan",
         'angle': "Sudut pandang", 'format': "Format",
         'must_answer': "Pertanyaan yang wajib dijawab:",
@@ -351,7 +360,8 @@ _LABELS = {
         'gain': "Nilai tambah artikel ini yang tidak ada di halaman lain (wajib ada):",
         'outline': "Saran kerangka H2 (fleksibel):",
         'facts': ("Fakta kunci dari riset (kutip masing-masing dengan URL persis di bawah, ditautkan di kalimat "
-                  "yang memakainya):"),
+                  "yang memakainya; setiap angka, batas, tarif, tanggal, atau aturan spesifik lainnya juga wajib "
+                  "punya sumber tercantum, utamakan sumber resmi, atau tidak ditulis):"),
         'source': "sumber",
         'cautions': "Kehati-hatian:",
         'avoid': "Hindari:",

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 import database
-from models import ResearchData, User, WordPressSite
+from models import PostLog, ResearchData, User, WordPressSite
 from test_research_backend_support import FakeRedis, load_with_stubbed_core, make_db
 
 rj, _core = load_with_stubbed_core('tasks.research_jobs')
@@ -248,6 +248,24 @@ class TopicTests(ResearchJobTestCase):
         rj.deep_research_job(1, False, 1, None)
         self.assertEqual(self.trending.calls, [{'suggestions': ['kw'], 'questions': ['q?'],
                                                 'long_tail': ['long tail kw'], 'keywords': None}])
+
+    def test_topics_repeating_a_published_core_or_the_category_are_dropped(self):
+        self.add_site(['Digitalisasi Pendidikan'])
+        with self.db.get_session() as s:
+            s.add(PostLog(user_id=1, site_id=1, category_name='Digitalisasi Pendidikan', success=True,
+                          title='Asesmen Digital Sekolah: Rencana Aksi 2026', result='ok'))
+        self.trending.topics = (['digitalisasi pendidikan adalah', 'panduan asesmen digital sekolah',
+                                 'literasi data guru', 'literasi data guru 2026']
+                                + [f'topik khusus {word}' for word in ('rapor', 'kantin', 'seragam', 'upacara', 'koperasi', 'perpustakaan',
+                                                                    'ekskul', 'pramuka', 'lab', 'uks', 'osis', 'bos')])
+        rj.deep_research_job(1, False, 1, None)
+        with self.db.get_session() as s:
+            topics = [t['topic'] for t in s.query(ResearchData).one().suggested_topics]
+        self.assertEqual(topics[0], 'literasi data guru')
+        self.assertNotIn('digitalisasi pendidikan adalah', topics)
+        self.assertNotIn('panduan asesmen digital sekolah', topics)
+        self.assertNotIn('literasi data guru 2026', topics)
+        self.assertEqual(len(topics), rj.TOPIC_SUGGESTION_COUNT)
 
     def test_real_engine_signature_is_wired(self):
         # trending_research imports pandas/pytrends, so read its signature from source.

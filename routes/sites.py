@@ -12,6 +12,9 @@ sites_bp = Blueprint('sites', __name__)
 
 MAX_SELECTED_CATEGORIES = 500
 MAX_CATEGORIES = 500
+# Private per-category AI hint: stored in AutoWP only (inside the `categories`
+# JSON), passed to the writer, the brief and the reviewer, never sent to WordPress.
+MAX_CATEGORY_HINT_CHARS = 2000
 DEFAULT_SCHEDULE_HOURS = '0,6,12,18'
 
 SITE_DEFAULT_IMAGE_PROMPT = "Fotografi profesional, pencahayaan dramatis, gaya korporat modern, fokus tajam."
@@ -112,11 +115,15 @@ def _clean_language(value):
     return value.strip()
 
 
-def _clean_category_list(value, max_items, field):
+def _clean_category_list(value, max_items, field, keep_hints=False):
     """Validate a list of WordPress categories, deduplicated by id.
 
     WordPress only requires names to be unique per parent, so two categories may
     share a name; the id is the real identity.
+
+    keep_hints: keep each category's private 'ai_hint' (text). The key is only
+    set when the request sent it, so a client that omits it keeps the stored
+    hint (see _keep_stored_hints).
     """
     if value is None:
         return []
@@ -139,12 +146,21 @@ def _clean_category_list(value, max_items, field):
         seen_ids.add(cat_id)
         description = cat.get('description')
         count = cat.get('count')
-        cleaned.append({
+        entry = {
             'id': cat_id,
             'name': name,
             'description': description[:2000] if isinstance(description, str) else '',
             'count': count if isinstance(count, int) and not isinstance(count, bool) else 0,
-        })
+        }
+        if keep_hints and 'ai_hint' in cat:
+            hint = cat.get('ai_hint')
+            if hint is not None and not isinstance(hint, str):
+                raise _InvalidField(f'{field}: petunjuk AI kategori harus berupa teks.')
+            hint = (hint or '').strip()
+            if len(hint) > MAX_CATEGORY_HINT_CHARS:
+                raise _InvalidField(f'Petunjuk AI kategori "{name}" maksimal {MAX_CATEGORY_HINT_CHARS} karakter.')
+            entry['ai_hint'] = hint
+        cleaned.append(entry)
     if len(cleaned) > max_items:
         raise _InvalidField(f'{field} maksimal {max_items} kategori.')
     return cleaned
@@ -170,7 +186,7 @@ UPDATABLE_SITE_FIELDS = (
     ('schedule_hours', True, _value_field(_clean_schedule_hours)),
     ('timezone', True, _value_field(_clean_timezone)),
     ('language', True, _value_field(_clean_language)),
-    ('categories', True, lambda data, key: _clean_category_list(data[key], MAX_CATEGORIES, key)),
+    ('categories', True, lambda data, key: _clean_category_list(data[key], MAX_CATEGORIES, key, keep_hints=True)),
     ('selected_categories', True, lambda data, key: _clean_category_list(data[key], MAX_SELECTED_CATEGORIES, key)),
     ('gsc_client_id', False, _text_field(500)),
     ('article_prompt', False, _text_field(50000)),
@@ -193,6 +209,28 @@ def _clean_site_update(data):
             continue
         clean[key] = cleaner(data, key)
     return clean
+
+
+def _stored_hints(categories):
+    """{category id: private AI hint} from a stored `categories` list."""
+    return {
+        cat['id']: cat['ai_hint'] for cat in categories or []
+        if isinstance(cat, dict) and cat.get('id') is not None and str(cat.get('ai_hint') or '').strip()
+    }
+
+
+def _keep_stored_hints(categories, stored_categories):
+    """Categories with each one's private AI hint: the one sent, else the stored
+    one (by id). An empty hint sent on purpose clears it; empty hints are not kept."""
+    stored = _stored_hints(stored_categories)
+    merged = []
+    for cat in categories:
+        cat = dict(cat)
+        hint = cat.pop('ai_hint') if 'ai_hint' in cat else stored.get(cat.get('id'), '')
+        if hint:
+            cat['ai_hint'] = hint
+        merged.append(cat)
+    return merged
 
 
 def _apply_gsc_credentials(session, site, user_id, site_id, data, clean):
@@ -358,6 +396,8 @@ def update_site(user_id, site_id):
                 return jsonify({'success': False, 'error': str(exc)}), 400
 
         _apply_gsc_credentials(session, site, user_id, site_id, data, clean)
+        if 'categories' in clean:
+            clean['categories'] = _keep_stored_hints(clean['categories'], site.categories)
         for key, value in clean.items():
             if key != 'gsc_client_id':  # handled with its secret above
                 setattr(site, key, value)
@@ -429,6 +469,8 @@ def fetch_categories(user_id, site_id):
             if not categories:
                 return jsonify({'success': False, 'error': 'Tidak dapat mengambil kategori. Periksa kredensial.'}), 400
 
+            # WordPress knows nothing of the private AI hints: keep them by id.
+            categories = _keep_stored_hints(categories, site.categories)
             site.categories = categories
             site.selected_categories = _merge_selected_categories(site.selected_categories or [], categories)
             session.commit()

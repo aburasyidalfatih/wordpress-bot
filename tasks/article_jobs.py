@@ -1,6 +1,8 @@
+import difflib
 import html
 import re
 import time
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -19,6 +21,7 @@ from models import ResearchData, PostLog, ContentQueue, WordPressSite, User
 from services.ai_costs import add_cost, cost_stage, track_costs
 from services.ai_providers import AIProviderError
 from services.article_generator import ArticleGenerator, ArticleQualityError
+from services.article_prompts import citable_sources, public_category_description
 from services.article_quality import ArticleQualityRejected, RewriteFailed, improve_article
 from services.article_review import (
     ArticleReviewRejected, JobTimeoutException, build_publisher_context, build_review_evidence, review_article,
@@ -33,7 +36,7 @@ from services.content_planner import (
 from services.quality_gate import check_article, link_host, strip_invalid_internal_links
 from services.search_console import build_search_opportunities
 from services.topic_similarity import find_similar_published, significant_tokens
-from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result
+from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result, make_post_slug
 
 # RQ statuses in which a job may still run or is running.
 LIVE_JOB_STATUSES = {'queued', 'started', 'scheduled', 'deferred', 'created'}
@@ -549,22 +552,125 @@ def _link_allowances(article_prompt, wordpress_url):
     return urls, hosts
 
 
-def _find_site_category(site_config, category_name):
-    for cat in site_config.get('categories') or []:
+def _find_site_category(site_config, category_name, category_id=None):
+    """The site's stored category dict (from `categories`): by id when given,
+    else by exact name. None when unknown."""
+    categories = [cat for cat in site_config.get('categories') or [] if isinstance(cat, dict)]
+    if category_id is not None:
+        for cat in categories:
+            if cat.get('id') == category_id:
+                return cat
+    for cat in categories:
         if cat.get('name') == category_name:
             return cat
     return None
 
 
-def _category_for_item(site_config, category_name):
-    """Category dict for a queue item; WordPress category 1 when the name is unknown."""
-    cat = _find_site_category(site_config, category_name)
-    return {'name': category_name, 'id': (cat.get('id') if cat else None) or 1}
+class CategoryNotFound(Exception):
+    """A queue item's category is not a category of the WordPress site.
+
+    The item fails (credit refunded) instead of being filed under the
+    WordPress default category, which put off-topic posts in an unrelated
+    category.
+    """
+
+    def __init__(self, category_name):
+        self.category_name = category_name
+        super().__init__(
+            f"Kategori '{category_name}' tidak ditemukan di WordPress. Klik Ambil Kategori di pengaturan "
+            "website atau ganti kategori item ini; artikel tidak ditulis dan kredit dikembalikan."
+        )
 
 
-def _category_description(site_config, category_name):
-    cat = _find_site_category(site_config, category_name)
-    return cat.get('description', '') if cat else ""
+# A queue item's category name matches a WordPress category whose name, after
+# normalization, is at least this similar (typos, singular/plural) and clearly
+# ahead of the runner-up; anything looser risks filing the post under a
+# neighbouring category.
+CATEGORY_NAME_MIN_SIMILARITY = 0.9
+CATEGORY_NAME_MIN_LEAD = 0.05
+
+
+def _category_key(name):
+    """Comparable form of a category name: entities decoded, accents dropped,
+    lower-case words joined by '-' (like a WordPress slug)."""
+    text = unicodedata.normalize('NFKD', html.unescape(str(name or ''))).encode('ascii', 'ignore').decode('ascii')
+    text = text.lower().replace('&', ' and ')
+    return '-'.join(re.findall(r'[a-z0-9]+', text))
+
+
+def _match_category(categories, category_name):
+    """The category dict for category_name: exact name, then the same name
+    once normalized, then one clearly closest name (similarity at least
+    CATEGORY_NAME_MIN_SIMILARITY and CATEGORY_NAME_MIN_LEAD ahead of the
+    runner-up). None otherwise."""
+    categories = [cat for cat in categories or [] if isinstance(cat, dict) and cat.get('id')]
+    for cat in categories:
+        if cat.get('name') == category_name:
+            return cat
+    wanted = _category_key(category_name)
+    if not wanted:
+        return None
+    same = [cat for cat in categories if _category_key(cat.get('name')) == wanted]
+    if len({cat['id'] for cat in same}) == 1:
+        return same[0]
+    if same:
+        return None  # two different categories normalize to the same name: ambiguous
+    scored = sorted(
+        ((difflib.SequenceMatcher(None, wanted, _category_key(cat.get('name'))).ratio(), cat) for cat in categories),
+        key=lambda pair: pair[0], reverse=True,
+    )
+    if scored and scored[0][0] >= CATEGORY_NAME_MIN_SIMILARITY and (
+            len(scored) == 1 or scored[0][0] - scored[1][0] >= CATEGORY_NAME_MIN_LEAD):
+        logger.info(f"Category '{category_name}' matched to WordPress category "
+                    f"'{scored[0][1].get('name')}' (similarity {scored[0][0]:.2f}).")
+        return scored[0][1]
+    return None
+
+
+def _live_categories(publisher):
+    """The site's current WordPress categories, or [] when they cannot be fetched."""
+    if publisher is None:
+        return []
+    try:
+        categories = publisher.get_categories()
+        return list(categories) if isinstance(categories, list) else []
+    except JobTimeoutException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not fetch WordPress categories: {e}")
+        return []
+
+
+def _category_for_item(site_config, category_name, publisher=None):
+    """Category dict ({'name', 'id'}) for a queue item.
+
+    Looked up in the site's stored categories (and selected ones), then in the
+    live WordPress list (a category added after the last "Ambil Kategori").
+    Raises CategoryNotFound when nothing matches: failing the item (the credit
+    is refunded, nothing is generated) is safer than the old fallback to
+    WordPress category 1, which filed off-topic posts under the site's default
+    category.
+    """
+    stored = list(site_config.get('categories') or []) + list(site_config.get('selected_categories') or [])
+    cat = _match_category(stored, category_name) or _match_category(_live_categories(publisher), category_name)
+    if not cat:
+        logger.warning(f"Queue item category '{category_name}' not found on the WordPress site.")
+        raise CategoryNotFound(category_name)
+    return {'name': category_name, 'id': cat['id']}
+
+
+def _category_description(site_config, category_name, category_id=None):
+    """The public WordPress category description, without writing notes such
+    as "(Fokus Tambahan: ...)" left in it (they are not facts)."""
+    cat = _find_site_category(site_config, category_name, category_id)
+    return public_category_description(cat.get('description', '')) if cat else ""
+
+
+def _category_hint(site_config, category_name, category_id=None):
+    """The publisher's private AI hint for the category (stored in AutoWP
+    only, never on the website), or ''."""
+    cat = _find_site_category(site_config, category_name, category_id)
+    return str(cat.get('ai_hint') or '').strip() if cat else ""
 
 
 def _published_titles(user_id, site_id, recent_posts, extra_titles=()):
@@ -610,7 +716,7 @@ def _protected_review_links(internal_posts, extra_allowed_urls, allowed_hosts):
 
 def _review_generated_article(generator, article, seo_data, *, language, category_name, site_name, context,
                               internal_posts=None, extra_allowed_urls=None, allowed_hosts=None,
-                              article_prompt=None, category_description=None):
+                              article_prompt=None, category_description=None, category_hint=None):
     """AI editorial review (fact-check, YMYL safety, title honesty) before publishing.
 
     The reviewer sees the research the writer saw plus the source URLs it was
@@ -626,7 +732,7 @@ def _review_generated_article(generator, article, seo_data, *, language, categor
     with cost_stage('cek fakta'):
         result = review_article(
             generator, article, evidence, language=language, category=category_name, site_name=site_name,
-            publisher_context=build_publisher_context(article_prompt, category_description),
+            publisher_context=build_publisher_context(article_prompt, category_description, category_hint),
             protected_links=_protected_review_links(internal_posts, extra_allowed_urls, allowed_hosts),
         )
     logger.info(f"AI review ({context}): {result.log_line()}")
@@ -641,7 +747,7 @@ def _review_generated_article(generator, article, seo_data, *, language, categor
 
 
 def _writing_brief(generator, topic, seo_data, *, language, category_name, site_name, category_description=None,
-                   article_prompt=None, published_titles=None):
+                   article_prompt=None, published_titles=None, category_hint=None):
     """The writing brief rendered for the article prompt, or None.
 
     The brief is an enhancement, not a gate: when it cannot be made the article
@@ -652,7 +758,7 @@ def _writing_brief(generator, topic, seo_data, *, language, category_name, site_
             brief = build_content_brief(
                 generator, topic, seo_data, language=language, category=category_name, site_name=site_name,
                 category_description=category_description, article_prompt=article_prompt,
-                published_titles=published_titles,
+                published_titles=published_titles, category_hint=category_hint,
             )
     except JobTimeoutException:
         raise
@@ -733,7 +839,8 @@ def _apply_quality_gate(article, warning_context, rejection_prefix, extra_allowe
 def _generate_featured_image(generator, publisher, category_name, article, custom_prompt, site_name):
     """Generate and upload the featured image. Returns (image_data, media_id, failed).
 
-    The image is optional: any failure is logged and the post goes out without it.
+    The file is named after the slug the post will get. The image is optional:
+    any failure is logged and the post goes out without it.
     """
     image_data = None
     try:
@@ -749,7 +856,8 @@ def _generate_featured_image(generator, publisher, category_name, article, custo
         if not image_data:
             return None, None, True
         logger.info("Uploading featured image...")
-        featured_image_id = publisher.upload_image(image_data, article.get('title', ''))
+        slug = make_post_slug(article.get('title', ''), article.get('focus_keyword'), category_name)
+        featured_image_id = publisher.upload_image(image_data, article.get('title', ''), slug=slug)
         return image_data, featured_image_id, not featured_image_id
     except JobTimeoutException:
         raise
@@ -862,6 +970,9 @@ class _ArticlePostJob:
         self.generation = None
         self.quality = None
         self.review = None
+        # Research the article was written from; the citable sources the post
+        # links to become its "Sumber" section.
+        self.seo_data = None
 
     # -- credit / item settlement -------------------------------------------
 
@@ -980,7 +1091,9 @@ class _ArticlePostJob:
 
         if self.item_id:
             self.custom_topic = self.item_info['title']
-            self.category = _category_for_item(site_config, self.item_info['category'])
+            # Raises CategoryNotFound (item failed, credit refunded) rather than
+            # filing the post under the WordPress default category.
+            self.category = _category_for_item(site_config, self.item_info['category'], publisher)
         if not self.reserve_credit():
             return
         if not self.item_id and not self._rotate_category():
@@ -994,11 +1107,13 @@ class _ArticlePostJob:
             # written at all (checked before any research or generation cost).
             self._check_topic_is_new(generator, self.custom_topic)
         seo_data = self._gather_seo_data(generator)
+        self.seo_data = seo_data
         self.brief_text = _writing_brief(
             generator, self.custom_topic or self.category['name'], seo_data, language=self._language(),
             category_name=self.category['name'], site_name=site_config.get('site_name'),
-            category_description=_category_description(site_config, self.category['name']),
+            category_description=self._category_description(),
             article_prompt=site_config.get('article_prompt'), published_titles=self.published_titles,
+            category_hint=self._category_hint(),
         )
         self._generate_article(generator, existing_titles, seo_data, recent_posts)
         if recent_posts is None:
@@ -1017,7 +1132,7 @@ class _ArticlePostJob:
             site_name=site_config.get('site_name'), context=f"site {self.site_id}", internal_posts=recent_posts,
             extra_allowed_urls=extra_urls, allowed_hosts=hosts,
             article_prompt=site_config.get('article_prompt'),
-            category_description=_category_description(site_config, self.category['name']),
+            category_description=self._category_description(), category_hint=self._category_hint(),
         )
         self._keep_reviewed_title_distinct(generator, title_before_review)
 
@@ -1092,6 +1207,12 @@ class _ArticlePostJob:
 
     def _language(self):
         return (self.site_config or {}).get('language') or 'id'
+
+    def _category_description(self):
+        return _category_description(self.site_config or {}, self.category['name'], self.category.get('id'))
+
+    def _category_hint(self):
+        return _category_hint(self.site_config or {}, self.category['name'], self.category.get('id'))
 
     def _similar_published(self, generator, title):
         """(published title, score) that `title` would cannibalize, or None."""
@@ -1297,7 +1418,8 @@ class _ArticlePostJob:
             custom_prompt=site_config.get('article_prompt') or None,
             site_name=site_config.get('site_name'),
             language=site_config.get('language', 'id'),
-            category_desc=_category_description(site_config, category_name),
+            category_desc=self._category_description(),
+            category_hint=self._category_hint() or None,
             internal_links_context=recent_posts,
             content_brief=self.brief_text,
         )
@@ -1346,7 +1468,9 @@ class _ArticlePostJob:
             article.get('excerpt'),
             article.get('focus_keyword'),
             key_takeaways=article.get('key_takeaways'),
-            faqs=article.get('faqs')
+            faqs=article.get('faqs'),
+            category_name=category['name'],
+            citable_sources=citable_sources(self.seo_data, self._language()),
         )
 
         post_id = None
@@ -1467,7 +1591,8 @@ class _ArticlePostJob:
 
         # A rejection by the editorial checks is a decision, not a crash.
         result_prefix = (
-            "Artikel tidak diterbitkan" if isinstance(error, EDITORIAL_FAILURES) else "Sistem Berhenti Tiba-tiba"
+            "Artikel tidak diterbitkan" if isinstance(error, EDITORIAL_FAILURES + (CategoryNotFound,))
+            else "Sistem Berhenti Tiba-tiba"
         )
         # Add to history so the user sees the failure.
         try:
@@ -1534,7 +1659,9 @@ def _load_regeneration_target(user_id, log_id):
         target = {
             'title': log.title,
             'category_name': log.category_name,
-            'category_description': _category_description({'categories': site.categories}, log.category_name),
+            'category_description': _category_description({'categories': site.categories}, log.category_name,
+                                                          log.category_id),
+            'category_hint': _category_hint({'categories': site.categories}, log.category_name, log.category_id),
             'site_id': site.id,
             'post_id': log.post_id,
             'wordpress_url': site.wordpress_url,
@@ -1621,7 +1748,8 @@ def regenerate_image_job(user_id, log_id):
             raise Exception("Model gambar Gemini tidak menghasilkan data gambar (cek API key / model gambar).")
 
         logger.info("Image generated, uploading to WordPress...")
-        featured_image_id = publisher.upload_image(image_data, target['title'])
+        featured_image_id = publisher.upload_image(
+            image_data, target['title'], slug=make_post_slug(target['title'], None, target['category_name']))
         if not featured_image_id:
             raise Exception("Upload gambar ke WordPress gagal (cek kredensial atau ukuran media library).")
 
@@ -1719,7 +1847,7 @@ def _regenerate_article(user_id, log_id):
         brief_text = _writing_brief(
             generator, title, seo_data, language=language, category_name=target['category_name'],
             site_name=target['site_name'], category_description=target['category_description'],
-            article_prompt=target['article_prompt'],
+            article_prompt=target['article_prompt'], category_hint=target['category_hint'],
         )
         generation_args = (target['category_name'], [], title, seo_data)
         generation_options = dict(
@@ -1728,6 +1856,7 @@ def _regenerate_article(user_id, log_id):
             site_name=target['site_name'],
             language=target['language'],
             category_desc=target['category_description'] or None,
+            category_hint=target['category_hint'] or None,
             internal_links_context=recent_posts,
             content_brief=brief_text,
         )
@@ -1753,6 +1882,7 @@ def _regenerate_article(user_id, log_id):
             site_name=target['site_name'], context=context, internal_posts=recent_posts,
             extra_allowed_urls=extra_urls, allowed_hosts=hosts,
             article_prompt=target['article_prompt'], category_description=target['category_description'],
+            category_hint=target['category_hint'],
         )
 
         success, result = publisher.update_post_content(
@@ -1765,7 +1895,9 @@ def _regenerate_article(user_id, log_id):
             article.get('excerpt'),
             article.get('focus_keyword'),
             key_takeaways=article.get('key_takeaways'),
-            faqs=article.get('faqs')
+            faqs=article.get('faqs'),
+            # Replaces the post's old "Sumber" section rather than adding a second one.
+            citable_sources=citable_sources(seo_data, language),
         )
         if not success:
             raise Exception(f"Update postingan WordPress gagal: {result}")

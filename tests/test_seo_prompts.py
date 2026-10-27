@@ -11,11 +11,14 @@ from services.article_prompts import (
     CUSTOM_PROMPT_PLACEHOLDERS,
     MAX_SOURCE_URLS,
     build_article_prompt,
+    build_category_brief,
     build_sources_section,
+    citable_sources,
     clean_source_url,
+    public_category_description,
 )
 from services.default_prompts import DEFAULT_ARTICLE_PROMPTS, default_article_prompt
-from services.quality_gate import check_article, strip_invalid_internal_links
+from services.quality_gate import check_article, fit_meta_description, strip_invalid_internal_links
 
 OUTPUT_TAGS = ('TITLE', 'META_DESCRIPTION', 'FOCUS_KEYWORD', 'EXCERPT', 'KEY_TAKEAWAYS', 'CONTENT', 'FAQS')
 FULL_SEO_DATA = {
@@ -233,6 +236,87 @@ class RelaxedQualityGateTests(unittest.TestCase):
         article = self.article(800)
         article['title'] = 'Judul ' * 15
         self.assertTrue(any('Title is long' in w for w in check_article(article)[2]))
+
+    def test_meta_description_length_warnings(self):
+        def meta_warnings(length):
+            article = self.article(800)
+            article['meta_description'] = 'm' * length
+            return [w for w in check_article(article)[2] if 'Meta description' in w]
+
+        self.assertEqual(meta_warnings(150), [])
+        self.assertEqual(meta_warnings(120), [])
+        self.assertEqual(meta_warnings(160), [])
+        self.assertTrue(meta_warnings(119))
+        self.assertTrue(meta_warnings(161))
+        self.assertIn('outside 120-160', meta_warnings(290)[0])
+
+
+class FitMetaDescriptionTests(unittest.TestCase):
+    def test_cuts(self):
+        sentence = 'Digitalisasi pendidikan menuntut sekolah menyiapkan perangkat, guru, dan tata kelola data sekolah negeri.'
+        text = sentence + ' Kalimat kedua menjelaskan langkah lanjutan secara rinci untuk sekolah negeri dan swasta.'
+        self.assertGreaterEqual(len(sentence), 100)
+        self.assertEqual(fit_meta_description(text), sentence)
+        self.assertEqual(fit_meta_description('  Pendek   saja. '), 'Pendek saja.')
+        self.assertEqual(fit_meta_description(None), '')
+        words = 'kata ' * 60 + 'untuk keluarga'
+        cut = fit_meta_description(words.strip())
+        self.assertLessEqual(len(cut), 158)
+        self.assertTrue(cut.endswith('kata'))
+        self.assertEqual(len(fit_meta_description('x' * 400)), 158)  # one huge word: hard cut
+
+
+class CitationAndCategoryPromptTests(unittest.TestCase):
+    OFFICIAL = {'official_sources': [{'title': 'Emergency savings', 'url': 'https://www.consumerfinance.gov/es/',
+                                      'passages': ['Save a small amount each paycheck.']}],
+                'competitor_outlines': [{'title': 'Blog post', 'url': 'https://blog.example.com/x'}]}
+
+    def test_contract_and_source_list_require_linked_figures(self):
+        for language, needles in (
+            ('en', ('Cite as you write', 'official (government) source', 'Do NOT write a',
+                    'Every specific number, limit, rate, fee, date or rule must be linked')),
+            ('id', ('Cite as you write', 'Setiap angka, batas, tarif, biaya, tanggal, atau aturan',
+                    'tautkan sumber resmi itu')),
+        ):
+            prompt, _, _ = build_article_prompt('Finance', seo_data=self.OFFICIAL, language=language)
+            for needle in needles:
+                self.assertIn(needle, prompt, (language, needle))
+            self.assertIn('never more than 158', prompt)
+
+    def test_citable_sources_have_titles_official_first(self):
+        sources = citable_sources(self.OFFICIAL, 'en')
+        self.assertEqual([s['url'] for s in sources], ['https://www.consumerfinance.gov/es/',
+                                                       'https://blog.example.com/x'])
+        self.assertEqual(sources[0]['title'], 'Emergency savings')
+        self.assertTrue(sources[0]['official'])
+        self.assertFalse(sources[1]['official'])
+        self.assertEqual(citable_sources(None), [])
+
+    def test_public_category_description_drops_writing_notes(self):
+        desc = ('Kumpulan artikel digitalisasi sekolah. (Fokus Tambahan: Gunakan frasa eksak "digitalisasi '
+                'pendidikan" / Selalu gunakan angka tahun 2026 (wajib)) Untuk guru dan kepala sekolah.')
+        self.assertEqual(public_category_description(desc),
+                         'Kumpulan artikel digitalisasi sekolah. Untuk guru dan kepala sekolah.')
+        self.assertEqual(public_category_description('Teks (catatan biasa) tetap.'), 'Teks (catatan biasa) tetap.')
+        self.assertEqual(public_category_description('Awal [Fokus tambahan: tanpa penutup'), 'Awal')
+        self.assertEqual(public_category_description(None), '')
+
+    def test_category_brief_carries_private_hint_not_public_notes(self):
+        desc = 'Artikel untuk orang tua. (Fokus Tambahan: selalu tulis 2026)'
+        prompt, _, _ = build_article_prompt('Keuangan', language='id', category_desc=desc,
+                                            category_hint='Sasar orang tua siswa SD.')
+        self.assertIn('[BRIEF KATEGORI]\nArtikel untuk orang tua.\n', prompt)
+        self.assertNotIn('Fokus Tambahan', prompt)
+        self.assertIn('[INSTRUKSI PRIBADI PENERBIT UNTUK KATEGORI INI]\nSasar orang tua siswa SD.', prompt)
+        self.assertIn('jangan pernah mengutip', prompt)
+        # Only the notes: no category brief at all.
+        prompt, _, _ = build_article_prompt('Keuangan', language='id', category_desc='(Fokus Tambahan: x)')
+        self.assertNotIn('[BRIEF KATEGORI]', prompt)
+        # A custom prompt without {category_desc_text} still gets the hint.
+        prompt, _, _ = build_article_prompt('Finance', language='en', custom_prompt='Write about {topic}.',
+                                            category_hint='Target dual-income couples.')
+        self.assertIn("[PUBLISHER'S PRIVATE INSTRUCTIONS FOR THIS CATEGORY]\nTarget dual-income couples.", prompt)
+        self.assertEqual(build_category_brief(None, 'en'), '')
 
 
 if __name__ == '__main__':

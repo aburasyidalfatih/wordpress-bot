@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from flask import Flask
 
 import database
-from models import ContentQueue, ResearchData, User, WordPressSite
+from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from test_research_backend_support import FakeRedis, load_with_stubbed_core, make_db
 
 research, core = load_with_stubbed_core('routes.research')
@@ -276,6 +276,39 @@ class GenerateTitlesTests(RouteTestCase):
         self.assertEqual(int(self.redis.get('ratelimit:ai_titles:1')), 2)
         with self.db.get_session() as s:
             self.assertEqual(s.query(ContentQueue).count(), 0)
+
+    def test_prompt_asks_for_distinct_intents_and_core_repeats_are_dropped(self):
+        now = datetime.now()
+        with self.db.get_session() as s:
+            s.add(ResearchData(user_id=1, site_id=1, category='Digitalisasi Pendidikan', keywords=['kw'],
+                               questions=[], confidence_level='high', researched_at=now, created_at=now))
+            s.add(PostLog(user_id=1, site_id=1, category_name='Digitalisasi Pendidikan', success=True,
+                          title='Peta Jalan Asesmen Digital 2026: Rencana Aksi Sekolah', result='ok',
+                          created_at=now))
+        self.generator.generate_text.return_value = json.dumps([
+            'Digitalisasi Pendidikan 2026: Literasi Data Guru',          # restates the category
+            'Panduan Asesmen Digital 2026: Bank Soal Daring',            # repeats a published head
+            'Literasi Data Guru untuk Membaca Rapor Pendidikan',
+            'Siasat Literasi Data Guru untuk Membaca Rapor Pendidikan',  # repeats the title above
+            'Cara Sekolah Swasta Memilih LMS yang Hemat',
+        ])
+        res = self.client.post('/api/generate-titles/Digitalisasi%20Pendidikan?site_id=1', json={'count': 5})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        prompt = self.generator.generate_text.call_args.args[0]
+        self.assertIn('MAKSUD PENCARIAN BERBEDA', prompt)
+        self.assertIn('nama kategori "Digitalisasi Pendidikan"', prompt)
+        self.assertIn('- Peta Jalan Asesmen Digital 2026: Rencana Aksi Sekolah', prompt)
+        with self.db.get_session() as s:
+            queued = [q.title for q in s.query(ContentQueue).order_by(ContentQueue.id)]
+        self.assertEqual(queued, ['Literasi Data Guru untuk Membaca Rapor Pendidikan',
+                                  'Cara Sekolah Swasta Memilih LMS yang Hemat'])
+
+    def test_english_prompt_rules(self):
+        block = research._distinct_intent_block('Debt Payoff Strategies', 'en', ['A', 'a', 'B'])
+        self.assertIn('DISTINCT SEARCH INTENTS', block)
+        self.assertIn('category name "Debt Payoff Strategies"', block)
+        self.assertEqual(block.count('\n- A\n'), 1)
+        self.assertNotIn('JUDUL', block)
 
     def test_dedupe_ignores_failed_and_old_queue_items(self):
         with self.db.get_session() as s:

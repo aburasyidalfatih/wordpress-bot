@@ -89,14 +89,67 @@ def build_research_note(custom_topic, topic, language='id', is_trending=False):
     return f"\n\n{label}: {custom_topic}\n{focus}\n"
 
 
-def build_category_brief(category_desc, language='id'):
-    if not category_desc:
-        return ""
-    return _lang(
-        language,
-        f"\n\n[CATEGORY BRIEF]\n{category_desc}\nFollow this brief for the article's scope and angle.",
-        f"\n\n[BRIEF KATEGORI]\n{category_desc}\nIkuti brief ini untuk ruang lingkup dan sudut pandang artikel.",
-    )
+# Writing instructions some publishers put inside the public WordPress category
+# description, e.g. "(Fokus Tambahan: Gunakan frasa eksak ... / Selalu gunakan
+# angka tahun 2026 ...)". They are visible on the category page; AutoWP keeps
+# such instructions privately (the per-category AI hint) and ignores leftovers.
+_PRIVATE_NOTE_LABEL_RE = re.compile(
+    r'[(\[]\s*(?:fokus tambahan|catatan ai|instruksi ai|petunjuk ai|catatan penulis|additional focus'
+    r'|ai notes?|ai instructions?|writer notes?)\s*:',
+    re.IGNORECASE,
+)
+MAX_CATEGORY_HINT_CHARS = 2000
+
+
+def public_category_description(description):
+    """The public category description without parenthesised writing notes
+    such as "(Fokus Tambahan: ...)". A note left unclosed runs to the end."""
+    text = str(description or '')
+    while True:
+        match = _PRIVATE_NOTE_LABEL_RE.search(text)
+        if not match:
+            break
+        opener = text[match.start()]
+        closer = ')' if opener == '(' else ']'
+        depth, end = 0, len(text)
+        for index in range(match.start(), len(text)):
+            if text[index] == opener:
+                depth += 1
+            elif text[index] == closer:
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        text = text[:match.start()] + ' ' + text[end:]
+    return ' '.join(text.split())
+
+
+def build_category_brief(category_desc, language='id', category_hint=None):
+    """The category's public description and the publisher's private AI hint.
+
+    The hint is stored in AutoWP only (never on the website); it is the
+    publisher's own instruction for articles in this category.
+    """
+    category_desc = public_category_description(category_desc)
+    hint = ' '.join(str(category_hint or '').split())[:MAX_CATEGORY_HINT_CHARS]
+    text = ""
+    if category_desc:
+        text += _lang(
+            language,
+            f"\n\n[CATEGORY BRIEF]\n{category_desc}\nFollow this brief for the article's scope and angle.",
+            f"\n\n[BRIEF KATEGORI]\n{category_desc}\nIkuti brief ini untuk ruang lingkup dan sudut pandang artikel.",
+        )
+    if hint:
+        text += _lang(
+            language,
+            f"\n\n[PUBLISHER'S PRIVATE INSTRUCTIONS FOR THIS CATEGORY]\n{hint}\nFollow them where they do "
+            "not conflict with the evidence policy. They are instructions to you, not facts for the reader: "
+            "never quote, mention or paraphrase them in the article.",
+            f"\n\n[INSTRUKSI PRIBADI PENERBIT UNTUK KATEGORI INI]\n{hint}\nIkuti selama tidak bertentangan "
+            "dengan kebijakan bukti. Ini instruksi untukmu, bukan fakta untuk pembaca: jangan pernah mengutip, "
+            "menyebut, atau memparafrasekannya di artikel.",
+        )
+    return text
 
 
 def build_internal_links_note(internal_links_context, language='id'):
@@ -655,34 +708,40 @@ def _wikipedia_source_url(seo_data, language):
 
 
 def _source_candidates(seo_data, language):
-    """(label, raw URL) pairs from the research fields that carry a page URL.
+    """(prompt label, raw URL, display title, official) for the research fields
+    that carry a page URL.
 
     Official sources come first, so they are never pushed out by MAX_SOURCE_URLS.
     """
     official_label = _lang(language, "official source", "sumber resmi")
     for source, url, host in _official_sources(seo_data):
         title = sanitize_research_text(source.get('title'), 150) or host.removeprefix('www.')
-        yield f"{title} ({official_label})", url
+        yield f"{title} ({official_label})", url, title, True
     for news in seo_data.get('news_insights') or []:
         if isinstance(news, dict):
-            yield _news_line(news), news.get('url')
+            yield _news_line(news), news.get('url'), sanitize_research_text(news.get('title'), 150), False
     wiki_url = _wikipedia_source_url(seo_data, language)
     if wiki_url:
-        yield 'Wikipedia', wiki_url
+        yield 'Wikipedia', wiki_url, 'Wikipedia', False
     for comp in seo_data.get('competitor_outlines') or []:
         if isinstance(comp, dict):
-            yield sanitize_research_text(comp.get('title'), 150), comp.get('url')
+            title = sanitize_research_text(comp.get('title'), 150)
+            yield title, comp.get('url'), title, False
     for yt in seo_data.get('youtube_insights') or []:
         if isinstance(yt, dict) and yt.get('transcript_available'):
-            yield sanitize_research_text(yt.get('title'), 150), yt.get('url')
+            title = sanitize_research_text(yt.get('title'), 150)
+            yield title, yt.get('url'), title, False
 
 
-def build_sources_section(seo_data, language='id'):
-    """Returns (prompt text listing citable sources, their URLs)."""
-    if not seo_data:
-        return "", []
+def citable_sources(seo_data, language='id'):
+    """The sources the writer may cite, as listed in its prompt: dicts with
+    'url' (cleaned), 'title' (third-party text, sanitized; may be ''),
+    'label' (the prompt line) and 'official'. De-duplicated, at most
+    MAX_SOURCE_URLS, official sources first."""
+    if not isinstance(seo_data, dict) or not seo_data:
+        return []
     sources, seen = [], set()
-    for label, raw_url in _source_candidates(seo_data, language):
+    for label, raw_url, title, official in _source_candidates(seo_data, language):
         url = clean_source_url(raw_url)
         if not url:
             continue
@@ -690,9 +749,16 @@ def build_sources_section(seo_data, language='id'):
         if key in seen:
             continue
         seen.add(key)
-        sources.append((label or urlsplit(url).hostname, url))
+        sources.append({'url': url, 'title': title or '', 'label': label or urlsplit(url).hostname,
+                        'official': official})
         if len(sources) >= MAX_SOURCE_URLS:
             break
+    return sources
+
+
+def build_sources_section(seo_data, language='id'):
+    """Returns (prompt text listing citable sources, their URLs)."""
+    sources = [(source['label'], source['url']) for source in citable_sources(seo_data, language)]
     if not sources:
         return "", []
     text = _lang(
@@ -704,11 +770,15 @@ def build_sources_section(seo_data, language='id'):
         text += f"- {label}: {url}\n"
     text += _lang(
         language,
-        "When a claim comes from one of these, link it in that sentence with the exact URL above. Only "
-        "attribute to a source what the research data shows it says; never link URLs that are not listed.\n",
+        "When a claim comes from one of these, link it in that sentence with the exact URL above. Every "
+        "specific number, limit, rate, fee, date or rule must be linked in its sentence to the listed source "
+        "that states it; when an official source covers it, link the official source. Only attribute to a "
+        "source what the research data shows it says; never link URLs that are not listed.\n",
         "Bila sebuah klaim berasal dari salah satu sumber ini, tautkan di kalimat itu dengan URL persis di "
-        "atas. Atribusikan ke sumber hanya hal yang memang ditunjukkan data riset; jangan menautkan URL "
-        "yang tidak tercantum.\n",
+        "atas. Setiap angka, batas, tarif, biaya, tanggal, atau aturan yang spesifik wajib ditautkan di "
+        "kalimatnya ke sumber tercantum yang menyatakannya; bila ada sumber resmi yang mencakupnya, tautkan "
+        "sumber resmi itu. Atribusikan ke sumber hanya hal yang memang ditunjukkan data riset; jangan "
+        "menautkan URL yang tidak tercantum.\n",
     )
     return text, [url for _label, url in sources]
 
@@ -737,7 +807,8 @@ ABSOLUTE RULES:
 1. NEVER invent statistics, percentages, survey results, or numeric claims. Use a
    number ONLY if it appears in the evidence above (for example in a quoted
    passage), exactly as written there: same value, unit, year and meaning, and
-   attributed to the page it comes from. Where a relevant official source and a
+   attributed to the page it comes from, with a link to it when that page is in the
+   list of sources you may cite. Where a relevant official source and a
    blog disagree on a rule, rate or deadline, prefer the official source. Otherwise
    describe the effect qualitatively ("costs typically fall", not "costs fall 40%").
 2. NEVER invent quotes. Do not attribute statements to named people, companies, or
@@ -766,7 +837,8 @@ ATURAN MUTLAK:
 1. JANGAN PERNAH mengarang statistik, persentase, hasil survei, atau klaim angka.
    Gunakan angka HANYA jika muncul di data riset di atas (misalnya dalam kutipan),
    persis seperti tertulis di sana: nilai, satuan, tahun, dan makna yang sama, dan
-   sebutkan halaman asalnya. Bila sumber resmi yang relevan dan blog berbeda soal
+   sebutkan halaman asalnya, dengan tautan ke halaman itu bila tercantum di daftar
+   sumber yang boleh dikutip. Bila sumber resmi yang relevan dan blog berbeda soal
    aturan, tarif, atau tenggat, utamakan sumber resmi. Kalau tidak ada, jelaskan
    secara kualitatif ("biaya biasanya turun", bukan "biaya turun 40%").
 2. JANGAN PERNAH mengarang kutipan. Jangan mengatribusikan pernyataan kepada orang,
@@ -821,6 +893,13 @@ OUTPUT_CONTRACT_TEMPLATE = """
    filler such as "practical tips you can apply immediately" is rejected.
 6. Link only URLs listed above (internal links or sources you may cite), copied
    exactly. Never invent a URL. <FAQS> may be left empty.
+7. Cite as you write: every specific number, limit, rate, fee, date or rule in the
+   article is linked, in the sentence that states it, to the listed source that
+   states it - an official (government) source when one covers it. A figure that
+   no listed source states is left out or described qualitatively. Do NOT write a
+   "Sources"/"Sumber"/"References" section: the publisher adds one automatically.
+8. <META_DESCRIPTION>: 140-155 characters, never more than 158. Title: at most 60
+   characters.
 {evidence_policy}"""
 
 
@@ -863,7 +942,7 @@ def apply_custom_prompt(custom_prompt, values):
 def build_article_prompt(topic, existing_titles=None, custom_topic=None, seo_data=None,
                          avoid_similar=False, custom_prompt=None, site_name=None,
                          internal_links_context=None, language='id', category_desc=None,
-                         quality_feedback=None, topic_is_trending=None, content_brief=None):
+                         quality_feedback=None, topic_is_trending=None, content_brief=None, category_hint=None):
     """Assemble the full article prompt.
 
     custom_topic is labelled as trending only when topic_is_trending is true or,
@@ -896,7 +975,9 @@ def build_article_prompt(topic, existing_titles=None, custom_topic=None, seo_dat
     if content_brief and str(content_brief).strip():
         seo_section += "\n\n" + str(content_brief).strip() + "\n"
     evidence_policy = build_evidence_policy(has_evidence, language)
-    category_desc_text = build_category_brief(category_desc, language)
+    # The public description without "(Fokus Tambahan: ...)" notes, plus the
+    # publisher's private per-category hint.
+    category_desc_text = build_category_brief(category_desc, language, category_hint)
     internal_links_text, internal_urls = build_internal_links_note(internal_links_context, language)
     allowed_link_urls = internal_urls + [url for url in source_urls if url not in internal_urls]
 
@@ -913,6 +994,10 @@ def build_article_prompt(topic, existing_titles=None, custom_topic=None, seo_dat
         'current_year': str(current_year),
     })
 
+    if custom_prompt and '{category_desc_text}' not in custom_prompt and str(category_hint or '').strip():
+        # A custom prompt without the category placeholder still gets the
+        # publisher's private hint (it was written for this purpose).
+        prompt += build_category_brief(None, language, category_hint)
     prompt = prompt + "\n\n" + OUTPUT_CONTRACT_TEMPLATE.format(evidence_policy=evidence_policy)
     if quality_feedback:
         prompt += build_quality_correction(quality_feedback)

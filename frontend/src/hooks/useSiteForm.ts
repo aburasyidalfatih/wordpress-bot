@@ -112,8 +112,13 @@ export function useSiteForm(initialSite: SiteDraft, onClose: () => void) {
       const res = await apiFetch(`/api/sites/${site.id}/fetch-categories`, { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.success) {
-        const newCategories: SiteCategory[] = data.categories || [];
+        const fetched: SiteCategory[] = data.categories || [];
         setSite(prev => {
+          // AI hints typed in this form but not saved yet win over the stored ones.
+          const newCategories = fetched.map(cat => {
+            const local = (prev.categories || []).find(c => c.id === cat.id);
+            return local && local.ai_hint !== undefined ? { ...cat, ai_hint: local.ai_hint } : cat;
+          });
           const stillSelected = (prev.selected_categories || []).filter(sel =>
             newCategories.some(cat => cat.id === sel.id)
           );

@@ -45,7 +45,57 @@ export function WordPressTab({ site, updateSite, onChange, onFetchCategories }: 
           onFetchCategories={onFetchCategories}
         />
       )}
+      {site.id && (site.categories || []).length > 0 && (
+        <CategoryHints
+          categories={site.categories || []}
+          onChange={(categories) => updateSite({ categories })}
+        />
+      )}
     </TabPanel>
+  );
+}
+
+const MAX_CATEGORY_HINT_CHARS = 2000;
+
+interface CategoryHintsProps {
+  categories: SiteCategory[];
+  onChange: (categories: SiteCategory[]) => void;
+}
+
+/** Private per-category AI instructions; saved with the site, never published to WordPress. */
+function CategoryHints({ categories, onChange }: CategoryHintsProps) {
+  const setHint = (id: number, ai_hint: string) =>
+    onChange(categories.map(cat => (cat.id === id ? { ...cat, ai_hint } : cat)));
+  const filled = categories.filter(cat => (cat.ai_hint || '').trim()).length;
+
+  return (
+    <details className="pt-4 border-t group">
+      <summary className="cursor-pointer font-medium">
+        Petunjuk AI per kategori (tidak tampil di website)
+        {filled > 0 && <span className="ml-2 text-xs text-muted-foreground">{filled} kategori terisi</span>}
+      </summary>
+      <p className="text-xs text-muted-foreground mt-2">
+        Tulis instruksi khusus untuk AI di sini, misalnya pembaca sasaran atau frasa yang perlu dipakai. Petunjuk ini
+        hanya disimpan di AutoWP dan dipakai saat menulis artikel. Jangan taruh instruksi seperti ini di deskripsi
+        kategori WordPress, karena deskripsi itu tampil publik di website.
+      </p>
+      <div className="space-y-3 mt-3 max-h-80 overflow-y-auto pr-1">
+        {categories.map(cat => (
+          <div key={cat.id} className="space-y-1">
+            <Label htmlFor={`cat_hint_${cat.id}`} className="text-sm">{cat.name}</Label>
+            <textarea
+              id={`cat_hint_${cat.id}`}
+              value={cat.ai_hint || ''}
+              maxLength={MAX_CATEGORY_HINT_CHARS}
+              rows={2}
+              onChange={(e) => setHint(cat.id, e.target.value)}
+              placeholder="Contoh: Sasar kepala sekolah SMA swasta; hindari istilah teknis tanpa penjelasan."
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

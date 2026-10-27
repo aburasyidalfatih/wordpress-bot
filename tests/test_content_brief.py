@@ -98,6 +98,18 @@ class PromptTests(unittest.TestCase):
         self.assertIn('(No research was collected for this topic.)', prompt)
         self.assertIn('(none: leave key_facts empty)', prompt)
 
+    def test_figures_need_sources_and_private_hint_is_publisher_context(self):
+        prompt, _ = build_brief_prompt(
+            'Dana darurat', None, nonce='n3',
+            category_description='Keuangan keluarga. (Fokus Tambahan: Selalu gunakan angka tahun 2026)',
+            category_hint='Sasar keluarga muda berpenghasilan tunggal.')
+        self.assertIn('Every specific number,\n  limit, rate, fee, date or rule', prompt)
+        self.assertIn('prefer an\n  official (government) source', prompt)
+        context = prompt.split('<<<PUBLISHER CONTEXT n3>>>')[1].split('<<<END PUBLISHER CONTEXT n3>>>')[0]
+        self.assertIn('Keuangan keluarga.', context)
+        self.assertNotIn('Fokus Tambahan', context)
+        self.assertIn('Sasar keluarga muda berpenghasilan tunggal.', context)
+
 
 class ParseTests(unittest.TestCase):
     def test_valid_brief(self):
@@ -202,6 +214,7 @@ class FormatTests(unittest.TestCase):
         self.assertIn(f'- Data statistik IKNB dipublikasikan OJK. (sumber: {SOURCE})', text)
         self.assertIn('URL persis', text)
         self.assertIn('- Format: how-to (Pembaca butuh langkah.)', text)
+        self.assertIn('Setiap angka, batas, tarif, biaya, tanggal, atau aturan spesifik di artikel ditautkan', text)
 
     def test_english_section(self):
         text = format_brief_for_prompt(parse_brief(brief_reply(), [SOURCE]), 'en')

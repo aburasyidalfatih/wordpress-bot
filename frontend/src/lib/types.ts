@@ -9,6 +9,8 @@ export interface SiteCategory {
   name: string;
   description?: string;
   count?: number;
+  /** Private AI instructions for this category; stored in AutoWP only, never sent to WordPress. */
+  ai_hint?: string;
 }
 
 export interface WordPressSite {

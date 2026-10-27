@@ -23,12 +23,14 @@ from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from services.research_notes import evidence_warnings, optional_notes
 from services.ai_providers import describe_provider_error, text_provider_name
 from services.article_generator import ArticleGenerator
+from services.article_prompts import public_category_description
 from services.search_console import build_search_opportunities
 from services.content_planner import (
     load_search_metrics, plan_from_opportunities, topic_candidates_from_opportunities,
     keyword_demand_map, annotate_keywords_with_demand, filter_opportunities_for_topic,
     find_content_gaps, classify_intent, intent_guidance,
 )
+from services.topic_similarity import drop_core_repeats
 
 research_bp = Blueprint('research', __name__)
 
@@ -114,6 +116,34 @@ GAP_BLOCK_HEADER = {
     'en': "\n\nCONTENT GAPS - competitors cover these, this site does not:\n",
     'id': "\n\nCELAH KONTEN - dibahas kompetitor tapi belum ada di situs ini:\n",
 }
+# Distinct intents: every new title must answer a search none of the site's
+# titles (published or queued) answers, and must not repeat the category's
+# head term or a used title prefix. Generated titles that still do are dropped
+# (services.topic_similarity.drop_core_repeats).
+DISTINCT_INTENT_RULES = {
+    'en': ("\n\nDISTINCT SEARCH INTENTS (CRITICAL):\n"
+           "- Every title must answer a different search intent (a different problem, audience or question) "
+           "from every other title in your list and from the existing titles below; a new angle, framing or "
+           "year on the same subject is NOT a new intent.\n"
+           "- Do not open a title with the category name \"{category}\" or its head term, and do not reuse "
+           "the part before ':' of an existing title. Name the specific sub-topic instead.\n"
+           "- Do not dress up the same subject with framing words such as guide, roadmap, blueprint, "
+           "strategy, rules, steps or basics.\n"),
+    'id': ("\n\nMAKSUD PENCARIAN BERBEDA (SANGAT PENTING):\n"
+           "- Setiap judul wajib menjawab maksud pencarian (search intent) yang berbeda (masalah, pembaca, "
+           "atau pertanyaan yang lain) dari judul lain di daftar Anda dan dari judul yang sudah ada di bawah; "
+           "sudut pandang, pembingkaian, atau tahun baru untuk subjek yang sama BUKAN maksud baru.\n"
+           "- Jangan membuka judul dengan nama kategori \"{category}\" atau istilah utamanya, dan jangan "
+           "memakai ulang bagian sebelum ':' dari judul yang sudah ada. Sebut subtopik spesifiknya.\n"
+           "- Jangan membungkus subjek yang sama dengan kata pembingkai seperti panduan, peta jalan, "
+           "blueprint, strategi, siasat, aturan, langkah, atau dasar-dasar.\n"),
+}
+EXISTING_TITLES_HEADER = {
+    'en': "\nEXISTING TITLES ON THIS SITE (published or queued) - do not repeat their topics:\n",
+    'id': "\nJUDUL YANG SUDAH ADA DI SITUS INI (terbit atau dalam antrean) - jangan ulangi topiknya:\n",
+}
+# Existing titles listed in the title prompt (the newest published first).
+MAX_PROMPT_EXISTING_TITLES = 30
 
 
 class _TitleRequestError(Exception):
@@ -761,7 +791,13 @@ def _read_title_context(session, user_id, site_id, category):
     category_desc = ""
     for cat in (site.categories or []):
         if isinstance(cat, dict) and cat.get('name') == category:
-            category_desc = str(cat.get('description') or '')[:1000]
+            # Writing notes left in the public description ("(Fokus Tambahan:
+            # ...)") are dropped; the private per-category AI hint is added.
+            category_desc = public_category_description(cat.get('description'))[:1000]
+            hint = ' '.join(str(cat.get('ai_hint') or '').split())[:1000]
+            if hint:
+                label = "Publisher's private instructions" if site.language == 'en' else 'Instruksi pribadi penerbit'
+                category_desc = (category_desc + f"\n- {label}: {hint}").strip()
             break
 
     return {
@@ -818,6 +854,23 @@ def _title_evidence_blocks(category, language, gsc_topics, content_gaps):
     category_intent = classify_intent(category)
     intent_block = f"\n\nSEARCH INTENT: {category_intent}. {intent_guidance(category_intent, language)}\n"
     return gsc_block + gap_block + intent_block
+
+
+def _distinct_intent_block(category, language, existing_titles):
+    """Rules for distinct intents plus the site's existing titles (newest first)."""
+    lang = 'en' if language == 'en' else 'id'
+    block = DISTINCT_INTENT_RULES[lang].format(category=category)
+    listed, seen = [], set()
+    for title in existing_titles or []:
+        title = ' '.join(str(title or '').split())
+        if title and title.lower() not in seen:
+            seen.add(title.lower())
+            listed.append(title)
+        if len(listed) >= MAX_PROMPT_EXISTING_TITLES:
+            break
+    if listed:
+        block += EXISTING_TITLES_HEADER[lang] + "\n".join(f"- {title}" for title in listed) + "\n"
+    return block
 
 
 def _build_title_prompt(count, category, context, evidence):
@@ -903,17 +956,28 @@ def _existing_site_titles(user_id, site_id):
     competing with each other. Failed queue items are left out (they never went
     out), and only the newest queue titles are compared: the near-duplicate
     check is pairwise, and the whole queue history made it grow without bound.
+    Published titles come first (newest first): the title prompt lists the
+    head of this list.
     """
     with db.get_session() as session:
-        existing = [
+        existing = _published_titles(session, user_id, site_id, 300)
+        existing += [
             row[0] for row in session.query(ContentQueue.title).filter(
                 ContentQueue.user_id == user_id,
                 ContentQueue.site_id == site_id,
                 ContentQueue.status != 'failed',
             ).order_by(ContentQueue.created_at.desc()).limit(TITLE_DEDUPE_QUEUE_LIMIT).all() if row[0]
         ]
-        existing += _published_titles(session, user_id, site_id, 300)
     return existing
+
+
+def _drop_core_repeats(titles, existing_titles, category, language):
+    """Titles whose core topic repeats an existing title, another new title or
+    just the category's head term are dropped (see topic_similarity)."""
+    kept, dropped = drop_core_repeats(titles, existing_titles, language=language, category=category)
+    for title in dropped:
+        logger.info(f"Skipping title repeating an existing core topic or the category: {title}")
+    return kept
 
 
 def _queue_titles(user_id, site_id, category, titles, keywords):
@@ -979,7 +1043,9 @@ def generate_titles(user_id, category):
         config = load_config(user_id)
 
         gsc_topics, content_gaps = _title_evidence(user_id, site_id, context['competitor_outlines'], category)
-        evidence = _title_evidence_blocks(category, context['language'], gsc_topics, content_gaps)
+        existing_titles = _existing_site_titles(user_id, site_id)
+        evidence = (_title_evidence_blocks(category, context['language'], gsc_topics, content_gaps)
+                    + _distinct_intent_block(category, context['language'], existing_titles))
         prompt = _build_title_prompt(count, category, context, evidence)
 
         generator = ArticleGenerator.from_config(config)
@@ -992,7 +1058,8 @@ def generate_titles(user_id, category):
             _refund_title_quota(user_id)
             return jsonify({'success': False, 'error': TITLE_PARSE_ERROR}), 502
 
-        titles = _filter_duplicate_titles(titles, _existing_site_titles(user_id, site_id))[:count]
+        titles = _filter_duplicate_titles(titles, existing_titles)
+        titles = _drop_core_repeats(titles, existing_titles, category, context['language'])[:count]
         if not titles:
             return jsonify({
                 'success': False,

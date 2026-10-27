@@ -325,6 +325,7 @@ class ArticleGenerator:
             internal_links_context=internal_links_context,
             language=language,
             category_desc=kwargs.get('category_desc'),
+            category_hint=kwargs.get('category_hint'),
             quality_feedback=kwargs.get('quality_feedback'),
             **prompt_options,
         )

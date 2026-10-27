@@ -164,6 +164,39 @@ class ReviewFlowTests(unittest.TestCase):
         self.assertEqual(result.note, 'Ditinjau AI: 2 perbaikan diterapkan, judul disesuaikan, '
                                       'meta description disesuaikan, catatan disclaimer ditambahkan.')
 
+    def test_prompt_shows_meta_length_rule_and_current_length(self):
+        generator = FakeGenerator({'verdict': 'approve', 'summary': 'ok'})
+        article = make_article()
+        article['meta_description'] = 'x' * 290
+        self.run_review(generator, article=article)
+        prompt = generator.calls[0]['prompt']
+        self.assertIn('META DESCRIPTION (290 characters): ', prompt)
+        self.assertIn('120-160 characters (aim for 140-155)', prompt)
+        self.assertIn(f"TITLE ({len(article['title'])} characters): ", prompt)
+
+    def test_reviewer_meta_over_the_limit_is_trimmed(self):
+        long_meta = ('Langkah realistis melunasi utang keluarga: daftar semua utang dan bunganya. Pilih metode bola '
+                     'salju atau longsoran sesuai kondisi, lalu jaga arus kas bulanan agar tidak menambah utang baru '
+                     'selama proses berjalan.')
+        self.assertGreater(len(long_meta), 160)
+        generator = FakeGenerator({'verdict': 'approve', 'summary': 'ok', 'meta_description': long_meta})
+        article, result = self.run_review(generator)
+        self.assertTrue(result.meta_changed)
+        self.assertLessEqual(len(article['meta_description']), 158)
+        self.assertTrue(long_meta.startswith(article['meta_description']))
+        # The first sentence alone would be too short: cut on a word instead, no ellipsis.
+        self.assertGreater(len(article['meta_description']), 140)
+        self.assertEqual(long_meta[len(article['meta_description'])], ' ')
+        self.assertFalse(article['meta_description'].endswith(('.', '...')))
+
+    def test_ymyl_prompt_treats_unsourced_figures_as_issues(self):
+        generator = FakeGenerator({'verdict': 'approve', 'summary': 'ok'}, {'verdict': 'approve', 'summary': 'ok'})
+        self.run_review(generator)  # Keuangan: YMYL
+        self.assertIn('An unsourced specific figure is an accuracy problem', generator.calls[0]['prompt'])
+        self.assertIn('softens it into a qualitative statement or removes the', generator.calls[0]['prompt'])
+        self.run_review(generator, category='Hobi', site_name='Blog', ymyl=False)
+        self.assertNotIn('An unsourced specific figure', generator.calls[1]['prompt'])
+
     def test_disclaimer_only_for_ymyl_and_only_once(self):
         reply = {'verdict': 'approve', 'disclaimer': 'Ini bukan nasihat keuangan.'}
         article, result = self.run_review(FakeGenerator(reply), category='Hobi', site_name='Blog', ymyl=False)
@@ -343,6 +376,18 @@ class ProtectedLinkAndContextTests(unittest.TestCase):
         self.assertIn('NEVER remove or change links covered by\n  ALWAYS-ALLOWED LINKS', prompt)
         self.assertIn('PUBLISHER CONTEXT block is written by the site owner', system)
         self.assertEqual(build_publisher_context(None, '  '), '')
+
+    def test_publisher_context_has_private_hint_but_not_public_writing_notes(self):
+        context = build_publisher_context(
+            None, 'Artikel transformasi digital sekolah. (Fokus Tambahan: Selalu gunakan angka tahun 2026 / '
+                  'gunakan frasa eksak "digitalisasi pendidikan")',
+            'Sasar kepala sekolah SMA swasta.')
+        self.assertIn('[Category description]\nArtikel transformasi digital sekolah.', context)
+        self.assertNotIn('Fokus Tambahan', context)
+        self.assertNotIn('2026', context)
+        self.assertIn("[Publisher's private instructions for this category (never to be quoted in the article)]\n"
+                      "Sasar kepala sekolah SMA swasta.", context)
+        self.assertEqual(build_publisher_context(None, '(Fokus Tambahan: x)', None), '')
 
 
 class EditSanitizationTests(unittest.TestCase):

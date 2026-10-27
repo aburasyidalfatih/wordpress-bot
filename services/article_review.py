@@ -38,8 +38,11 @@ from dataclasses import dataclass, field
 
 from services.ai_providers import AIProviderError, describe_provider_error, is_retryable_provider_error
 from services.article_generator import TruncatedGenerationError
-from services.article_prompts import build_seo_section, sanitize_research_text
-from services.quality_gate import link_host, normalize_link_url, plain_text
+from services.article_prompts import build_seo_section, public_category_description, sanitize_research_text
+from services.quality_gate import (
+    MAX_META_LENGTH, MIN_META_LENGTH, PUBLISH_META_MAX_CHARS, fit_meta_description, link_host, normalize_link_url,
+    plain_text,
+)
 
 try:
     from rq.timeouts import JobTimeoutException
@@ -256,15 +259,23 @@ def _capped(text, limit):
     return text if len(text) <= limit else text[:limit].rsplit(' ', 1)[0] + ' [...]'
 
 
-def build_publisher_context(article_prompt=None, category_description=None):
-    """The site owner's own text: the category brief and the custom article prompt.
+def build_publisher_context(article_prompt=None, category_description=None, category_hint=None):
+    """The site owner's own text: the category brief, the private per-category
+    AI hint (stored in AutoWP, never shown on the site) and the custom article
+    prompt.
 
     They often hold the business's own facts (services, prices, contact, CTA),
     which no research can confirm but which the article may state. Capped.
+    Writing notes left in the public description ("(Fokus Tambahan: ...)")
+    are dropped: they are instructions, not facts.
     """
     parts = []
-    if str(category_description or '').strip():
+    category_description = public_category_description(category_description)
+    if category_description:
         parts.append("[Category description]\n" + _capped(category_description, MAX_PUBLISHER_CONTEXT_CHARS // 3))
+    if str(category_hint or '').strip():
+        parts.append("[Publisher's private instructions for this category (never to be quoted in the article)]\n"
+                     + _capped(category_hint, MAX_PUBLISHER_CONTEXT_CHARS // 3))
     if str(article_prompt or '').strip():
         parts.append("[Custom article instructions given to the writer]\n"
                      + _capped(article_prompt, MAX_PUBLISHER_CONTEXT_CHARS))
@@ -322,7 +333,11 @@ _YMYL_RULES = """3. Reader safety - YMYL topic (money, health or legal): apply t
    that could cause financial, health or legal harm if wrong must be accurate, general and hedged:
    no guaranteed returns or outcomes, no specific product, investment, dosage, medical or legal
    recommendation presented as right for everyone, no exact rates, thresholds, fees, deadlines or
-   legal requirements unless the evidence states them. Point readers to a qualified professional or
+   legal requirements unless the evidence states them. Every specific number, limit, rate, fee, date
+   or rule must be linked, in its sentence, to a URL from the SOURCES list that states it (or come
+   from the PUBLISHER CONTEXT). An unsourced specific figure is an accuracy problem even if it looks
+   plausible: return a critical edit that softens it into a qualitative statement or removes the
+   number (do not add a link yourself). Point readers to a qualified professional or
    the official authority where the stakes are high. If the article gives financial, tax, legal or
    health guidance and has no such note yet, set "disclaimer" to ONE short neutral sentence in the
    article language, e.g. "Informasi ini bersifat umum dan bukan nasihat keuangan atau hukum;
@@ -350,8 +365,11 @@ CHECK, in priority order:
 {safety_rules}
 4. Title and meta description must describe the content accurately: no clickbait or overpromising
    ("secret", "ultimate", "guaranteed", "instantly", fake urgency, a number that does not match the
-   article). If needed return a corrected "title" and/or "meta_description" (120-160 characters) in
-   the article language, keeping the focus keyword when natural.
+   article). If needed return a corrected "title" (at most 60 characters) and/or "meta_description"
+   in the article language, keeping the focus keyword when natural. A meta description must be
+   {meta_min}-{meta_max} characters (aim for 140-155); one outside that range must be rewritten
+   (the current length is shown next to it below). Anything over {meta_hard} characters is cut off
+   when published.
 5. Quality: leftover template text, placeholders or notes to the writer, generic filler that adds
    nothing, repeated passages, and any text not in {language_name}: remove or tighten them. What the
    PUBLISHER CONTEXT asks for (calls to action, contact details, the publisher's own offers) is
@@ -392,8 +410,8 @@ ALWAYS-ALLOWED LINKS (leave every link to these untouched):
 <<<END PUBLISHER CONTEXT {nonce}>>>
 
 <<<ARTICLE {nonce}>>>
-TITLE: {title}
-META DESCRIPTION: {meta}
+TITLE ({title_len} characters): {title}
+META DESCRIPTION ({meta_len} characters): {meta}
 FOCUS KEYWORD: {keyword}
 EXCERPT: {excerpt}
 KEY TAKEAWAYS:
@@ -449,7 +467,12 @@ def build_review_prompt(article, evidence, *, language, category, site_name, ymy
         protected_links=protected_links.describe() or "(none)",
         publisher_context=str(publisher_context or '').strip() or "(none)",
         title=article.get('title') or '',
+        title_len=len(article.get('title') or ''),
         meta=article.get('meta_description') or '',
+        meta_len=len(article.get('meta_description') or ''),
+        meta_min=MIN_META_LENGTH,
+        meta_max=MAX_META_LENGTH,
+        meta_hard=PUBLISH_META_MAX_CHARS,
         keyword=article.get('focus_keyword') or '',
         excerpt=article.get('excerpt') or '',
         takeaways=takeaways,
@@ -614,7 +637,8 @@ def _apply_title_and_meta(article, decision):
     if title and title != (article.get('title') or '').strip():
         article['title'] = title
         title_changed = True
-    meta = plain_text(decision.meta_description) if decision.meta_description else ''
+    # The same hard limit as on publish, so the history shows what goes out.
+    meta = fit_meta_description(plain_text(decision.meta_description)) if decision.meta_description else ''
     if meta and len(meta) >= 50 and meta != (article.get('meta_description') or '').strip():
         article['meta_description'] = meta
         meta_changed = True

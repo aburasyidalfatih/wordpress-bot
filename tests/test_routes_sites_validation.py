@@ -68,6 +68,43 @@ class CategoryListTests(unittest.TestCase):
             sites._clean_category_list(too_many, 50, 'selected_categories')
 
 
+class CategoryHintTests(unittest.TestCase):
+    """Private per-category AI hints live in the `categories` JSON, not in WordPress."""
+
+    def test_hints_are_kept_for_categories_only(self):
+        value = [{'id': 1, 'name': 'Tips', 'ai_hint': '  Fokus guru SD.  '}, {'id': 2, 'name': 'News'}]
+        self.assertEqual(sites._clean_category_list(value, 50, 'categories', keep_hints=True), [
+            {'id': 1, 'name': 'Tips', 'description': '', 'count': 0, 'ai_hint': 'Fokus guru SD.'},
+            {'id': 2, 'name': 'News', 'description': '', 'count': 0},
+        ])
+        # Selected categories never carry them.
+        self.assertNotIn('ai_hint', sites._clean_category_list(value, 50, 'selected_categories')[0])
+        cleaned = sites._clean_site_update({'categories': value, 'selected_categories': value})
+        self.assertEqual(cleaned['categories'][0]['ai_hint'], 'Fokus guru SD.')
+        self.assertNotIn('ai_hint', cleaned['selected_categories'][0])
+
+    def test_invalid_hints_are_rejected(self):
+        for hint in (5, ['x'], 'x' * (sites.MAX_CATEGORY_HINT_CHARS + 1)):
+            with self.assertRaises(sites._InvalidField, msg=repr(hint)):
+                sites._clean_category_list([{'id': 1, 'name': 'Tips', 'ai_hint': hint}], 50, 'categories',
+                                           keep_hints=True)
+
+    def test_stored_hints_survive_updates_without_them_and_category_refresh(self):
+        stored = [{'id': 1, 'name': 'Tips', 'ai_hint': 'Fokus guru SD.'}, {'id': 2, 'name': 'News', 'ai_hint': 'x'}]
+        # A client (or the WordPress category refresh) that does not send the hint keeps it.
+        fresh = [{'id': 1, 'name': 'Tips & Trik', 'description': 'baru', 'count': 4}, {'id': 3, 'name': 'Baru'}]
+        self.assertEqual(sites._keep_stored_hints(fresh, stored), [
+            {'id': 1, 'name': 'Tips & Trik', 'description': 'baru', 'count': 4, 'ai_hint': 'Fokus guru SD.'},
+            {'id': 3, 'name': 'Baru'},
+        ])
+        # An empty hint sent on purpose clears it.
+        self.assertEqual(sites._keep_stored_hints([{'id': 1, 'name': 'Tips', 'ai_hint': ''}], stored),
+                         [{'id': 1, 'name': 'Tips'}])
+        self.assertEqual(sites._keep_stored_hints([{'id': 2, 'name': 'News', 'ai_hint': 'baru'}], stored),
+                         [{'id': 2, 'name': 'News', 'ai_hint': 'baru'}])
+        self.assertEqual(sites._keep_stored_hints(fresh[1:], None), [{'id': 3, 'name': 'Baru'}])
+
+
 class ScalarFieldTests(unittest.TestCase):
     def test_clean_str(self):
         self.assertIsNone(sites._clean_str({'k': None}, 'k', 10))

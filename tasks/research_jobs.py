@@ -18,6 +18,7 @@ from database import (
 from models import WordPressSite
 from services.content_planner import load_search_metrics, text_matches_topic
 from services.research_notes import evidence_warnings
+from services.topic_similarity import drop_core_repeats
 from services.wp_publisher import WordPressPublisher
 
 MIN_RESEARCH_QUALITY_SCORE = 35
@@ -33,6 +34,11 @@ GSC_MAX_WEIGHT = 15
 GSC_POINTS_PER_MATCH = 5
 
 TOPIC_SUGGESTION_COUNT = 10
+# Candidates asked from the topic builder, so topics dropped for repeating a
+# published article's core topic (or the category's head term) can be replaced.
+TOPIC_CANDIDATE_COUNT = 2 * TOPIC_SUGGESTION_COUNT
+# Published titles of the site the new topics are compared with.
+TOPIC_PUBLISHED_TITLES_LIMIT = 200
 SCHEDULED_FAILURE_NOTICE_TTL_SECONDS = 2 * 86400
 
 
@@ -233,7 +239,28 @@ def _build_topic_suggestions(category_name, trending_data, evidence):
         if name in params and params[name].kind in (
             inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     }
-    return list(build(category_name, trending_data, count=TOPIC_SUGGESTION_COUNT, **kwargs) or [])
+    return list(build(category_name, trending_data, count=TOPIC_CANDIDATE_COUNT, **kwargs) or [])
+
+
+def _published_site_titles(user_id, site_id):
+    """The site's published titles, newest first; [] when they cannot be loaded."""
+    try:
+        return list(db.get_existing_titles(user_id, site_id, None, limit=TOPIC_PUBLISHED_TITLES_LIMIT) or [])
+    except Exception as e:
+        logger.warning(f"Could not load published titles of site {site_id} for topic filtering: {e}")
+        return []
+
+
+def _distinct_topics(suggestions, category_name, published_titles, language):
+    """At most TOPIC_SUGGESTION_COUNT topics whose core topic repeats no
+    published article, no earlier topic and not just the category's head term
+    (a topic like "digitalisasi pendidikan 2026" in category "Digitalisasi
+    Pendidikan" only produces another generic category article)."""
+    kept, dropped = drop_core_repeats(suggestions, published_titles, language=language, category=category_name)
+    if dropped:
+        logger.info(f"Dropped {len(dropped)} topic(s) for '{category_name}' repeating a published core topic "
+                    "or the category itself.")
+    return kept[:TOPIC_SUGGESTION_COUNT]
 
 
 def _research_category(seo, user_id, site_id, category_name, language, gsc_queries):
@@ -271,6 +298,7 @@ def _research_category(seo, user_id, site_id, category_name, language, gsc_queri
         'questions': list(seo_data.get('evidence_questions') or []),
         'long_tail': list(long_tail or []),
     })
+    suggestions = _distinct_topics(suggestions, category_name, _published_site_titles(user_id, site_id), language)
 
     db.save_research_data(
         user_id=user_id,

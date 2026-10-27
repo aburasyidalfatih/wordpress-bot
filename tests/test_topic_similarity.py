@@ -10,8 +10,9 @@ from rq.timeouts import JobTimeoutException
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from services.article_review import ReviewResult
 from services.topic_similarity import (
-    BORDERLINE_THRESHOLD, DEFINITE_THRESHOLD, SIMILAR_THRESHOLD, find_similar_published, significant_tokens,
-    similarity_score,
+    BORDERLINE_THRESHOLD, CORE_MATCH_SCORE, DEFINITE_THRESHOLD, SIMILAR_THRESHOLD, core_topic_match,
+    drop_core_repeats, find_similar_published, restates_category, significant_tokens, similarity_score,
+    title_core,
 )
 from test_article_quality_support import quality_stub_patches
 from test_research_backend_support import load_with_stubbed_core, make_db
@@ -99,6 +100,110 @@ class ExampleTests(unittest.TestCase):
         site_titles = [f'{topic} Sekolah Dasar' for topic in
                        ('Kurikulum', 'Seragam', 'Perpustakaan', 'Ekstrakurikuler', 'Guru', 'Rapor', 'Upacara')]
         self.assertIsNone(find_similar_published(title, site_titles + [existing], language='id'))
+
+
+class CoreTopicTests(unittest.TestCase):
+    """The core topic: the framing-free title head (before ':') or whole title."""
+
+    DIGITAL = [
+        'Peta Jalan Digitalisasi Pendidikan 2026: Rencana Aksi Sekolah',
+        'Panduan Digitalisasi Pendidikan 2026: Rencana Aksi Guru dan Kepala Sekolah',
+        'Digitalisasi Pendidikan 2026: Strategi Taktis Kepala Sekolah',
+        'Arsitektur Digitalisasi Pendidikan 2026: Blueprint Infrastruktur Sekolah',
+        'Digitalisasi Pendidikan 2026 \u2013 Siasat Guru Menghadapi Kelas Hibrida',
+    ]
+
+    def test_core_is_the_framing_free_head(self):
+        for title in self.DIGITAL:
+            self.assertEqual(title_core(title, 'id'), {'digitalisasi', 'pendidikan'}, title)
+        self.assertEqual(title_core('Family Budgeting Basics: Teaching Kids About Money', 'en'),
+                         {'family', 'budget'})
+        # A one-word or framing-only head is not a topic: the whole title is the core.
+        self.assertEqual(title_core('Kurikulum: Cara Menyusun Modul Ajar', 'id'),
+                         {'kurikulum', 'menyusun', 'modul', 'ajar'})
+        self.assertEqual(title_core('Studi Kasus: Digitalisasi Perpustakaan Sekolah', 'id'),
+                         {'digitalisasi', 'perpustakaan', 'sekolah'})
+        self.assertIsNone(title_core('Panduan Lengkap 2026', 'id'))
+
+    def test_same_head_with_different_framing_is_the_same_topic(self):
+        for i, a in enumerate(self.DIGITAL):
+            for b in self.DIGITAL[i + 1:]:
+                self.assertTrue(core_topic_match(a, b, 'id'), (a, b))
+        self.assertTrue(core_topic_match('Family Budgeting Basics: Meal Planning on a Shoestring',
+                                         'Family Budgeting Basics: Teaching Kids About Money', 'en'))
+        # A title that is only the other's head, or the other's subtitle.
+        self.assertTrue(core_topic_match('Digitalisasi Pendidikan 2026', self.DIGITAL[0], 'id'))
+        self.assertTrue(core_topic_match('From Paycheck Pressure to Peace: Family Budgeting Basics',
+                                         'Family Budgeting Basics: Reclaim Household Cash Flow in 2026', 'en'))
+
+    def test_core_match_beats_niche_weights_and_the_model(self):
+        # On a site where every title says "Digitalisasi Pendidikan", the niche
+        # weights used to let these through; the model said "different intent".
+        site_titles = [f'{topic} di Sekolah Dasar' for topic in
+                       ('Kurikulum', 'Seragam', 'Perpustakaan', 'Ekstrakurikuler', 'Rapor', 'Upacara', 'Kantin')]
+        generator = FakeGenerator('{"same_intent": false}', '{"same_intent": false}')
+        match = find_similar_published(self.DIGITAL[0], site_titles + self.DIGITAL[1:], language='id',
+                                       generator=generator)
+        self.assertEqual(match[0], self.DIGITAL[1])
+        self.assertGreaterEqual(match[1], CORE_MATCH_SCORE)
+        self.assertGreater(CORE_MATCH_SCORE, DEFINITE_THRESHOLD)
+        self.assertEqual(generator.prompts, [])
+        # Same head, clearly different subtitles (a series): the model decides.
+        series = ('Family Budgeting Basics: Meal Planning on a Shoestring',
+                  ['Family Budgeting Basics: Teaching Kids About Money'])
+        self.assertIsNone(find_similar_published(series[0], series[1], language='en',
+                                                 generator=FakeGenerator('{"same_intent": false}')))
+        match = find_similar_published(series[0], series[1], language='en',
+                                       generator=FakeGenerator('{"same_intent": true}'))
+        self.assertEqual(match[0], 'Family Budgeting Basics: Teaching Kids About Money')
+        # Without a model a shared core is still treated as a repeat.
+        self.assertEqual(find_similar_published(series[0], series[1], language='en')[0],
+                         'Family Budgeting Basics: Teaching Kids About Money')
+        series_id = ('Manajemen Keuangan Sekolah: Menyusun RAPBS', ['Manajemen Keuangan Sekolah: Laporan Dana BOS'])
+        self.assertIsNone(find_similar_published(series_id[0], series_id[1], language='id',
+                                                 generator=FakeGenerator('{"same_intent": false}')))
+
+    def test_different_intents_in_a_niche_still_pass(self):
+        self.assertFalse(core_topic_match('Audit Internal Keuangan Sekolah',
+                                          'Pengendalian Arus Kas Sekolah Swasta', 'id'))
+        self.assertIsNone(find_similar_published('Audit Internal Keuangan Sekolah',
+                                                 ['Pengendalian Arus Kas Sekolah Swasta'], language='id'))
+        self.assertFalse(core_topic_match('Studi Kasus: Digitalisasi Perpustakaan Sekolah',
+                                          'Studi Kasus: Pengelolaan BOS di Sekolah Swasta', 'id'))
+        self.assertFalse(core_topic_match('Siasat Digitalisasi Pendidikan bagi Guru Honorer',
+                                          'Literasi Data Guru Sekolah Negeri', 'id'))
+
+    def test_emergency_fund_calculator_vs_where_to_keep_it(self):
+        # Decision: different core topics (how much to save vs. where to hold
+        # it), so the core check does not decide. The pair stays in the lexical
+        # gray zone: the model's same-intent answer decides, and without a model
+        # the score still matches it (conservative, as before).
+        a, b = 'Emergency Fund Calculator', 'Where to Keep Your Emergency Fund'
+        self.assertFalse(core_topic_match(a, b, 'en'))
+        self.assertTrue(BORDERLINE_THRESHOLD <= score(a, b, 'en') < DEFINITE_THRESHOLD)
+        self.assertIsNone(find_similar_published(a, [b], language='en',
+                                                 generator=FakeGenerator('{"same_intent": false}')))
+        self.assertIsNotNone(find_similar_published(a, [b], language='en'))
+
+    def test_restating_the_category_head_term(self):
+        self.assertTrue(restates_category('Digitalisasi Pendidikan 2026: Literasi Data Guru',
+                                          'Digitalisasi Pendidikan', 'id'))
+        self.assertTrue(restates_category('Debt Payoff: Snowball vs Avalanche', 'Debt Payoff Strategies', 'en'))
+        self.assertFalse(restates_category('Literasi Data Guru dalam Digitalisasi Pendidikan',
+                                           'Digitalisasi Pendidikan', 'id'))
+        self.assertFalse(restates_category('Tips Hemat Listrik', 'Tips', 'id'))  # one-word category
+
+    def test_drop_core_repeats(self):
+        candidates = ['Digitalisasi Pendidikan 2026: Literasi Data Guru',
+                      {'topic': 'digitalisasi pendidikan adalah'},
+                      'Family Budgeting Basics: Meal Planning',
+                      'Literasi Data Guru dalam Digitalisasi Pendidikan',
+                      'Literasi Data Guru dalam Digitalisasi Pendidikan 2026',
+                      'Cara Mengajar Coding di SD', '']
+        kept, dropped = drop_core_repeats(candidates, ['Family Budgeting Basics: Teaching Kids'],
+                                          language='id', category='Digitalisasi Pendidikan')
+        self.assertEqual(kept, ['Literasi Data Guru dalam Digitalisasi Pendidikan', 'Cara Mengajar Coding di SD'])
+        self.assertEqual(len(dropped), 5)
 
 
 class AIConfirmationTests(unittest.TestCase):
