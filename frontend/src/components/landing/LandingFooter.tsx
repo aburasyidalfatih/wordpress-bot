@@ -65,7 +65,9 @@ export function LandingFooter({ isLoggedIn }: { isLoggedIn: boolean }) {
             <span className="text-white font-bold">AutoWP</span>
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="flex flex-wrap items-center justify-center gap-6">
+            <Link to="/privacy" className="hover:text-white">Kebijakan Privasi</Link>
+            <Link to="/terms" className="hover:text-white">Syarat Layanan</Link>
             <span>&copy; {new Date().getFullYear()} AutoWP SaaS. Hak cipta dilindungi.</span>
           </div>
         </div>
