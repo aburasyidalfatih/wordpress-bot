@@ -623,6 +623,68 @@ CLAUDE_PART_SOURCES = {'questions': 'related_questions'}
 # significant words ("Emergency Fund and Financial Safety" -> "emergency fund").
 TREND_HEAD_TERM_WORDS = 2
 
+# Google Suggest (autocomplete). The firefox client returns plain JSON
+# ["query", [suggestions], ...]; the chrome client the same array with extra
+# metadata, so it is the second try. ie/oe pin UTF-8 in and out (the response
+# charset otherwise follows hl). A complete browser User-Agent and
+# Accept-Language: the old truncated one looked like a bot.
+GOOGLE_SUGGEST_URL = 'https://suggestqueries.google.com/complete/search'
+GOOGLE_SUGGEST_CLIENTS = ('firefox', 'chrome')
+GOOGLE_SUGGEST_RETRY_STATUSES = frozenset({429, 500, 502, 503})
+GOOGLE_SUGGEST_BACKOFF_SECONDS = 2.0
+SUGGEST_HEADERS = {
+    'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                   'Chrome/130.0.0.0 Safari/537.36'),
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+}
+# Keyword ideas taken from Claude's retrieved search-result titles when Google
+# Suggest is blocked: segments of 2 to 8 words that name the topic.
+CLAUDE_KEYWORD_LIMIT = 10
+CLAUDE_KEYWORD_MIN_WORDS = 2
+CLAUDE_KEYWORD_MAX_WORDS = 8
+# A title's site-name tail ("Headline - Kompas.com", "Thread | KASKUS") is
+# dropped first; the head is then split into phrases on ':', '?', '!', brackets.
+_SITE_TAIL_RE = re.compile(r'\s+[-|\u2013\u2014]\s+')
+_TITLE_SPLIT_RE = re.compile(r'[:?!()\[\]|]')
+_KEYWORD_NUMBERING_RE = re.compile(r'^\s*\d{1,3}\s*[.)]\s*')
+
+
+def claude_keyword_ideas(claude, topic, language='id', limit=CLAUDE_KEYWORD_LIMIT):
+    """Keyword ideas from a Claude research result, never invented.
+
+    Candidates are the phrases (split on ':', '?', '!', brackets) of the
+    verified reader questions and of the search-result titles the call
+    retrieved, without a title's site-name tail (" - Kompas.com"). A candidate is kept only when it is a verbatim substring of a
+    retrieved search-result title, has CLAUDE_KEYWORD_MIN_WORDS to
+    CLAUDE_KEYWORD_MAX_WORDS words, names the topic (title_matches_topic) and
+    is not just the topic itself.
+    """
+    if not isinstance(claude, dict):
+        return []
+    titles = [str(title) for title in claude.get('search_titles') or [] if isinstance(title, str) and title.strip()]
+    if not titles:
+        return []
+    haystack = [' '.join(title.lower().split()) for title in titles]
+    topic_key = ' '.join(str(topic or '').lower().split())
+    sources = [q for q in claude.get('questions') or [] if isinstance(q, str)] + titles
+    ideas, seen = [], set()
+    for source in sources:
+        for segment in _TITLE_SPLIT_RE.split(_SITE_TAIL_RE.split(source)[0]):
+            phrase = ' '.join(_KEYWORD_NUMBERING_RE.sub('', segment).split()).strip(' .,;"\'')
+            key = phrase.lower()
+            words = len(phrase.split())
+            if not (CLAUDE_KEYWORD_MIN_WORDS <= words <= CLAUDE_KEYWORD_MAX_WORDS) or key in seen or key == topic_key:
+                continue
+            if not any(key in title for title in haystack) or not title_matches_topic(phrase, topic, language):
+                continue
+            if spam_marker_count(phrase, topic):
+                continue
+            seen.add(key)
+            ideas.append(phrase)
+            if len(ideas) >= limit:
+                return ideas
+    return ideas
+
 
 def trend_head_term(name, language='id', words=TREND_HEAD_TERM_WORDS):
     """The first `words` significant words of name, lower-cased; '' when that is not shorter."""
@@ -896,7 +958,28 @@ class SEOResearch:
         if 'competitors' in missing and (good or thin):
             collected['competitors'] = self._top_up_competitors(good, collected.get('competitors'), thin,
                                                                 competitor_limit)
+        self._claude_keyword_fallback(claude, topic, language, collected)
         return collected
+
+    def _claude_keyword_fallback(self, claude, topic, language, collected):
+        """Keyword ideas from Claude's retrieved titles when Google Suggest failed.
+
+        Only when 'suggestions' was collected without real data (blocked:
+        template fallback). The ideas are verbatim parts of search-result titles
+        this call retrieved (claude_keyword_ideas), so they count as observed.
+        """
+        status = (self.source_status.get('google_autocomplete') or {}).get('status')
+        if 'suggestions' not in collected or status == 'real':
+            return
+        ideas = claude_keyword_ideas(claude, topic, language)
+        if not ideas:
+            return
+        previous = self.source_status.get('google_autocomplete') or {}
+        details = {'via': 'claude_web', 'derived_from': 'search_titles'}
+        if previous.get('reason'):
+            details['google_error'] = previous['reason']
+        collected['suggestions'] = ideas
+        self._mark_source('google_autocomplete', 'real', count=len(ideas), **details)
 
     def _mark_source(self, provider, status, **details):
         # Called concurrently by the parallel providers.
@@ -920,19 +1003,54 @@ class SEOResearch:
             output.append(value)
         return output
 
+    def _google_suggest(self, query, language='id', timeout=10):
+        """(suggestions, error) from Google Suggest; suggestions is None when
+        Google gave nothing usable (blocked, rate-limited, not JSON).
+
+        Tries each GOOGLE_SUGGEST_CLIENTS in turn; a rate limit or server error
+        waits GOOGLE_SUGGEST_BACKOFF_SECONDS (plus jitter) first. Any other
+        HTTP error (403: the IP is blocked) stops at once, more requests would
+        only prolong the block.
+        """
+        english = language == 'en'
+        error = None
+        for attempt, client in enumerate(GOOGLE_SUGGEST_CLIENTS):
+            if attempt:
+                time.sleep(GOOGLE_SUGGEST_BACKOFF_SECONDS + random.uniform(0, 1))
+            params = {'client': client, 'q': query, 'hl': 'en' if english else 'id', 'gl': 'us' if english else 'id',
+                      'ie': 'utf-8', 'oe': 'utf-8'}
+            headers = dict(SUGGEST_HEADERS, **{'Accept-Language': 'en-US,en;q=0.9' if english else 'id-ID,id;q=0.9'})
+            try:
+                response = requests.get(GOOGLE_SUGGEST_URL, params=params, headers=headers, timeout=timeout)
+            except requests.RequestException as e:
+                error = type(e).__name__
+                continue
+            if response.status_code != 200:
+                error = f'HTTP {response.status_code}'
+                if response.status_code in GOOGLE_SUGGEST_RETRY_STATUSES:
+                    continue
+                break
+            try:
+                data = json.loads(response.content.decode('utf-8', errors='replace'))
+            except ValueError:
+                error = 'bukan JSON'
+                continue
+            if isinstance(data, list) and len(data) > 1 and isinstance(data[1], list):
+                return [' '.join(item.split()) for item in data[1] if isinstance(item, str) and item.strip()], None
+            error = 'format tidak dikenal'
+            break
+        logger.warning(f"Google Suggest gave nothing for '{query}': {error}")
+        return None, error
+
     def get_keyword_suggestions(self, keyword, limit=10, language='id'):
         """Get keyword suggestions from Google Autocomplete"""
         suggestions = []
+        error = None
         try:
-            url = "https://suggestqueries.google.com/complete/search"
-            hl = 'en' if language == 'en' else 'id'
-            params = {'client': 'firefox', 'q': keyword, 'hl': hl}
-            response = requests.get(url, params=params, headers=self.headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if len(data) > 1:
-                    suggestions = data[1][:limit]
-                    self._mark_source('google_autocomplete', 'real', count=len(suggestions))
+            found, error = self._google_suggest(keyword, language=language, timeout=10)
+            if found:
+                suggestions = found[:limit]
+                self._mark_source('google_autocomplete', 'real', count=len(suggestions))
         except Exception as e:
             logger.error(f"Error getting keyword suggestions: {e}")
 
@@ -948,7 +1066,8 @@ class SEOResearch:
                     f"tips {keyword}", f"panduan {keyword}", f"belajar {keyword}",
                     f"cara memulai {keyword}", f"{keyword} untuk pemula"
                 ]
-            self._mark_source('google_autocomplete', 'fallback', count=len(suggestions))
+            details = {'reason': error} if error else {}
+            self._mark_source('google_autocomplete', 'fallback', count=len(suggestions), **details)
         return suggestions[:limit]
 
     def get_related_questions(self, keyword, limit=10, language='id'):
@@ -960,17 +1079,12 @@ class SEOResearch:
             modifiers = ["bagaimana cara", "apa itu", "kenapa", "apakah"]
 
         try:
-            url = "https://suggestqueries.google.com/complete/search"
-            hl = 'en' if language == 'en' else 'id'
             for mod in modifiers:
-                query = f"{mod} * {keyword}"
-                params = {'client': 'firefox', 'q': query, 'hl': hl}
-                response = requests.get(url, params=params, headers=self.headers, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    if len(data) > 1:
-                        # Add valid questions that aren't too short
-                        questions.extend([q for q in data[1] if len(q.split()) > 3])
+                found, _error = self._google_suggest(f"{mod} * {keyword}", language=language, timeout=5)
+                if found is None:
+                    break  # blocked or rate-limited: more modifiers would only prolong it
+                # Add valid questions that aren't too short
+                questions.extend([q for q in found if len(q.split()) > 3])
 
             # Remove duplicates while preserving order
             seen = set()

@@ -13,7 +13,8 @@ from rq.registry import StartedJobRegistry, ScheduledJobRegistry, DeferredJobReg
 from sqlalchemy import or_
 from database import (
     Database, add_credits, RESEARCH_MAX_QUEUE_WAIT_SECONDS, RESEARCH_MIN_TIMEOUT_SECONDS,
-    RQ_LIVE_JOB_STATUSES, SCHEDULED_RESEARCH_REFRESH_DAYS, acquire_research_lock,
+    EARLY_REFRESH_MIN_AGE_DAYS, EARLY_REFRESH_MIN_TOPICS, RQ_LIVE_JOB_STATUSES, SCHEDULED_RESEARCH_REFRESH_DAYS,
+    acquire_research_lock,
     active_research_job_id, category_key, read_research_charge, read_research_lock, release_research_lock,
     research_charge_job_ids, research_charge_owed, research_job_timeout, research_lock_key, research_lock_ttl,
     restore_research_charge, take_research_charge,
@@ -354,18 +355,26 @@ def _research_schedule_offset(site_id):
 
 def _stale_research_categories(site, now=None):
     """Selected category names whose newest usable research is missing or older than
-    SCHEDULED_RESEARCH_REFRESH_DAYS, one per normalized name (first spelling).
+    SCHEDULED_RESEARCH_REFRESH_DAYS (monthly), one per normalized name (first spelling).
 
-    Refreshing a day before research expires (MAX_RESEARCH_AGE_DAYS) keeps
-    auto-posting from silently losing its research.
+    Refreshing days before research expires (MAX_RESEARCH_AGE_DAYS) keeps
+    auto-posting from silently losing its research. A category whose unused
+    article topics dropped below EARLY_REFRESH_MIN_TOPICS is refreshed early,
+    once its research is at least EARLY_REFRESH_MIN_AGE_DAYS old.
     """
     latest_by_key = {}
     for name, researched_at in db.latest_research_times(site.user_id, site.id).items():
         key = category_key(name)
         if researched_at and (key not in latest_by_key or researched_at > latest_by_key[key]):
             latest_by_key[key] = researched_at
+    topics_by_key = {}
+    for name, count in db.unused_research_topic_counts(site.user_id, site.id).items():
+        key = category_key(name)
+        topics_by_key[key] = topics_by_key.get(key, 0) + count
     # researched_at is local naive time (database.save_research_data).
-    cutoff = (now or datetime.now()) - timedelta(days=SCHEDULED_RESEARCH_REFRESH_DAYS)
+    now = now or datetime.now()
+    cutoff = now - timedelta(days=SCHEDULED_RESEARCH_REFRESH_DAYS)
+    early_cutoff = now - timedelta(days=EARLY_REFRESH_MIN_AGE_DAYS)
     stale, seen = [], set()
     for cat in site.selected_categories or []:
         name = cat.get('name') if isinstance(cat, dict) else None
@@ -377,6 +386,10 @@ def _stale_research_categories(site, now=None):
         seen.add(key)
         researched_at = latest_by_key.get(key)
         if researched_at is None or researched_at < cutoff:
+            stale.append(name)
+        elif researched_at < early_cutoff and topics_by_key.get(key, 0) < EARLY_REFRESH_MIN_TOPICS:
+            logger.info(f"Category '{name}' of site_id={site.id} has {topics_by_key.get(key, 0)} unused "
+                        "research topic(s) left; refreshing its research early.")
             stale.append(name)
     return stale
 

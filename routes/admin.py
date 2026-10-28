@@ -10,7 +10,9 @@ from core_extensions import (
 )
 from database import Config as DBConfig
 from models import User, Transaction, WordPressSite, PostLog, ResearchData, ContentQueue
-from config import Config, DEFAULT_IMAGE_PROVIDER, DEFAULT_TEXT_PROVIDER, IMAGE_PROVIDERS, TEXT_PROVIDERS
+from config import (
+    CLAUDE_RESEARCH_MODELS, Config, DEFAULT_IMAGE_PROVIDER, DEFAULT_TEXT_PROVIDER, IMAGE_PROVIDERS, TEXT_PROVIDERS,
+)
 from services.ai_providers import PROVIDER_LABELS, describe_provider_error, list_models
 from routes.payments import fulfill_transaction
 from tasks.research_jobs import validate_year_change
@@ -395,8 +397,25 @@ def _parse_usd_rate(data):
 
 
 AI_KEY_FIELDS = ('gemini_api_key', 'anthropic_api_key', 'openai_api_key')
-AI_MODEL_FIELDS = ('gemini_model', 'gemini_image_model', 'anthropic_model', 'openai_model', 'openai_image_model')
+AI_MODEL_FIELDS = (
+    'gemini_model', 'gemini_image_model', 'anthropic_model', 'anthropic_research_model',
+    'openai_model', 'openai_image_model',
+)
 AI_MODEL_MAX_CHARS = 100
+
+
+def _research_model_error(value):
+    """Indonesian error for an unsupported anthropic_research_model, or None.
+
+    '' (follow anthropic_model) and CLAUDE_RESEARCH_MODELS are accepted.
+    """
+    if not value or value in CLAUDE_RESEARCH_MODELS:
+        return None
+    if 'haiku' in value.lower():
+        return ('Model Haiku tidak didukung untuk riset web (web search/fetch). '
+                'Pilih Claude Sonnet 5.5 atau Opus 5.5.')
+    return ('Model riset web tidak didukung. Pilih salah satu: '
+            f"{', '.join(CLAUDE_RESEARCH_MODELS)}, atau kosongkan untuk mengikuti Model Teks.")
 
 
 def _ai_config_response(db_config):
@@ -427,6 +446,9 @@ def _ai_config_updates(user_id, data):
         if not isinstance(value, str) or len(value.strip()) > AI_MODEL_MAX_CHARS:
             return None, (jsonify({'success': False, 'error': f'Nama model {field} tidak valid.'}), 400)
         updates[field] = value.strip()
+    research_error = _research_model_error(updates.get('anthropic_research_model'))
+    if research_error:
+        return None, (jsonify({'success': False, 'error': research_error}), 400)
     for field, allowed in (('ai_text_provider', TEXT_PROVIDERS), ('ai_image_provider', IMAGE_PROVIDERS)):
         if field not in data:
             continue

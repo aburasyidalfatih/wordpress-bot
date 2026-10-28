@@ -244,18 +244,21 @@ class RequestShapeTests(unittest.TestCase):
         kwargs = self.run_research()
         search, fetch = kwargs['tools']
         self.assertEqual(search, {
-            'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': 9, 'allowed_callers': ['direct'],
+            'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': 6, 'allowed_callers': ['direct'],
             'user_location': {'type': 'approximate', 'country': 'ID', 'timezone': 'Asia/Jakarta'},
             'blocked_domains': ['situs.example'],
         })
         self.assertEqual(fetch, {
-            'type': 'web_fetch_20260209', 'name': 'web_fetch', 'max_uses': 6, 'max_content_tokens': 6000,
+            'type': 'web_fetch_20260209', 'name': 'web_fetch', 'max_uses': 5, 'max_content_tokens': 6000,
             'citations': {'enabled': True}, 'allowed_callers': ['direct'], 'blocked_domains': ['situs.example'],
         })
         self.assertNotIn('allowed_domains', search)
         self.assertFalse(any('code_execution' in tool['type'] for tool in kwargs['tools']))
-        # Automatic prompt caching for the server-side loop and continuations.
+        # Automatic prompt caching for the server-side loop and continuations,
+        # plus an explicit breakpoint on the static prefix (tools + system).
         self.assertEqual(kwargs['cache_control'], {'type': 'ephemeral'})
+        self.assertEqual(kwargs['system'], [{'type': 'text', 'text': claude_research.SYSTEM_PROMPT,
+                                             'cache_control': {'type': 'ephemeral'}}])
         # Same API surface as AnthropicText: refusal fallback beta, effort, no sampling params.
         self.assertEqual(kwargs['betas'], [ai_providers.CLAUDE_FALLBACK_BETA])
         self.assertEqual(kwargs['fallbacks'], 'default')
@@ -264,7 +267,6 @@ class RequestShapeTests(unittest.TestCase):
         self.assertNotIn('top_p', kwargs)
         self.assertNotIn('thinking', kwargs)
         self.assertEqual(kwargs['model'], 'claude-opus-5-5')
-        self.assertEqual(kwargs['system'], claude_research.SYSTEM_PROMPT)
         self.assertLessEqual(kwargs['timeout'], claude_research.CLIENT_TIMEOUT_SECONDS)
         self.assertEqual(len(kwargs['messages']), 1)
         prompt = kwargs['messages'][0]['content']
@@ -354,8 +356,8 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(resumed['messages'][1], {'role': 'assistant', 'content': first.content})
         self.assertEqual(len(resumed['messages']), 2)  # no extra "continue" message
         # The search/fetch limits are totals: only what is left is offered.
-        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [7, 6])
-        self.assertEqual([tool['max_uses'] for tool in first_kwargs['tools']], [9, 6])
+        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [4, 5])
+        self.assertEqual([tool['max_uses'] for tool in first_kwargs['tools']], [6, 5])
         self.assertEqual([c['url'] for c in result['competitors']], [COMP_URL])
         self.assertEqual(result['stats']['continuations'], 1)
         self.assertEqual((result['stats']['searches'], result['stats']['fetches']), (2, 3))
@@ -368,16 +370,16 @@ class ContinuationTests(unittest.TestCase):
         self.assertIsNotNone(research.research(TOPIC))
         resumed = research.client.messages.stream.call_args_list[2].kwargs
         self.assertEqual(resumed['messages'][1]['content'], list(first.content) + list(second.content))
-        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [7, 6])
+        self.assertEqual([tool['max_uses'] for tool in resumed['tools']], [4, 5])
 
     def test_spent_budget_stops_instead_of_continuing(self):
-        paused = message(research_blocks()[:2], stop_reason='pause_turn', searches=9, fetches=1)
+        paused = message(research_blocks()[:2], stop_reason='pause_turn', searches=6, fetches=1)
         research = engine(paused, message([text(payload())]))
         self.assertIsNone(research.research(TOPIC))
         self.assertEqual(research.client.messages.stream.call_count, 1)
 
     def test_budget_counted_from_result_blocks_without_usage(self):
-        blocks = [search_result(f's{i}', (f'https://e{i}.example.com/', 't', None)) for i in range(9)]
+        blocks = [search_result(f's{i}', (f'https://e{i}.example.com/', 't', None)) for i in range(6)]
         paused = message(blocks, stop_reason='pause_turn')
         paused.usage.server_tool_use = None
         research = engine(paused, message([text(payload())]))

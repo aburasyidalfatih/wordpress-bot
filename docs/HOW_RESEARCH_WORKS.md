@@ -27,7 +27,10 @@ kategori terpilih:
    untuk mencoba ulang).
 2. Key `research_sched:{site_id}:{tanggal}` membuatnya idempoten: sekali per hari.
 3. Kategori dipilih jika riset usable terbarunya belum ada atau lebih tua dari
-   `SCHEDULED_RESEARCH_REFRESH_DAYS` (6 hari), satu per nama ternormalisasi.
+   `SCHEDULED_RESEARCH_REFRESH_DAYS` (30 hari), satu per nama ternormalisasi.
+   Kategori yang topik artikelnya tinggal kurang dari `EARLY_REFRESH_MIN_TOPICS`
+   (2) diperbarui lebih awal, asalkan risetnya sudah berumur minimal
+   `EARLY_REFRESH_MIN_AGE_DAYS` (7 hari).
 4. Jika website sedang punya riset aktif, dilewati dan dicoba lagi di loop
    berikutnya (masih dalam jam yang sama).
 5. Gratis: `force=False` tidak pernah memotong maupun mengembalikan kredit.
@@ -109,7 +112,7 @@ tidak berhubungan.
 ## 4. Pemakaian Riset
 
 Aturan kesegaran tunggal: `database.is_research_fresh(researched_at)` — maksimal
-`MAX_RESEARCH_AGE_DAYS` (7) hari, dihitung dengan jam lokal naive yang sama dengan
+`MAX_RESEARCH_AGE_DAYS` (35) hari, dihitung dengan jam lokal naive yang sama dengan
 saat `researched_at` ditulis. Confidence harus `high`/`medium`/`low`.
 
 | Jalur | Kode |

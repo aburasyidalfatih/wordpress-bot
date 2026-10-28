@@ -77,7 +77,7 @@ class QueueItemResearchTests(PipelineTestCase):
 
     def test_stale_research_is_not_used(self):
         with self.db.get_session() as s:
-            s.get(ResearchData, 1).researched_at = datetime.now() - timedelta(days=8)
+            s.get(ResearchData, 1).researched_at = datetime.now() - timedelta(days=36)
             s.add(ContentQueue(id=6, user_id=1, site_id=1, category='Keuangan', title='Cara Menabung',
                                status='posting', credit_held=True))
         jobs.generate_and_post(1, item_id=6, credit_pre_reserved=True)

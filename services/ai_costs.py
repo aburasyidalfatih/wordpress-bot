@@ -10,9 +10,10 @@ The ledger lives in a ContextVar: calls on the job's thread are attributed to
 the current stage. Work done on other threads (Claude web research runs on a
 worker thread) is added explicitly with add_cost.
 
-Prices are USD per million tokens for the default models only; any other model
-(and Gemini / OpenAI, whose prices are not tracked in this repo) is recorded
-with its token counts and an unknown cost.
+Prices are USD per million tokens for the default Claude models and the other
+models allowed for Claude web research (config.CLAUDE_RESEARCH_MODELS); any
+other model (and Gemini / OpenAI, whose prices are not tracked in this repo) is
+recorded with its token counts and an unknown cost.
 """
 import contextvars
 import logging
@@ -20,11 +21,19 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-# USD per million tokens. Cache writes are 1.25x input (5-minute cache).
+# USD per million tokens. Cache writes are 1.25x input (5-minute cache); cache
+# reads are 0.1x input except where the model's own price is lower.
 CLAUDE_PRICES = {
     'claude-opus-5-5': {'input': 4.0, 'output': 20.0, 'cache_read': 0.20, 'cache_write': 5.0},
     'claude-sonnet-5-5': {'input': 2.0, 'output': 10.0, 'cache_read': 0.20, 'cache_write': 2.5},
     'claude-haiku-5-5': {'input': 0.10, 'output': 0.50, 'cache_read': 0.01, 'cache_write': 0.125},
+    # Other models allowed for web research (anthropic_research_model).
+    'claude-opus-5': {'input': 5.0, 'output': 25.0, 'cache_read': 0.50, 'cache_write': 6.25},
+    'claude-sonnet-5': {'input': 2.0, 'output': 10.0, 'cache_read': 0.20, 'cache_write': 2.5},
+    'claude-opus-4-8': {'input': 5.0, 'output': 25.0, 'cache_read': 0.50, 'cache_write': 6.25},
+    'claude-opus-4-7': {'input': 5.0, 'output': 25.0, 'cache_read': 0.50, 'cache_write': 6.25},
+    'claude-opus-4-6': {'input': 5.0, 'output': 25.0, 'cache_read': 0.50, 'cache_write': 6.25},
+    'claude-sonnet-4-6': {'input': 3.0, 'output': 15.0, 'cache_read': 0.30, 'cache_write': 3.75},
 }
 # Order in the summary line; any other stage is appended after these.
 STAGE_LABELS = (

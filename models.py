@@ -52,6 +52,8 @@ class Config(Base):
     ai_image_provider = Column(String(20), default=DEFAULT_IMAGE_PROVIDER)
     _anthropic_api_key = Column('anthropic_api_key', String(500))
     anthropic_model = Column(String(100), default=DEFAULT_ANTHROPIC_MODEL)
+    # Claude model for web research; '' follows anthropic_model.
+    anthropic_research_model = Column(String(100), default='')
     _openai_api_key = Column('openai_api_key', String(500))
     openai_model = Column(String(100), default=DEFAULT_OPENAI_MODEL)
     openai_image_model = Column(String(100), default=DEFAULT_OPENAI_IMAGE_MODEL)

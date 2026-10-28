@@ -401,10 +401,14 @@ class RefundFailureHandBackTests(ResearchJobTestCase):
 class FreshnessTests(unittest.TestCase):
     def test_single_boundary(self):
         now = datetime(2026, 10, 14, 12, 0)
-        self.assertTrue(database.is_research_fresh(now - timedelta(days=7), now))
-        self.assertFalse(database.is_research_fresh(now - timedelta(days=7, seconds=1), now))
+        self.assertTrue(database.is_research_fresh(now - timedelta(days=35), now))
+        self.assertFalse(database.is_research_fresh(now - timedelta(days=35, seconds=1), now))
         self.assertFalse(database.is_research_fresh(None, now))
-        self.assertEqual(database.research_fresh_cutoff(now), now - timedelta(days=7))
+        self.assertEqual(database.research_fresh_cutoff(now), now - timedelta(days=35))
+        # Monthly refresh, days before expiry.
+        self.assertEqual(database.SCHEDULED_RESEARCH_REFRESH_DAYS, 30)
+        self.assertLess(database.SCHEDULED_RESEARCH_REFRESH_DAYS, database.MAX_RESEARCH_AGE_DAYS)
+        self.assertLess(database.EARLY_REFRESH_MIN_AGE_DAYS, database.SCHEDULED_RESEARCH_REFRESH_DAYS)
 
     def test_uses_local_naive_clock(self):
         # researched_at is written with datetime.now(); a just-written row is fresh.

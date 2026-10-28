@@ -33,10 +33,16 @@ MIN_RESEARCH_QUALITY_SCORE = 35
 GSC_MAX_WEIGHT = 15
 GSC_POINTS_PER_MATCH = 5
 
+# Topics saved per category research. Research is refreshed monthly
+# (database.SCHEDULED_RESEARCH_REFRESH_DAYS) and a site posting about once a
+# day across 7 categories uses 4-5 topics per category a month; the scheduler
+# also refreshes a category early when its topics run low.
 TOPIC_SUGGESTION_COUNT = 10
 # Candidates asked from the topic builder, so topics dropped for repeating a
 # published article's core topic (or the category's head term) can be replaced.
-TOPIC_CANDIDATE_COUNT = 2 * TOPIC_SUGGESTION_COUNT
+# Three times the target: a month of articles adds ~30 published titles per
+# site, so more candidates repeat one.
+TOPIC_CANDIDATE_COUNT = 3 * TOPIC_SUGGESTION_COUNT
 # Published titles of the site the new topics are compared with.
 TOPIC_PUBLISHED_TITLES_LIMIT = 200
 SCHEDULED_FAILURE_NOTICE_TTL_SECONDS = 2 * 86400

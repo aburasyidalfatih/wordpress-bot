@@ -447,6 +447,9 @@ AI_KEY_FIELDS = ('gemini_api_key', 'anthropic_api_key', 'openai_api_key')
 def merge_shared_ai_config(user_config, admin_config):
     """AI providers, models and keys are set once in the admin panel and shared.
 
+    Every model comes from the admin config, including anthropic_research_model
+    (the Claude model for web research); a user's stored model values are ignored.
+
     A user's own stored key (legacy per-user setting) still overrides the shared
     key for that provider; `own_ai_key` records whether the active text provider
     runs on the user's own key, which exempts them from the free-helper quota.

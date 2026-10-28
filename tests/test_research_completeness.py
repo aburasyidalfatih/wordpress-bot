@@ -129,7 +129,7 @@ class QuestionValidationTests(unittest.TestCase):
         self.assertEqual(found, [])
 
     def test_at_most_ten(self):
-        page = '\n'.join(f'Apakah dana darurat nomor {i} perlu disiapkan?' for i in range(15))
+        page = '## FAQ\n' + '\n'.join(f'Apakah dana darurat nomor {i} perlu disiapkan?' for i in range(15))
         research = engine(message([fetch_result('f1', BLOG, page)] + [text(payload(questions=[
             {'url': BLOG, 'text': f'Apakah dana darurat nomor {i} perlu disiapkan?'} for i in range(15)]))]))
         self.assertEqual(len(research.research(TOPIC)['questions']), 10)

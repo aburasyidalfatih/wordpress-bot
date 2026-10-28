@@ -23,17 +23,28 @@ MIGRATION_LOCK_ID = 4207311001
 
 # Bump this whenever a new migration step is added to _run_migrations_locked so
 # that already-migrated databases re-run the set exactly once.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 SCHEMA_VERSION_KEY = '__schema_version__'
 
 # Research older than this is not used to drive new articles. Shared by the
 # automated path and the manual title generator so both apply the same bar.
-MAX_RESEARCH_AGE_DAYS = 7
+# Category evidence (competitors, official rules, reader questions) does not
+# change weekly, and every article still researches its own topic fresh, so a
+# monthly refresh is enough (a weekly one cost about $60/month per site).
+MAX_RESEARCH_AGE_DAYS = 35
 USABLE_CONFIDENCE_LEVELS = ('high', 'medium', 'low')
 
-# The scheduler refreshes a category once its latest research is this old, one
-# day before MAX_RESEARCH_AGE_DAYS would make it unusable.
-SCHEDULED_RESEARCH_REFRESH_DAYS = 6
+# The scheduler refreshes a category once its latest research is this old,
+# well before MAX_RESEARCH_AGE_DAYS would make it unusable (refresh < expiry,
+# with days to spare for a failed or skipped run).
+SCHEDULED_RESEARCH_REFRESH_DAYS = 30
+# A category whose fresh research has fewer unused article topics left than
+# this is refreshed early by the same free scheduled run, so auto-posting does
+# not fall back to generic category articles for the rest of the month...
+EARLY_REFRESH_MIN_TOPICS = 2
+# ...but not before its latest research is this old: research that yields few
+# topics would otherwise be redone (and paid for) every day.
+EARLY_REFRESH_MIN_AGE_DAYS = 7
 # Research rows older than this are deleted, except the latest few per
 # site + category (the Research page compares the latest run with the previous).
 RESEARCH_RETENTION_DAYS = 90
@@ -573,6 +584,8 @@ class Database:
             ("ai_image_provider", f"VARCHAR(20) DEFAULT '{DEFAULT_IMAGE_PROVIDER}'"),
             ("anthropic_api_key", "VARCHAR(500)"),
             ("anthropic_model", f"VARCHAR(100) DEFAULT '{DEFAULT_ANTHROPIC_MODEL}'"),
+            # Claude model for web research; '' follows anthropic_model.
+            ("anthropic_research_model", "VARCHAR(100) DEFAULT ''"),
             ("openai_api_key", "VARCHAR(500)"),
             ("openai_model", f"VARCHAR(100) DEFAULT '{DEFAULT_OPENAI_MODEL}'"),
             ("openai_image_model", f"VARCHAR(100) DEFAULT '{DEFAULT_OPENAI_IMAGE_MODEL}'"),
@@ -700,6 +713,8 @@ class Database:
                 'ai_image_provider': image_provider,
                 'anthropic_api_key': config.anthropic_api_key or '',
                 'anthropic_model': config.anthropic_model or DEFAULT_ANTHROPIC_MODEL,
+                # '' means web research follows anthropic_model.
+                'anthropic_research_model': config.anthropic_research_model or '',
                 'openai_api_key': config.openai_api_key or '',
                 'openai_model': config.openai_model or DEFAULT_OPENAI_MODEL,
                 'openai_image_model': config.openai_image_model or DEFAULT_OPENAI_IMAGE_MODEL,
@@ -712,6 +727,8 @@ class Database:
         'gemini_model': DEFAULT_GEMINI_MODEL,
         'gemini_image_model': DEFAULT_GEMINI_IMAGE_MODEL,
         'anthropic_model': DEFAULT_ANTHROPIC_MODEL,
+        # Empty on purpose: research then follows anthropic_model.
+        'anthropic_research_model': '',
         'openai_model': DEFAULT_OPENAI_MODEL,
         'openai_image_model': DEFAULT_OPENAI_IMAGE_MODEL,
     }
@@ -1021,6 +1038,27 @@ class Database:
             research.suggested_topics = [topic] + list(research.suggested_topics or [])
             research.used = False
             return True
+
+    def unused_research_topic_counts(self, user_id, site_id):
+        """{category: unused article topics left} over the site's research rows
+        get_unused_research_topic can still pick from (fresh, usable, unused)."""
+        with self.get_session() as session:
+            rows = session.query(ResearchData.category, ResearchData.suggested_topics).filter(
+                ResearchData.user_id == user_id,
+                ResearchData.site_id == site_id,
+                ResearchData.used.is_(False),
+                ResearchData.confidence_level.in_(USABLE_CONFIDENCE_LEVELS),
+                ResearchData.researched_at >= research_fresh_cutoff(),
+            ).all()
+        counts = {}
+        for category, topics in rows:
+            left = 0
+            for topic in topics or []:
+                value = topic.get('topic') if isinstance(topic, dict) else topic
+                if value and str(value).strip():
+                    left += 1
+            counts[category] = counts.get(category, 0) + left
+        return counts
 
     def latest_research_times(self, user_id, site_id):
         """{category: newest researched_at} over usable research rows of a site."""

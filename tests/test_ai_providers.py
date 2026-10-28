@@ -200,6 +200,16 @@ class ConfigSelectionTests(unittest.TestCase):
         merged = merge_shared_ai_config({'anthropic_api_key': 'mine'}, admin)
         self.assertTrue(merged['own_ai_key'])
 
+    def test_shared_research_model_comes_from_the_admin(self):
+        admin = dict(self.BASE, anthropic_research_model='claude-sonnet-5-5')
+        user = {'anthropic_api_key': 'mine', 'anthropic_research_model': '',
+                'anthropic_model': 'claude-opus-5-5'}
+        merged = merge_shared_ai_config(user, admin)
+        self.assertEqual(merged['anthropic_research_model'], 'claude-sonnet-5-5')
+        self.assertEqual(merged['anthropic_model'], 'claude-sonnet-5-5')
+        self.assertEqual(merge_shared_ai_config({}, dict(self.BASE, anthropic_research_model=''))
+                         ['anthropic_research_model'], '')
+
 
 if __name__ == '__main__':
     unittest.main()

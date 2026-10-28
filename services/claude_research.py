@@ -24,12 +24,21 @@ quotes; trust comes from the validation here, not from the model:
   - the classic filters still apply: official host check, the publisher's own
     hosts, spam markers, citable-URL cleaning and the same size caps.
 
+Relevance: social items and reader questions must also be about the topic
+(a significant topic word, stemmed as in services.topic_similarity). Help,
+support and policy pages, questions about the platform itself, news headlines,
+survey prompts and numbered quiz items are rejected; questions from forums and
+FAQ sections rank before article headings.
+
 Cost: web search is billed at $10 per 1,000 searches on top of tokens, and
 fetched page content is billed as input tokens (max_content_tokens caps it per
-fetch). The search/fetch limits below are totals for the whole call, across
-pause_turn continuations. Automatic prompt caching lets the server-side
-sampling loop re-read the growing context as cache reads. Every call logs its
-token usage and an estimated USD cost.
+fetch). Every sampling iteration of the server-side loop re-reads the whole
+context, so the search/fetch limits below (totals for the whole call, across
+pause_turn continuations) bound the cost. Caching: an explicit breakpoint on
+the system prompt (tools + system, the shared prefix) plus top-level automatic
+caching for the growing tail; the server adds cache writes after tool results.
+Every call logs its token usage, the per-iteration usage when the API reports
+it (usage.iterations), and an estimated USD cost at the model's own prices.
 
 research() never raises, except the RQ job timeout, which must reach the job.
 On any failure it returns None and the caller falls back to the classic
@@ -51,7 +60,7 @@ from config import DEFAULT_ANTHROPIC_MODEL
 from seo_research import (
     KEY_PASSAGE_LIMIT, KEY_PASSAGE_MAX_CHARS, KEY_PASSAGES_PAGE_MAX_CHARS, MAX_PAGE_CONTENT_CHARS,
     OFFICIAL_SOURCE_LIMIT, cut_at_sentence, extract_youtube_video_id, is_boilerplate_heading, is_excluded_url,
-    is_official_url, is_question_title, is_spam_page, normalize_hosts, official_domain_suffixes,
+    is_official_url, is_spam_page, normalize_hosts, official_domain_suffixes,
     spam_marker_count, strip_markdown_links, title_matches_topic, url_host,
 )
 from services.ai_costs import CLAUDE_PRICES, token_cost_usd
@@ -78,8 +87,10 @@ WEB_FETCH_TOOL_TYPE = 'web_fetch_20260209'
 # searches for competitors, official pages, news, discussions, questions and
 # videos, and fetches for competitors and official pages (thin pages are
 # replaced by another candidate). Wikipedia uses the free Wikipedia API instead.
-WEB_SEARCH_MAX_USES = 9
-WEB_FETCH_MAX_USES = 6
+# Lowered from 9/6: each extra search or fetch adds an iteration that re-reads
+# the whole (growing) context, and production calls cost up to $2.72 on Opus.
+WEB_SEARCH_MAX_USES = 6
+WEB_FETCH_MAX_USES = 5
 # Thin pages in production were short (about 2,500 words, well under this
 # limit) or script-rendered, not cut off, so a larger limit would only add
 # input cost.
@@ -106,11 +117,13 @@ MIN_CONTINUATION_SECONDS = 60
 MAX_CONTINUATIONS = 3
 RETRY_DELAY_SECONDS = 3
 
-# Token prices come from services.ai_costs (models without a price are
-# estimated at Claude Opus 5.5 rates, the configured research model).
+# Token prices come from services.ai_costs, for the model that actually ran
+# (anthropic_research_model, else anthropic_model). A model without a price is
+# estimated at Claude Opus 5.5 rates (the default, and the higher price).
 # Searches are $10 per 1,000.
 DEFAULT_PRICED_MODEL = 'claude-opus-5-5'
 PRICE_PER_SEARCH = 0.01
+USAGE_FIELDS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
 
 COMPETITOR_LIMIT = 4
 NEWS_LIMIT = 3
@@ -124,6 +137,12 @@ MAX_SOCIAL_CHARS = 300
 MIN_QUESTION_CHARS = 10
 MAX_QUESTION_CHARS = 200
 MAX_QUESTION_CANDIDATES = 15
+# Reader questions from article bodies or headings (not a forum, an FAQ
+# section or a question-form search result) are kept only after the better
+# ones, and at most this many.
+MAX_ARTICLE_QUESTIONS = 3
+# Search-result titles returned for keyword ideas (see SEOResearch).
+SEARCH_TITLE_LIMIT = 30
 YOUTUBE_HOSTS = ('youtube.com', 'm.youtube.com', 'youtu.be')
 # Hosts and URL words that mark a page as a public discussion.
 DISCUSSION_HOSTS = {'reddit.com': 'reddit', 'quora.com': 'quora', 'kaskus.co.id': 'kaskus',
@@ -157,6 +176,7 @@ Rules:
 - Copy headings exactly as they appear on the fetched page.
 - A fetched page that yields fewer than 2 substantial passages (script-rendered, paywalled, behind a cookie wall, a calculator or tool) is thin: fetch another candidate from your search results instead.
 - Copy discussion texts and reader questions VERBATIM from a search-result title or from a page you fetched, together with that page's URL.
+- Reader questions are what real readers ask: forum or Q&A thread titles, People-Also-Ask-style questions and FAQ entries. Never return an article's own headings, news headlines, quiz items or survey questions as reader questions. Discussions must be about the research topic, not about the platform they are on.
 - Only return URLs that appeared in your web_search results or that you fetched, written exactly as they appeared.
 - Prefer specific, substantive passages: definitions, figures, rates, fees, dates, deadlines, requirements and steps. Skip navigation, ads, cookie notices, comments and author bios.
 - Skip pages that look like gambling, adult or pharma spam, including hacked government sites.
@@ -181,23 +201,34 @@ def from_config(config):
     AI config merged with their own keys (merge_shared_ai_config), so the shared
     admin Anthropic key enables Claude research for everyone. None when there
     is no Anthropic key (or the kill switch is off): research stays classic.
+    The model is anthropic_research_model when set (validated on save against
+    config.CLAUDE_RESEARCH_MODELS), else anthropic_model: research may run on
+    Claude Sonnet 5.5 while articles are still written by Claude Opus 5.5.
     """
     if not CLAUDE_WEB_RESEARCH_ENABLED or not isinstance(config, dict):
         return None
     api_key = str(config.get('anthropic_api_key') or '').strip()
     if not api_key:
         return None
+    # The research model (admin AI config) when set, else the text model.
+    model = str(config.get('anthropic_research_model') or '').strip() or \
+        str(config.get('anthropic_model') or '').strip() or DEFAULT_ANTHROPIC_MODEL
     try:
-        return ClaudeWebResearch(api_key, config.get('anthropic_model') or DEFAULT_ANTHROPIC_MODEL)
+        return ClaudeWebResearch(api_key, model)
     except Exception as e:
         logger.warning(f"Claude web research unavailable: {e}")
         return None
 
 
+def priced_model(model):
+    """The model whose prices estimate model's cost: itself when priced, else
+    DEFAULT_PRICED_MODEL."""
+    return model if model in CLAUDE_PRICES else DEFAULT_PRICED_MODEL
+
+
 def estimate_cost_usd(usage, searches, model=DEFAULT_PRICED_MODEL):
     """Estimated USD cost of a call: tokens at the model's price, plus searches."""
-    priced = model if model in CLAUDE_PRICES else DEFAULT_PRICED_MODEL
-    return token_cost_usd(priced, usage) + (searches or 0) * PRICE_PER_SEARCH
+    return token_cost_usd(priced_model(model), usage) + (searches or 0) * PRICE_PER_SEARCH
 
 
 def is_discussion_url(url):
@@ -214,6 +245,107 @@ def discussion_provider(url):
         if host == known or host.endswith('.' + known):
             return name
     return 'forum'
+
+
+# ---------------------------------------------------------------------------
+# Relevance: help/policy pages, platform meta questions, news, surveys
+# ---------------------------------------------------------------------------
+
+# Help, support and policy pages of a platform: not a discussion.
+_HELP_HOST_RE = re.compile(r'^(?:help|support|helpcenter|bantuan|faq)\.|(?:^|\.)(?:zendesk|freshdesk)\.com$')
+_HELP_PATH_RE = re.compile(r'/(?:hc|help|helpcenter|help-center|support|policies|policy|legal|terms|tos|privacy|'
+                           r'guidelines|bantuan|kebijakan)(?:/|$)', re.IGNORECASE)
+# "Kebijakan" (policy) is an ordinary topic word in Indonesian ("kebijakan
+# sekolah"), so on its own it only counts as a whole title segment
+# ("Kebijakan | Quora"), like "Terms" and "Privacy"; otherwise only the
+# policy-page phrases do.
+_HELP_TITLE_RE = re.compile(
+    r'help\s*cent(?:er|re)|pusat\s+bantuan|\bterms\s+(?:of|and|&)\b|terms\s+of\s+(?:service|use)|'
+    r'\bprivacy\s+(?:policy|notice|center|centre)\b|kebijakan\s+(?:privasi|konten|komunitas|layanan|penggunaan)|'
+    r'syarat\s+(?:dan|&)\s+ketentuan|ketentuan\s+layanan|community\s+guidelines|pedoman\s+komunitas',
+    re.IGNORECASE)
+_HELP_TITLE_SEGMENTS = frozenset({'terms', 'privacy', 'kebijakan', 'help', 'bantuan', 'support', 'legal'})
+_TITLE_SEGMENT_RE = re.compile(r'\s*(?:[|:\u2013\u2014]|\s-\s)\s*')
+# Questions about the discussion platform itself (its rules, accounts,
+# moderation), not about the topic.
+_PLATFORM_META_RE = re.compile(
+    r'\b(?:quora|reddit|subreddit|kaskus|kaskuser|upvotes?|downvotes?|karma|moderators?|shadowban\w*|'
+    r'banned|akun\s+(?:saya|quora|reddit|kaskus)|my\s+account)\b', re.IGNORECASE)
+# News sites and news-article paths. A small list: the main Indonesian portals
+# plus the large international wires.
+NEWS_HOSTS = ('detik.com', 'kompas.com', 'kompas.id', 'liputan6.com', 'tribunnews.com', 'cnnindonesia.com',
+              'cnbcindonesia.com', 'antaranews.com', 'tempo.co', 'okezone.com', 'sindonews.com', 'kumparan.com',
+              'merdeka.com', 'republika.co.id', 'suara.com', 'jpnn.com', 'idntimes.com', 'tirto.id',
+              'beritasatu.com', 'mediaindonesia.com', 'inews.id', 'viva.co.id', 'bbc.com', 'cnn.com',
+              'reuters.com', 'apnews.com')
+_NEWS_PATH_RE = re.compile(r'/(?:berita|news|read)(?:/|$)', re.IGNORECASE)
+# Survey or questionnaire prompts addressed to a respondent.
+_SURVEY_RE = re.compile(
+    r'\b(?:pengalaman\s+(?:anda|kamu|bapak/ibu|bapak\s+ibu)|menurut\s+(?:anda|kamu|pendapat\s+anda)|'
+    r'pendapat\s+(?:anda|kamu)|your\s+experiences?|in\s+your\s+opinion|what\s+do\s+you\s+think)\b',
+    re.IGNORECASE)
+# Numbering in front of a list or quiz item: "1.", "1)", "(1)", "1 -".
+_LEADING_NUMBER_RE = re.compile(r'^\s*(?:\(\d{1,3}\)|\d{1,3}\s*[.)\-:])\s*')
+# Heading lines that open an FAQ section.
+_FAQ_HEADING_RE = re.compile(
+    r'\b(?:faqs?|frequently asked|pertanyaan (?:yang )?(?:sering|umum)|tanya jawab|people also ask|'
+    r'yang sering ditanyakan)\b', re.IGNORECASE)
+_FAQ_PATH_RE = re.compile(r'/(?:faqs?|tanya-jawab|pertanyaan-umum)(?:[/.-]|$)', re.IGNORECASE)
+
+
+def _exempt(match_words, topic):
+    """True when every word of a matched marker is a word of the topic itself
+    (an article about Quora may quote questions about Quora)."""
+    topic_words = set(re.findall(r'\w+', str(topic or '').lower()))
+    return all(word in topic_words for word in re.findall(r'\w+', match_words.lower()))
+
+
+def is_help_page(url, title=''):
+    """True for help-center, support and policy pages (hosts, paths and titles)."""
+    host = url_host(url)
+    if _HELP_HOST_RE.search(host):
+        return True
+    try:
+        path = urlsplit(str(url or '')).path or ''
+    except ValueError:
+        path = ''
+    if _HELP_PATH_RE.search(path):
+        return True
+    title = str(title or '')
+    if _HELP_TITLE_RE.search(title):
+        return True
+    segments = [part.strip().lower() for part in _TITLE_SEGMENT_RE.split(title) if part.strip()]
+    return len(segments) > 1 and any(part in _HELP_TITLE_SEGMENTS for part in segments)
+
+
+def is_platform_meta(text, topic=''):
+    """True when text is about the discussion platform (rules, accounts,
+    moderation) rather than the topic; words the topic itself uses do not count."""
+    return any(not _exempt(match.group(0), topic) for match in _PLATFORM_META_RE.finditer(str(text or '')))
+
+
+def is_news_url(url):
+    """True for news portals and news-article paths; discussions never count."""
+    if is_discussion_url(url):
+        return False
+    host = url_host(url)
+    if any(host == known or host.endswith('.' + known) for known in NEWS_HOSTS):
+        return True
+    try:
+        path = urlsplit(str(url or '')).path or ''
+    except ValueError:
+        return False
+    return bool(_NEWS_PATH_RE.search(path))
+
+
+def is_survey_prompt(text):
+    """True for questions addressed to a respondent ("Bagaimana pengalaman Anda ...?")."""
+    return bool(_SURVEY_RE.search(str(text or '')))
+
+
+def strip_numbering(text):
+    """text without leading list/quiz numbering ("1. ", "2) ", "(3) ")."""
+    return _LEADING_NUMBER_RE.sub('', str(text or ''), count=1).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +534,22 @@ class _Page:
             return True
         return len(heading) >= MIN_INLINE_HEADING_CHARS and self.contains(heading, MIN_INLINE_HEADING_CHARS)
 
+    def in_faq_section(self, text):
+        """True when text appears in the fetched text after a heading line that
+        opens an FAQ section ("FAQ", "Pertanyaan yang Sering Diajukan", ...)."""
+        if not self.text:
+            return False
+        needle = comparable_text(text)
+        body = self.comparable()
+        for line in self.text[:MAX_PAGE_CONTENT_CHARS].split('\n'):
+            line = line.strip()
+            if not line or len(line) > MAX_HEADING_LINE_CHARS or not _FAQ_HEADING_RE.search(line):
+                continue
+            start = body.find(comparable_text(line.lstrip('#')))
+            if start != -1 and needle and body.find(needle, start) != -1:
+                return True
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Engine
@@ -483,12 +631,16 @@ class ClaudeWebResearch:
             tasks.append(
                 f'Social listening: find up to {limits["social"]} real discussions about the topic on {forums}. '
                 'For each, give the discussion URL and the question or pain point copied verbatim from its '
-                'search-result title or the fetched page. Prefer search results; fetch only if needed.')
+                'search-result title or the fetched page. Prefer search results; fetch only if needed. Every '
+                'item must be about the topic itself: never help-center, support, terms or policy pages, and '
+                'never questions about the platform (its rules, accounts or moderation).')
         if wants['questions']:
             tasks.append(
-                f'Reader questions: list up to {limits["questions"]} real questions people ask about the topic, '
-                'copied verbatim, each with the URL where it appears: question-form search-result titles, FAQ or '
-                'question headings on fetched pages, and forum thread titles.')
+                f'Reader questions: list up to {limits["questions"]} real questions readers ask about the topic, '
+                'copied verbatim, each with the URL where it appears: forum or Q&A thread titles, '
+                'People-Also-Ask-style questions shown as search-result titles, and entries of an FAQ section. '
+                "Never an article's own section headings, news headlines, quiz or exam items, or survey "
+                'questions addressed to respondents. Each question ends with a question mark.')
         if wants['youtube']:
             tasks.append(
                 f'Videos: find up to {limits["youtube"]} relevant YouTube videos (youtube.com/watch or youtu.be '
@@ -496,8 +648,9 @@ class ClaudeWebResearch:
         lines += [f'{number}. {task}' for number, task in enumerate(tasks, 1)]
         lines += [
             '',
-            f'Budget: at most {WEB_SEARCH_MAX_USES} searches and {WEB_FETCH_MAX_USES} fetches in total. Fetch only '
-            'the most promising pages, never re-fetch a page, and return empty lists for parts not requested.',
+            f'Budget: at most {WEB_SEARCH_MAX_USES} searches and {WEB_FETCH_MAX_USES} fetches in total. Plan the '
+            'searches first and let one search serve several parts where it can. Fetch only the most promising '
+            'pages, never re-fetch a page, and return empty lists for parts not requested.',
         ]
         return '\n'.join(lines)
 
@@ -505,11 +658,15 @@ class ClaudeWebResearch:
         kwargs = {
             'model': self.model,
             'max_tokens': REASONING_MIN_OUTPUT_TOKENS,
-            'system': SYSTEM_PROMPT,
+            # Explicit breakpoint at the end of the static prefix (tools render
+            # before system): a guaranteed read point for tools + system, shared
+            # by the categories of one site researched within the cache TTL.
+            'system': [{'type': 'text', 'text': SYSTEM_PROMPT, 'cache_control': {'type': 'ephemeral'}}],
             'tools': tools,
             'messages': [{'role': 'user', 'content': prompt}],
-            # Automatic prompt caching: the server-side sampling loop and any
-            # continuation re-read the growing context as cache reads.
+            # Automatic caching for the growing tail: the breakpoint moves to the
+            # last block, and server tools add cache writes after their results,
+            # so the sampling loop and continuations re-read the context cached.
             'cache_control': {'type': 'ephemeral'},
         }
         output_config = claude_output_config(self.model)
@@ -583,17 +740,40 @@ class ClaudeWebResearch:
                 raise
 
     @staticmethod
-    def _tool_requests(message):
-        """Searches and fetches one response ran (usage, else its result blocks)."""
+    def _tool_counts(message):
+        """(executed, reported, rejected) tool use of one response, by tool name.
+
+        executed counts the result blocks the tools really produced (a page
+        fetched, a fetch that failed); a 'max_uses_exceeded' error block is an
+        attempt the API refused at the limit and is counted in rejected instead.
+        reported is what usage.server_tool_use says (None when absent): searches
+        are billed by it. A production call logged fetches=7 with max_uses 6:
+        the refused attempt was counted as a fetch.
+        """
+        executed = {name: 0 for name in TOOL_LIMITS}
+        rejected = {name: 0 for name in TOOL_LIMITS}
+        for block in message.content or []:
+            block_type = getattr(block, 'type', None)
+            for name in TOOL_LIMITS:
+                if block_type != f'{name}_tool_result':
+                    continue
+                if getattr(getattr(block, 'content', None), 'error_code', None) == 'max_uses_exceeded':
+                    rejected[name] += 1
+                else:
+                    executed[name] += 1
         server = getattr(getattr(message, 'usage', None), 'server_tool_use', None)
-        counts = {}
+        reported = {}
         for name, field in (('web_search', 'web_search_requests'), ('web_fetch', 'web_fetch_requests')):
             value = getattr(server, field, None)
-            if not isinstance(value, int):
-                value = sum(1 for block in message.content or []
-                            if getattr(block, 'type', None) == f'{name}_tool_result')
-            counts[name] = value
-        return counts
+            reported[name] = value if isinstance(value, int) else None
+        return executed, reported, rejected
+
+    @classmethod
+    def _tool_requests(cls, message):
+        """Uses of each tool one response counts against its budget: the larger
+        of the executed result blocks and the API's own count (conservative)."""
+        executed, reported, _rejected = cls._tool_counts(message)
+        return {name: max(executed[name], reported[name] or 0) for name in TOOL_LIMITS}
 
     def _run(self, kwargs):
         """Messages for the whole turn, following pause_turn continuations.
@@ -705,16 +885,70 @@ class ClaudeWebResearch:
                        if getattr(b, 'type', None) == 'text')
 
     @staticmethod
-    def _usage(messages):
-        totals = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_input_tokens': 0,
-                  'cache_creation_input_tokens': 0}
+    def _iterations(message):
+        """Per-iteration usage of one response (usage.iterations: one entry per
+        sampling iteration of the server-side tool loop, plus any fallback
+        hop), as dicts; [] when the API or SDK does not report it."""
+        entries = getattr(getattr(message, 'usage', None), 'iterations', None)
+        if not isinstance(entries, (list, tuple)):
+            return []
+        iterations = []
+        for entry in entries:
+            model = getattr(entry, 'model', None)
+            item = {'type': str(getattr(entry, 'type', None) or 'message'),
+                    'model': str(model) if model else None}
+            for field in USAGE_FIELDS:
+                value = getattr(entry, field, None)
+                item[field] = value if isinstance(value, int) else 0
+            iterations.append(item)
+        return iterations
+
+    def _message_usage(self, message):
+        """(usage totals, estimated token USD) of one response.
+
+        Top-level usage normally sums the iterations, but after a server-side
+        fallback hop it covers only the attempt that produced the message, and
+        each hop bills at its own model's prices. So the totals are the larger
+        of the two per field, and the cost the larger of the top-level usage
+        at this model's prices and the iterations at their own models' prices.
+        """
+        usage = getattr(message, 'usage', None)
+        top = {}
+        for field in USAGE_FIELDS:
+            value = getattr(usage, field, None)
+            top[field] = value if isinstance(value, int) else 0
+        cost = token_cost_usd(priced_model(self.model), top)
+        iterations = self._iterations(message)
+        if not iterations:
+            return top, cost
+        totals = {field: max(top[field], sum(item[field] for item in iterations)) for field in USAGE_FIELDS}
+        iteration_cost = sum(token_cost_usd(priced_model(item['model'] or self.model), item) for item in iterations)
+        return totals, max(cost, iteration_cost)
+
+    def _usage(self, messages):
+        """(usage totals, estimated token USD) of the whole call."""
+        totals = {field: 0 for field in USAGE_FIELDS}
+        cost = 0.0
         for message in messages:
-            usage = getattr(message, 'usage', None)
-            for field in totals:
-                value = getattr(usage, field, None)
-                if isinstance(value, int):
-                    totals[field] += value
-        return totals
+            usage, message_cost = self._message_usage(message)
+            for field in USAGE_FIELDS:
+                totals[field] += usage[field]
+            cost += message_cost
+        return totals, cost
+
+    def _log_iterations(self, topic, messages):
+        """One log line with each sampling iteration's usage, when reported, so
+        production logs show which iteration read its context uncached."""
+        parts = []
+        for number, message in enumerate(messages, 1):
+            for index, item in enumerate(self._iterations(message), 1):
+                label = f"{number}.{index}" if len(messages) > 1 else str(index)
+                model = f" {item['model']}" if item['model'] and item['model'] != self.model else ''
+                parts.append(f"#{label} {item['type']}{model} in={item['input_tokens']} "
+                             f"cache_write={item['cache_creation_input_tokens']} "
+                             f"cache_read={item['cache_read_input_tokens']} out={item['output_tokens']}")
+        if parts:
+            logger.info(f"Claude web research '{topic}' iterations: " + '; '.join(parts))
 
     # -- validation ---------------------------------------------------------
 
@@ -853,13 +1087,19 @@ class ClaudeWebResearch:
                 break
         return news
 
-    def _social(self, data, pages, topic, excluded, limit):
+    def _social(self, data, pages, topic, language, excluded, limit):
         """Discussions (reddit, quora, forums) with the question or pain point
-        found verbatim in that page's search-result title or fetched text."""
+        found verbatim in that page's search-result title or fetched text.
+
+        The text must name the topic (a significant topic word, stemmed as in
+        services.topic_similarity; for category research the topic is the
+        category name). Help-center, support and policy pages and questions
+        about the platform itself are not discussions of the topic.
+        """
         insights, seen = [], set()
         for item in _items(data, 'social'):
             url, page = self._lookup(pages, item.get('url'), excluded)
-            if not url or not is_discussion_url(url):
+            if not url or not is_discussion_url(url) or is_help_page(url, page.title):
                 continue
             text = _clean_line(item.get('text'), MAX_SOCIAL_CHARS)
             marker = comparable_text(text)
@@ -867,37 +1107,98 @@ class ClaudeWebResearch:
                 continue
             if spam_marker_count(text, topic) or spam_marker_count(page.title, topic):
                 continue
+            if _HELP_TITLE_RE.search(text) or is_platform_meta(text, topic) or \
+                    not title_matches_topic(text, topic, language):
+                continue
             seen.add(marker)
             insights.append({'text': text, 'url': url, 'provider': discussion_provider(url)})
             if len(insights) >= limit:
                 break
         return insights
 
+    def _news_keys(self, data, pages, excluded):
+        """url_key of every retrieved URL the model listed as news in this call."""
+        keys = set()
+        for item in _items(data, 'news'):
+            url, _page = self._lookup(pages, item.get('url'), excluded)
+            if url:
+                keys.add(url_key(url))
+        return keys
+
+    @staticmethod
+    def _question_rank(url, page, text):
+        """0 forum / Q&A thread, 1 FAQ entry, 2 question-form search-result title
+        (People-Also-Ask-like), 3 anything else (an article heading or body)."""
+        if is_discussion_url(url):
+            return 0
+        try:
+            path = urlsplit(url).path or ''
+        except ValueError:
+            path = ''
+        if _FAQ_PATH_RE.search(path) or page.in_faq_section(text):
+            return 1
+        if _in_titles(page, text):
+            return 2
+        return 3
+
     def _questions(self, data, pages, topic, language, excluded, limit):
         """Real reader questions, each verbatim in a retrieved title, heading or
-        page text, in question form and about the topic."""
-        questions, seen = [], set()
+        page text, ending with '?' and about the topic (a significant topic word).
+
+        Leading numbering ("1. ...") is stripped first. Rejected: questions from
+        news (a URL listed as news in this call, or a news site / news path),
+        survey prompts addressed to a respondent ("pengalaman Anda", "menurut
+        anda") and spam. Forum / Q&A questions rank first, then FAQ entries,
+        then question-form search-result titles; questions from an article's
+        own headings or body come last, at most MAX_ARTICLE_QUESTIONS of them.
+        """
+        news_keys = self._news_keys(data, pages, excluded)
+        candidates, seen = [], set()
         for item in _items(data, 'questions', MAX_QUESTION_CANDIDATES):
             url, page = self._lookup(pages, item.get('url'), excluded)
             if not url:
                 continue
-            text = _clean_line(item.get('text'), MAX_QUESTION_CHARS).strip(' -*#')
+            text = strip_numbering(_clean_line(item.get('text'), MAX_QUESTION_CHARS).strip(' -*#'))
             marker = comparable_text(text)
-            if len(marker) < MIN_QUESTION_CHARS or marker.rstrip('?') in seen:
+            if len(marker) < MIN_QUESTION_CHARS or marker.rstrip('?') in seen or not text.endswith('?'):
                 continue
-            is_heading = _in_titles(page, text) or page.is_heading_line(text)
-            if not (is_heading or page.contains(text, MIN_QUESTION_CHARS)):
+            if not (_in_titles(page, text) or page.is_heading_line(text) or page.contains(text, MIN_QUESTION_CHARS)):
                 continue
-            # A question mark, or a question-form heading / title ("Cara ...", "What is ...").
-            if not (text.endswith('?') or (is_heading and is_question_title(text, language))):
+            if url_key(url) in news_keys or is_news_url(url) or is_survey_prompt(text):
                 continue
             if not title_matches_topic(text, topic, language) or spam_marker_count(text, topic):
                 continue
             seen.add(marker.rstrip('?'))
+            candidates.append((self._question_rank(url, page, text), text))
+        # Stable: the model's order within a rank.
+        candidates.sort(key=lambda candidate: candidate[0])
+        questions, article_questions = [], 0
+        for rank, text in candidates:
+            if rank == 3:
+                if article_questions >= MAX_ARTICLE_QUESTIONS:
+                    continue
+                article_questions += 1
             questions.append(text)
             if len(questions) >= limit:
                 break
         return questions
+
+    @staticmethod
+    def _search_titles(pages, topic, excluded):
+        """Search-result titles this call retrieved (not the publisher's own
+        pages, no spam), for keyword ideas when Google Suggest is blocked."""
+        titles, seen = [], set()
+        for page in pages.values():
+            title = page.search_title
+            if not page.searched or not title or is_excluded_url(page.url, excluded):
+                continue
+            if spam_marker_count(title, topic) or title.lower() in seen:
+                continue
+            seen.add(title.lower())
+            titles.append(title)
+            if len(titles) >= SEARCH_TITLE_LIMIT:
+                break
+        return titles
 
     def _youtube(self, data, pages, excluded, limit):
         """YouTube videos that appeared in this call's search results."""
@@ -928,6 +1229,8 @@ class ClaudeWebResearch:
         get_official_sources / get_latest_news / get_social_insights /
         get_related_questions produce; 'youtube' is [{'video_id', 'title', 'url'}]
         for SEOResearch to fetch transcripts for. Parts not requested are empty.
+        'search_titles' lists the search-result titles retrieved (keyword ideas
+        for SEOResearch when Google Suggest is blocked).
         Wikipedia is not researched here: the free Wikipedia API does it.
         """
         self.last_error = None
@@ -956,11 +1259,17 @@ class ClaudeWebResearch:
             if data is None:
                 raise ResearchFailed('final reply is not a JSON object')
             pages, tool_errors, _calls = self._retrieved_pages(messages)
-            usage = self._usage(messages)
-            requests = {name: 0 for name in TOOL_LIMITS}
+            usage, token_cost = self._usage(messages)
+            executed = {name: 0 for name in TOOL_LIMITS}
+            reported = {name: 0 for name in TOOL_LIMITS}
+            rejected = {name: 0 for name in TOOL_LIMITS}
             for message in messages:
-                for name, count in self._tool_requests(message).items():
-                    requests[name] += count
+                ran, counted, refused = self._tool_counts(message)
+                for name in TOOL_LIMITS:
+                    executed[name] += ran[name]
+                    # Billing uses the API's count; executed blocks when it is missing.
+                    reported[name] += ran[name] if counted[name] is None else counted[name]
+                    rejected[name] += refused[name]
 
             def part(name, build):
                 return build() if wants[name] else []
@@ -971,10 +1280,12 @@ class ClaudeWebResearch:
                 'official_sources': part('official', lambda: self._official(
                     data, pages, topic, language, excluded, limits['official'])),
                 'news': part('news', lambda: self._news(data, pages, topic, excluded, limits['news'])),
-                'social': part('social', lambda: self._social(data, pages, topic, excluded, limits['social'])),
+                'social': part('social', lambda: self._social(
+                    data, pages, topic, language, excluded, limits['social'])),
                 'questions': part('questions', lambda: self._questions(
                     data, pages, topic, language, excluded, limits['questions'])),
                 'youtube': part('youtube', lambda: self._youtube(data, pages, excluded, limits['youtube'])),
+                'search_titles': self._search_titles(pages, topic, excluded),
             }
         except BaseTimeoutException:
             # Only reachable when research() runs on the job's main thread (where
@@ -990,13 +1301,23 @@ class ClaudeWebResearch:
             self.last_error = FAILURE_REASON
             return None
 
-        searches, fetches = requests['web_search'], requests['web_fetch']
-        cost = estimate_cost_usd(usage, searches, self.model)
+        # Searches are billed per search the API counted; fetches are the pages
+        # the tool really fetched (or failed to), not attempts refused at max_uses.
+        searches, fetches = reported['web_search'], executed['web_fetch']
+        cost = token_cost + searches * PRICE_PER_SEARCH
+        if fetches > WEB_FETCH_MAX_USES or executed['web_search'] > WEB_SEARCH_MAX_USES:
+            logger.warning(f"Claude web research '{topic}' ran more tools than max_uses: "
+                           f"searches={executed['web_search']}/{WEB_SEARCH_MAX_USES} "
+                           f"fetches={fetches}/{WEB_FETCH_MAX_USES}.")
         thin = sum(1 for item in result['competitors'] if len(item['key_passages']) < MIN_GOOD_PASSAGES)
         result['stats'] = {
             'model': self.model,
+            'priced_as': priced_model(self.model),
             'searches': searches,
             'fetches': fetches,
+            'fetches_reported': reported['web_fetch'],
+            'limit_rejections': rejected['web_search'] + rejected['web_fetch'],
+            'iterations': sum(len(self._iterations(message)) for message in messages),
             'pages_retrieved': len(pages),
             'pages_fetched': sum(1 for page in pages.values() if page.fetched),
             'continuations': len(messages) - 1,
@@ -1008,9 +1329,13 @@ class ClaudeWebResearch:
             'cache_creation_input_tokens': usage['cache_creation_input_tokens'],
             'estimated_cost_usd': round(cost, 4),
         }
+        self._log_iterations(topic, messages)
+        priced = '' if priced_model(self.model) == self.model else f" (priced as {priced_model(self.model)})"
         logger.info(
-            f"Claude web research '{topic}' ({language}): model={self.model} searches={searches} "
-            f"fetches={fetches} pages={len(pages)} continuations={len(messages) - 1} "
+            f"Claude web research '{topic}' ({language}): model={self.model}{priced} searches={searches} "
+            f"fetches={fetches} (reported {reported['web_fetch']}, refused at limit "
+            f"{rejected['web_search'] + rejected['web_fetch']}) pages={len(pages)} "
+            f"continuations={len(messages) - 1} iterations={result['stats']['iterations']} "
             f"input_tokens={usage['input_tokens']} output_tokens={usage['output_tokens']} "
             f"cache_read={usage['cache_read_input_tokens']} cache_write={usage['cache_creation_input_tokens']} "
             f"est_cost=${cost:.2f} tool_errors={tool_errors[:5]} "

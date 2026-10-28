@@ -188,7 +188,7 @@ class ResearchDataTests(RouteTestCase):
 
     def test_eligibility_and_staleness(self):
         self.add_run(1, 'Tips', timedelta(days=1))
-        self.add_run(2, 'Parenting', timedelta(days=8))
+        self.add_run(2, 'Parenting', timedelta(days=36))
         with patch.object(research, '_load_search_console_opportunities', return_value=([], [], None)):
             data = self.client.get('/api/research_data?site_id=1').get_json()['research_data']
         self.assertEqual((data['Tips']['eligible_for_titles'], data['Tips']['title_block_reason'],
@@ -196,7 +196,7 @@ class ResearchDataTests(RouteTestCase):
         # The duplicate spelling shows the same research.
         self.assertTrue(data['tips ']['eligible_for_titles'])
         self.assertEqual((data['Parenting']['eligible_for_titles'], data['Parenting']['title_block_reason'],
-                          data['Parenting']['is_stale']), (False, 'Data riset sudah lebih dari 7 hari', True))
+                          data['Parenting']['is_stale']), (False, 'Data riset sudah lebih dari 35 hari', True))
 
     def test_block_reasons(self):
         now = datetime.now()

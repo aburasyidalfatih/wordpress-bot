@@ -68,6 +68,14 @@ export const PRESET_MODELS: Record<AiProvider, Partial<Record<ModelKind, ModelOp
   },
 };
 
+// Claude web research model (anthropic_research_model). '' follows the text
+// model. The backend only accepts '' or config.py CLAUDE_RESEARCH_MODELS.
+export const RESEARCH_MODEL_OPTIONS: ModelOption[] = [
+  { value: '', label: 'Ikuti model teks' },
+  { value: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (Direkomendasikan untuk riset, ±50% lebih hemat)' },
+  { value: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+];
+
 const OPENAI_NON_TEXT = /image|dall-e|audio|realtime|tts|transcribe|embedding|moderation|search|whisper|codex|computer/;
 
 /** Keep only the models from a provider's full list that fit this slot. */

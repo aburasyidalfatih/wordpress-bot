@@ -54,14 +54,33 @@ class ScheduledResearchTests(DispatcherTestCase):
         offsets = {dispatcher._research_schedule_offset(i) for i in range(200)}
         self.assertEqual(max(offsets), dispatcher.RESEARCH_SCHEDULE_SPREAD_MINUTES - 1)
 
-    def add_research(self, category, age_days):
+    def add_research(self, category, age_days, topics=None, used=False, confidence='high'):
         stamp = datetime.now() - timedelta(days=age_days)
         with self.db.get_session() as s:
-            s.add(ResearchData(user_id=1, site_id=1, category=category, confidence_level='high',
-                               researched_at=stamp, created_at=stamp))
+            s.add(ResearchData(user_id=1, site_id=1, category=category, confidence_level=confidence,
+                               researched_at=stamp, created_at=stamp, used=used,
+                               suggested_topics=list(topics) if topics is not None else None))
+
+    def test_category_running_out_of_topics_is_refreshed_early(self):
+        self.add_research('Keuangan', 10, topics=[{'topic': 'Dana darurat'}])  # 1 topic left, 10 days old
+        self.add_research('Parenting', 10, topics=['Disiplin anak', {'topic': 'Bermain'}, {'topic': ' '}])  # 2 left
+        self.add_research('Bisnis', 3, topics=[])  # none left, but too young for an early refresh
+        self.assertTrue(dispatcher._schedule_daily_research(self.site(), now_site=MIDNIGHT))
+        self.assertEqual(self.queue.enqueue.call_args.kwargs['categories'], ['Keuangan'])
+        # Same free scheduled job: force=False, never charged.
+        self.assertEqual(self.queue.enqueue.call_args.args[2], False)
+
+    def test_topics_of_older_fresh_rows_count_but_used_or_expired_rows_do_not(self):
+        self.add_research('Keuangan', 20, topics=['A'])
+        self.add_research('Keuangan', 10, topics=['B'])
+        self.add_research('Keuangan', 12, topics=['C', 'D'], used=True)
+        self.add_research('Keuangan', 40, topics=['E', 'F'])
+        self.add_research('Keuangan', 15, topics=['G', 'H'], confidence='insufficient')
+        self.assertEqual(self.db.unused_research_topic_counts(1, 1), {'Keuangan': 2})
+        self.assertEqual(dispatcher._stale_research_categories(self.site(names=('Keuangan',))), [])
 
     def test_enqueues_only_stale_or_missing_categories_once_per_day(self):
-        self.add_research('Keuangan', 6.5)   # older than 6 days: refresh before it expires
+        self.add_research('Keuangan', 30.5)  # older than 30 days: refresh before it expires (35)
         self.add_research('Parenting', 2)    # fresh
         job_id = dispatcher._schedule_daily_research(self.site(), now_site=MIDNIGHT)
         self.assertTrue(job_id)

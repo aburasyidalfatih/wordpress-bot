@@ -447,6 +447,8 @@ export interface AdminConfig {
   anthropic_api_key?: string;
   has_anthropic_api_key?: boolean;
   anthropic_model?: string;
+  /** Claude model for web research; '' follows anthropic_model. */
+  anthropic_research_model?: string;
   openai_api_key?: string;
   has_openai_api_key?: boolean;
   openai_model?: string;

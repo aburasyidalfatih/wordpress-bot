@@ -79,6 +79,14 @@ DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5'
 DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2'
 
+# Claude models allowed for web research (anthropic_research_model): only those
+# supporting the web_search_20260209 / web_fetch_20260209 tools. An empty
+# anthropic_research_model means "use anthropic_model".
+CLAUDE_RESEARCH_MODELS = (
+    'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-opus-5', 'claude-sonnet-5',
+    'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6',
+)
+
 # Which provider writes articles / research titles, and which draws images.
 TEXT_PROVIDERS = ('gemini', 'anthropic', 'openai')
 IMAGE_PROVIDERS = ('gemini', 'openai')

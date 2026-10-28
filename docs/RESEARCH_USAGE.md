@@ -12,12 +12,14 @@ Riset bisa berjalan dengan dua cara:
 |---|---|---|
 | Pemicu | Tombol di halaman Riset (`POST /manual-research`) | Dispatcher, sekali sehari |
 | Waktu | Kapan saja | 00:00–00:59 zona waktu website (tiap website pada menitnya sendiri) |
-| Kategori | Satu kategori, atau semua kategori terpilih | Hanya kategori yang riset terakhirnya belum ada atau > 6 hari |
+| Kategori | Satu kategori, atau semua kategori terpilih | Hanya kategori yang riset terakhirnya belum ada atau > 30 hari (atau topiknya hampir habis) |
 | Syarat | Kredit cukup | Website aktif, auto-post aktif, ada kategori terpilih |
 | Biaya | 1 kredit per kategori unik | Gratis |
 
-Riset terjadwal memperbarui kategori sehari sebelum datanya kedaluwarsa (7 hari),
-sehingga auto-post tidak diam-diam kehilangan risetnya.
+Riset terjadwal memperbarui kategori sebulan sekali (30 hari), beberapa hari sebelum
+datanya kedaluwarsa (35 hari), sehingga auto-post tidak diam-diam kehilangan risetnya.
+Kategori yang topik artikelnya tinggal kurang dari 2 diperbarui lebih awal (paling
+cepat 7 hari setelah riset terakhir).
 
 ## 🔄 Alur Riset
 
@@ -85,7 +87,7 @@ melanjutkan pemantauan setelah dimuat ulang.
 
 ## 📦 Cara Data Riset Dipakai
 
-Riset dipakai hanya jika **segar** (maksimal 7 hari, `database.is_research_fresh`)
+Riset dipakai hanya jika **segar** (maksimal 35 hari, `database.is_research_fresh`)
 dan confidence-nya `high`, `medium`, atau `low`. Aturan ini sama untuk semua jalur:
 
 1. **Generate judul AI** (`POST /api/generate-titles/<kategori>`): keyword,

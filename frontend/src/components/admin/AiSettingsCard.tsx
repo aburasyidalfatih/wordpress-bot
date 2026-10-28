@@ -8,8 +8,8 @@ import { apiFetch, NETWORK_ERROR } from '@/lib/api';
 import type { AiImageProvider, AiTextProvider } from '@/lib/types';
 import { ConfigInput, type ConfigFormProps } from './ConfigInput';
 import {
-  DEFAULT_MODELS, IMAGE_PROVIDER_OPTIONS, PRESET_MODELS, PROVIDER_LABELS, TEXT_PROVIDER_OPTIONS,
-  filterModels, type AiProvider, type ModelKind, type ModelOption,
+  DEFAULT_MODELS, IMAGE_PROVIDER_OPTIONS, PRESET_MODELS, PROVIDER_LABELS, RESEARCH_MODEL_OPTIONS,
+  TEXT_PROVIDER_OPTIONS, filterModels, type AiProvider, type ModelKind, type ModelOption,
 } from './aiModels';
 
 const SELECT_CLASS = 'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
@@ -47,6 +47,34 @@ function modelOptions(provider: AiProvider, kind: ModelKind, loaded: string[] | 
   }
   if (current && !known.has(current)) options.unshift({ value: current, label: current });
   return options;
+}
+
+/** Research presets, plus the saved value if it is another allowed model. */
+function researchModelOptions(current: string): ModelOption[] {
+  if (RESEARCH_MODEL_OPTIONS.some((o) => o.value === current)) return RESEARCH_MODEL_OPTIONS;
+  return [...RESEARCH_MODEL_OPTIONS, { value: current, label: current }];
+}
+
+function ResearchModelSelect({ config, setConfig }: ConfigFormProps) {
+  const current = config.anthropic_research_model || '';
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="anthropic_research_model">Model riset web</Label>
+      <select
+        id="anthropic_research_model"
+        value={current}
+        onChange={(e) => setConfig({ ...config, anthropic_research_model: e.target.value })}
+        className={SELECT_CLASS}
+      >
+        {researchModelOptions(current).map((m) => (
+          <option key={m.value} value={m.value}>{m.label}</option>
+        ))}
+      </select>
+      <p className="text-xs text-muted-foreground">
+        Dipakai untuk riset web (pesaing, sumber resmi, berita). Penulisan artikel tetap memakai Model Teks.
+      </p>
+    </div>
+  );
 }
 
 interface ProviderSectionProps extends ConfigFormProps {
@@ -96,6 +124,7 @@ function ProviderSection({ provider, usage, loaded, loading, onLoadModels, ...pr
           </div>
         );
       })}
+      {provider === 'anthropic' && <ResearchModelSelect {...props} />}
       <Button type="button" variant="outline" size="sm" onClick={onLoadModels} disabled={loading} className="gap-2">
         <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         {loading ? 'Memuat model...' : 'Muat daftar model dari API'}

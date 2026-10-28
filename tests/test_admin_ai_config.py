@@ -90,6 +90,40 @@ class AdminAiConfigTests(unittest.TestCase):
         self.assertEqual(self.put({'ai_image_provider': 'anthropic'}).status_code, 400)
         self.assertEqual(self.put({'openai_model': 'x' * 101}).status_code, 400)
 
+    def test_research_model_accepts_empty_and_supported_models(self):
+        for value in ('', 'claude-sonnet-5-5', ' claude-opus-5-5 '):
+            resp = self.put({'anthropic_research_model': value})
+            self.assertEqual(resp.status_code, 200, value)
+            self.assertEqual(self.saved[-1]['anthropic_research_model'], value.strip())
+
+    def test_research_model_rejects_unsupported_models(self):
+        resp = self.put({'anthropic_research_model': 'gpt-5'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Model riset web tidak didukung', resp.get_json()['error'])
+
+        resp = self.put({'anthropic_research_model': 'claude-haiku-5-5'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.get_json()['error'],
+                         'Model Haiku tidak didukung untuk riset web (web search/fetch). '
+                         'Pilih Claude Sonnet 5.5 atau Opus 5.5.')
+        self.assertEqual(self.saved, [])
+
+    def test_get_config_returns_the_research_model(self):
+        self.stored['anthropic_research_model'] = 'claude-sonnet-5-5'
+        data = self.client.get('/api/admin/config', headers=self.auth).get_json()
+        self.assertEqual(data['config']['anthropic_research_model'], 'claude-sonnet-5-5')
+
+    def test_research_model_is_stored_and_defaults_to_empty(self):
+        # Real Database.save_config / get_config on SQLite.
+        self.assertEqual(self.db.get_config(ADMIN_ID)['anthropic_research_model'], '')
+        self.db.save_config(ADMIN_ID, {'anthropic_research_model': 'claude-sonnet-5-5'})
+        config = self.db.get_config(ADMIN_ID)
+        self.assertEqual(config['anthropic_research_model'], 'claude-sonnet-5-5')
+        # The text model is untouched and the research model does not follow it.
+        self.assertEqual(config['anthropic_model'], 'claude-opus-5-5')
+        self.db.save_config(ADMIN_ID, {'anthropic_research_model': ''})
+        self.assertEqual(self.db.get_config(ADMIN_ID)['anthropic_research_model'], '')
+
     def test_blank_key_keeps_the_stored_one(self):
         self.put({'gemini_api_key': '   ', 'gemini_model': 'gemini-3.5-flash'})
         self.assertNotIn('gemini_api_key', self.saved[-1])

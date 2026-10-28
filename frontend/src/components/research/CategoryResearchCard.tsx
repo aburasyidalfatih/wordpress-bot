@@ -53,10 +53,13 @@ export function EmptyCategoryCard({ category, researching, isResearchingThis, on
   );
 }
 
+// Same as database.MAX_RESEARCH_AGE_DAYS (the backend decides is_stale).
+const MAX_RESEARCH_AGE_DAYS = 35;
+
 /** Every caveat that applies to the research; age and missing evidence can both apply. */
 function researchWarnings(stats: ResearchStats): string[] {
   const warnings: string[] = [];
-  if (stats.is_stale) warnings.push('Data ini berusia lebih dari 7 hari. Riset ulang sebelum membuat keputusan konten.');
+  if (stats.is_stale) warnings.push(`Data ini berusia lebih dari ${MAX_RESEARCH_AGE_DAYS} hari. Riset ulang sebelum membuat keputusan konten.`);
   else if (stats.confidence_level === 'unknown') warnings.push('Data ini dibuat sebelum sistem quality scoring tersedia. Riset ulang untuk hasil terverifikasi.');
   if (stats.fallback_warnings) {
     // Names the writer evidence that is missing; optional sources are shown separately.

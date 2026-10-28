@@ -180,8 +180,10 @@ hasilnya digabung di depan bukti kategori. Semua provider dijalankan paralel.
 Mesin riset bersifat hybrid. Kalau konfigurasi AI efektif punya API key Anthropic
 (key admin yang dibagikan lewat `merge_shared_ai_config` juga berlaku),
 `services/claude_research.py` memakai tool server-side Claude `web_search` dan
-`web_fetch` (satu request per riset, total maks. 9 pencarian + 6 fetch termasuk
-lanjutan `pause_turn`, prompt caching otomatis, batas waktu keras 240 detik) untuk
+`web_fetch` (satu request per riset, total maks. 6 pencarian + 5 fetch termasuk
+lanjutan `pause_turn`, prompt caching otomatis plus breakpoint pada system prompt,
+batas waktu keras 240 detik; modelnya "Model riset web" di Panel Admin, kosong =
+ikut Model Teks) untuk
 kompetitor, sumber resmi (.go.id / .gov, kini juga per kategori), berita, diskusi
 sosial (reddit, quora, kaskus, forum), pertanyaan nyata pembaca, dan video YouTube
 (transkripnya lalu diambil lewat youtube-transcript-api; kalau YouTube memblokir
@@ -190,8 +192,9 @@ dipercaya begitu saja: URL harus benar-benar muncul di hasil pencarian/fetch
 request itu; judul/sumber/tanggal berita diambil dari hasil pencarian (bukan dari
 teks model); setiap kutipan dan heading harus ada kata per kata di teks halaman yang
 di-fetch; teks diskusi dan pertanyaan harus ada kata per kata di judul hasil
-pencarian atau teks halaman, pertanyaan harus berbentuk pertanyaan dan relevan
-dengan topik; video harus URL YouTube dari hasil pencarian. Kompetitor dengan kurang
+pencarian atau teks halaman, pertanyaan harus diakhiri tanda tanya dan relevan
+dengan topik (bukan judul berita, survei, atau soal kuis; pertanyaan forum dan FAQ
+diutamakan), diskusi harus menyebut topik dan bukan halaman bantuan/kebijakan; video harus URL YouTube dari hasil pencarian. Kompetitor dengan kurang
 dari 2 kutipan terverifikasi dianggap tipis: tidak dihitung, dan hanya dipakai bila
 kompetitor yang baik kurang dari 2 (dilengkapi scraping klasik). Filter lama tetap
 berlaku (host resmi, domain milik sendiri, spam, URL bersih, batas panjang). Status
@@ -248,7 +251,7 @@ menghasilkan judul yang bersaing.
 
 Auto-post, item Antrean, dan generate judul memakai gate bukti yang **sama**
 (`database.is_research_fresh`): riset harus berconfidence high/medium/low dan
-berumur maksimal `MAX_RESEARCH_AGE_DAYS` (7 hari). Item Antrean juga memakai riset
+berumur maksimal `MAX_RESEARCH_AGE_DAYS` (35 hari). Item Antrean juga memakai riset
 kategorinya sebagai latar (judul item diriset sebagai topik, di depan). Kalau tidak
 ada riset yang memenuhi, sistem jatuh ke rotasi kategori biasa.
 
@@ -265,7 +268,8 @@ ada riset yang memenuhi, sistem jatuh ke rotasi kategori biasa.
 - **Terjadwal** (dispatcher): sekali sehari pukul 00:00–00:59 zona waktu website
   (tiap website pada menit `site_id % 50`, agar tidak serentak),
   untuk website aktif dengan auto-post dan kategori terpilih, hanya kategori yang
-  riset terakhirnya belum ada atau lebih dari 6 hari — sehari sebelum kedaluwarsa.
+  riset terakhirnya belum ada atau lebih dari 30 hari (sebelum kedaluwarsa di 35 hari),
+  atau yang topik artikelnya tinggal kurang dari 2 (paling cepat 7 hari setelah riset terakhir).
   Gratis (tidak memotong/mengembalikan kredit) dan dilewati selama riset lain
   masih berjalan untuk website itu.
 - Semua riset berjalan di queue RQ `research` yang dilayani service
@@ -330,7 +334,7 @@ baru di `_run_migrations_locked`, naikkan `SCHEMA_VERSION` di `database.py`.
 Hasil research baru menyimpan status setiap provider, URL sumber yang tersedia,
 umur data, quality score, confidence level, dan penanda fallback. Kategori yang
 tidak mencapai bukti minimum tidak disimpan sebagai hasil sukses dan kreditnya
-dikembalikan. Data lebih dari tujuh hari tidak dipakai untuk membuat judul atau
+dikembalikan. Data lebih dari 35 hari tidak dipakai untuk membuat judul atau
 artikel otomatis.
 
 ### Backup
