@@ -43,6 +43,7 @@ class FakeGenerator:
 
 def brief_reply(**overrides):
     data = {
+        'working_title': 'Dana Darurat dari Gaji Pertama: Target dan Langkahnya',
         'search_intent': 'Pembaca ingin tahu berapa dana darurat yang cukup dan cara mengumpulkannya.',
         'reader': {'who': 'Karyawan muda', 'situation': 'Baru mulai menabung',
                    'needs': ['angka target yang jelas', 'langkah bertahap']},
@@ -118,6 +119,27 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(brief['format'], {'type': 'how-to', 'why': 'Pembaca butuh langkah.'})
         self.assertEqual(brief['reader']['needs'], ['angka target yang jelas', 'langkah bertahap'])
         self.assertEqual(brief['key_facts'], [{'fact': 'Data statistik IKNB dipublikasikan OJK.', 'source_url': SOURCE}])
+
+    def test_working_title_is_plain_text_and_capped(self):
+        brief = parse_brief(brief_reply(), [SOURCE])
+        self.assertEqual(brief['working_title'], 'Dana Darurat dari Gaji Pertama: Target dan Langkahnya')
+        brief = parse_brief(brief_reply(
+            working_title='"<b>Dana Darurat</b> https://spam.example/x untuk Keluarga Muda yang Baru Menikah dan '
+                          'Tinggal di Kota Besar"'), [SOURCE])
+        self.assertLessEqual(len(brief['working_title']), cb.WORKING_TITLE_MAX_CHARS)
+        self.assertTrue(brief['working_title'].startswith('Dana Darurat untuk Keluarga Muda'))
+        for leaked in ('<b>', 'spam.example', '"', '...'):
+            self.assertNotIn(leaked, brief['working_title'])
+        # Optional: a brief without one is still a brief.
+        for value in (None, 42, ['x'], '   '):
+            with self.subTest(value=value):
+                self.assertEqual(parse_brief(brief_reply(working_title=value), [SOURCE])['working_title'], '')
+
+    def test_prompt_asks_for_a_working_title(self):
+        prompt = build_brief_prompt('Dana darurat', None, nonce='n4')[0]
+        self.assertIn('"working_title": "the specific, accurate title planned for this article, at most 60 '
+                      'characters"', prompt)
+        self.assertIn('working_title: names what this article specifically answers', prompt)
 
     def test_code_fences_are_tolerated(self):
         self.assertTrue(parse_brief('```json\n' + brief_reply() + '\n```', [SOURCE])['must_answer'])
@@ -215,6 +237,15 @@ class FormatTests(unittest.TestCase):
         self.assertIn('URL persis', text)
         self.assertIn('- Format: how-to (Pembaca butuh langkah.)', text)
         self.assertIn('Setiap angka, batas, tarif, biaya, tanggal, atau aturan spesifik di artikel ditautkan', text)
+
+    def test_working_title_is_rendered_first(self):
+        text = format_brief_for_prompt(parse_brief(brief_reply(), [SOURCE]), 'id')
+        self.assertIn('\n- Judul kerja: Dana Darurat dari Gaji Pertama: Target dan Langkahnya (pertahankan artikel '
+                      'dan judul akhirnya pada sudut pandang ini', text)
+        self.assertLess(text.index('Judul kerja'), text.index('Intent pencarian'))
+        english = format_brief_for_prompt(parse_brief(brief_reply(), [SOURCE]), 'en')
+        self.assertIn('- Working title: Dana Darurat dari Gaji Pertama', english)
+        self.assertNotIn('Judul kerja', format_brief_for_prompt(parse_brief(brief_reply(working_title=''), []), 'id'))
 
     def test_english_section(self):
         text = format_brief_for_prompt(parse_brief(brief_reply(), [SOURCE]), 'en')

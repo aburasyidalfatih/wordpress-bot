@@ -9,10 +9,13 @@ from rq.timeouts import JobTimeoutException
 
 from models import ContentQueue, PostLog, ResearchData, User, WordPressSite
 from services.article_review import ReviewResult
+from services.ai_costs import current_stage
 from services.topic_similarity import (
-    BORDERLINE_THRESHOLD, CORE_MATCH_SCORE, DEFINITE_THRESHOLD, SIMILAR_THRESHOLD, core_topic_match,
-    drop_core_repeats, find_similar_published, restates_category, significant_tokens, similarity_score,
-    title_core,
+    BORDERLINE_THRESHOLD, CORE_MATCH_SCORE, DEFINITE_THRESHOLD, REASON_AI, REASON_AI_BUDGET, REASON_CORE,
+    REASON_CORE_SUBTITLE, REASON_NO_AI, REASON_SCORE, SIMILAR_THRESHOLD, TITLE_MAX_CHARS, TITLE_TARGET_CHARS,
+    SimilarMatch, category_words, clean_title, core_signature, core_topic_match, describe_match, drop_core_repeats,
+    find_similar_published, propose_distinct_titles, propose_repair_title, restates_category, signatures_match,
+    significant_tokens, similarity_score, title_core,
 )
 from test_article_quality_support import quality_stub_patches
 from test_research_backend_support import load_with_stubbed_core, make_db
@@ -264,6 +267,216 @@ class AIConfirmationTests(unittest.TestCase):
         self.assertEqual(generator.prompts, [])
 
 
+class CategoryTests(unittest.TestCase):
+    """Words of the category name are context, not evidence of a repeat."""
+
+    CATEGORY = 'Couples and Money Management'
+    CANDIDATE = 'Couples and Money Management: What to Disclose and Sign'
+    PUBLISHED = 'Best Couple Money Management Apps 2026: Ditch Spreadsheets'
+
+    def test_category_words_are_stemmed_like_titles(self):
+        self.assertEqual(category_words(self.CATEGORY, 'en'), {'couple', 'money', 'management'})
+        self.assertEqual(category_words(None, 'en'), frozenset())
+
+    def test_production_pair_is_distinct_within_its_category(self):
+        # Without the category the shared category words alone put the pair in
+        # the gray zone (0.66): no model, so the score threshold decided.
+        match = find_similar_published(self.CANDIDATE, [self.PUBLISHED], language='en')
+        self.assertEqual(match, (self.PUBLISHED, 0.66))
+        self.assertEqual(match.reason, REASON_NO_AI)
+        self.assertFalse(core_topic_match(self.CANDIDATE, self.PUBLISHED, 'en', category=self.CATEGORY))
+        tokens = (significant_tokens(self.CANDIDATE, 'en'), significant_tokens(self.PUBLISHED, 'en'))
+        weighted = similarity_score(*tokens, category_words=category_words(self.CATEGORY, 'en'))
+        self.assertLess(weighted, BORDERLINE_THRESHOLD)
+        self.assertLess(weighted, similarity_score(*tokens))
+        self.assertIsNone(find_similar_published(self.CANDIDATE, [self.PUBLISHED], language='en',
+                                                 category=self.CATEGORY))
+        generator = FakeGenerator('{"same_intent": false}')
+        self.assertIsNone(find_similar_published(self.CANDIDATE, [self.PUBLISHED], language='en',
+                                                 generator=generator, category=self.CATEGORY))
+        self.assertEqual(generator.prompts, [])  # clear case now: no model call needed
+
+    def test_model_saying_different_intent_clears_the_pair(self):
+        generator = FakeGenerator('{"same_intent": false}')
+        self.assertIsNone(find_similar_published(self.CANDIDATE, [self.PUBLISHED], language='en',
+                                                 generator=generator))
+        self.assertEqual(len(generator.prompts), 1)
+
+    def test_true_duplicates_in_the_category_still_match(self):
+        match = find_similar_published('Couple Money Management Apps: Pick the Right One', [self.PUBLISHED],
+                                       language='en', category=self.CATEGORY)
+        self.assertEqual(match[0], self.PUBLISHED)
+        self.assertEqual(match.reason, REASON_CORE)
+        # A reworded title on the same sub-question.
+        match = find_similar_published('Couples and Money Management: What to Disclose Before Signing',
+                                       [self.CANDIDATE], language='en', category=self.CATEGORY)
+        self.assertEqual(match[0], self.CANDIDATE)
+
+    def test_core_made_of_category_words_alone_is_not_a_core_match(self):
+        # Decision: in category "Family Budgeting Basics" the shared head only
+        # restates the category. Clearly different subtitles are different
+        # articles of the category (no model needed); without the category the
+        # shared head is still a repeat (CoreTopicTests).
+        a = 'Family Budgeting Basics: Meal Planning on a Shoestring'
+        b = 'Family Budgeting Basics: Teaching Kids About Money'
+        category = 'Family Budgeting Basics'
+        self.assertTrue(core_topic_match(a, b, 'en'))
+        self.assertFalse(core_topic_match(a, b, 'en', category=category))
+        words = category_words(category, 'en')
+        self.assertFalse(signatures_match(core_signature(a, 'en'), core_signature(b, 'en'), words))
+        self.assertTrue(signatures_match(core_signature(a, 'en'), core_signature(b, 'en')))
+        generator = FakeGenerator()
+        self.assertIsNone(find_similar_published(a, [b], language='en', generator=generator, category=category))
+        self.assertEqual(generator.prompts, [])
+        self.assertIsNotNone(find_similar_published(a, [b], language='en'))
+        # The same subtitle under the category head is still a repeat.
+        match = find_similar_published('Family Budgeting Basics: Teaching Your Kids About Money', [b],
+                                       language='en', category=category)
+        self.assertEqual(match[0], b)
+
+    def test_repeated_category_head_is_caught_through_the_subtitle(self):
+        a = 'Peta Jalan Digitalisasi Pendidikan 2026: Rencana Aksi Sekolah'
+        b = 'Panduan Digitalisasi Pendidikan: Rencana Aksi Pasca Ruang GTK'
+        generator = FakeGenerator()
+        match = find_similar_published(a, ['Resep Nasi Goreng', b], language='id', generator=generator,
+                                       category='Digitalisasi Pendidikan')
+        self.assertEqual(match[0], b)
+        self.assertEqual(match.reason, REASON_CORE_SUBTITLE)
+        self.assertGreaterEqual(match[1], CORE_MATCH_SCORE)
+        self.assertEqual(generator.prompts, [])
+        self.assertTrue(core_topic_match(a, b, 'id', category='Digitalisasi Pendidikan'))
+
+    def test_drop_core_repeats_ignores_a_core_shared_only_through_the_category(self):
+        candidates = ['What to Disclose Before Marriage: Couples and Money Management']
+        existing = ['Couples and Money Management: Best Budgeting Apps']
+        self.assertEqual(drop_core_repeats(candidates, existing, language='en')[0], [])
+        kept, dropped = drop_core_repeats(candidates, existing, language='en', category=self.CATEGORY)
+        self.assertEqual((kept, dropped), (candidates, []))
+        # Restating the category itself is still dropped.
+        self.assertEqual(drop_core_repeats([self.CANDIDATE], [], language='en', category=self.CATEGORY)[0], [])
+
+    def test_same_intent_prompt_judges_search_intent(self):
+        generator = FakeGenerator('{"same_intent": false}')
+        find_similar_published(self.CANDIDATE, [self.PUBLISHED], language='en', generator=generator)
+        prompt = generator.prompts[0]
+        self.assertIn('fully satisfied by the other article', prompt)
+        self.assertIn('Different sub-questions within the same niche are DIFFERENT intents', prompt)
+        self.assertIn('strict JSON only', prompt)
+        self.assertNotIn("site's category", prompt)
+        # A gray-zone pair within the category: the model is told the category
+        # words are no evidence.
+        generator = FakeGenerator('{"same_intent": true}')
+        match = find_similar_published('Couples and Money Management: Joint Account Rules for Newlyweds',
+                                       ['Joint Bank Accounts for Newlyweds: Pros and Cons'], language='en',
+                                       generator=generator, category=self.CATEGORY)
+        self.assertIn('category "Couples and Money Management"', generator.prompts[0])
+        self.assertIn('not evidence of the same intent', generator.prompts[0])
+        self.assertEqual(match.reason, REASON_AI)
+
+
+class MatchReasonTests(unittest.TestCase):
+    CANDIDATE = 'Couples and Money Management: What to Disclose and Sign'
+    PUBLISHED = ['Best Couple Money Management Apps 2026: Ditch Spreadsheets']
+
+    def test_match_unpacks_like_the_old_tuple(self):
+        match = find_similar_published('Tips Menabung', ['tips menabung'], language='id')
+        title, value = match
+        self.assertEqual((title, value), ('tips menabung', 1.0))
+        self.assertEqual(match, ('tips menabung', 1.0))
+        self.assertEqual((match.title, match.score, match.reason), ('tips menabung', 1.0, REASON_SCORE))
+
+    def test_reasons_are_described_in_indonesian(self):
+        cases = [
+            (None, 'skor 0,66; tanpa cek AI, memakai ambang skor'),
+            (FakeGenerator(RuntimeError('quota')), 'skor 0,66; AI tidak tersedia, memakai ambang skor'),
+            (FakeGenerator('{"same_intent": true}'), 'skor 0,66; AI menilai topiknya sama'),
+        ]
+        for generator, expected in cases:
+            with self.subTest(expected=expected):
+                match = find_similar_published(self.CANDIDATE, self.PUBLISHED, language='en', generator=generator)
+                self.assertEqual(describe_match(match), expected)
+        self.assertIsNone(describe_match(('x', 0.9)))
+        self.assertIsNone(describe_match(None))
+        self.assertEqual(SimilarMatch('x', 0.9, REASON_CORE).describe(), 'skor 0,90; inti topik judulnya sama')
+
+    def test_spent_model_budget_is_reported(self):
+        published = ['Family Budget Vacation Ideas', 'Family Budget Vacation Plans', 'Vacation Family Budget Plans']
+        generator = FakeGenerator('{"same_intent": false}', '{"same_intent": false}')
+        match = find_similar_published('Family Budgeting Basics', published, language='en', generator=generator)
+        self.assertEqual(len(generator.prompts), 2)
+        self.assertEqual(match.reason, REASON_AI_BUDGET)
+        self.assertIn('batas cek AI tercapai', match.describe())
+
+    def test_match_reason_is_logged(self):
+        with self.assertLogs('services.topic_similarity', level='INFO') as logs:
+            find_similar_published(self.CANDIDATE, self.PUBLISHED, language='en')
+        self.assertTrue(any('reason=no_ai score=0.660' in line for line in logs.output))
+
+
+class TitleProposalTests(unittest.TestCase):
+    def test_clean_title(self):
+        self.assertEqual(clean_title('  "Judul: **Dana Darurat** untuk Keluarga"  '), 'Dana Darurat untuk Keluarga')
+        self.assertEqual(clean_title('<b>Dana Darurat</b> https://spam.example/x'), 'Dana Darurat')
+        long_title = 'Dana darurat keluarga muda yang baru menikah dan tinggal di kota besar tanpa warisan'
+        self.assertEqual(clean_title(long_title), '')
+        trimmed = clean_title(long_title, trim=True)
+        self.assertLessEqual(len(trimmed), TITLE_MAX_CHARS)
+        self.assertTrue(long_title.startswith(trimmed))
+        self.assertEqual(clean_title(None), '')
+
+    def test_distinct_titles_are_parsed_cleaned_and_capped(self):
+        generator = FakeGenerator(json.dumps({'titles': [
+            {'title': 'Household Debt Payoff Plan', 'angle': 'same as planned'},
+            {'title': '"Emergency Fund Basics: How Much to Save"', 'angle': 'Size of the fund'},
+            {'title': 'Emergency Fund Basics: How Much to Save'},
+            'Where to Keep an Emergency Fund',
+            {'title': 'Sinking Funds for Car Repairs', 'angle': 'Saving ahead for known costs'},
+        ]}))
+        titles = propose_distinct_titles(generator, 'Emergency Fund Basics', 'Household Debt Payoff Plan',
+                                         ['Break Free From Debt', 'Other'], language='en', category='Finance',
+                                         angle='Pay off debt faster')
+        self.assertEqual([t['title'] for t in titles],
+                         ['Emergency Fund Basics: How Much to Save', 'Where to Keep an Emergency Fund',
+                          'Sinking Funds for Car Repairs'])
+        self.assertEqual(titles[0]['angle'], 'Size of the fund')
+        prompt = generator.prompts[0]
+        self.assertIn('3 alternative working titles', prompt)
+        self.assertIn('- Break Free From Debt', prompt)
+        self.assertIn('Site category: "Finance"', prompt)
+        self.assertIn('PLANNED ANGLE: Pay off debt faster', prompt)
+        self.assertGreaterEqual(generator.max_tokens, 4096)  # room for Gemini's thinking tokens
+
+    def test_failed_proposal_call_gives_no_titles(self):
+        for reply in ('bukan json', ConnectionError('down'), '{"titles": "x"}'):
+            with self.subTest(reply=reply):
+                self.assertEqual(propose_distinct_titles(FakeGenerator(reply), 't', 'x', ['y']), [])
+        with self.assertRaises(JobTimeoutException):
+            propose_distinct_titles(FakeGenerator(JobTimeoutException('timeout')), 't', 'x', ['y'])
+
+    def test_repair_title_sees_headings_and_excerpt(self):
+        article = {'title': 'Household Debt Payoff: Break Free Faster', 'focus_keyword': 'debt payoff',
+                   'content': '<h2>How big should it be?</h2><p>x</p><h2 id="a">Where to <b>keep</b> it</h2>',
+                   'excerpt': 'How much to keep in an emergency fund.'}
+        generator = FakeGenerator('{"title": "Emergency Fund Size: How Much to Save", "focus_keyword": "emergency fund"}')
+        proposal = propose_repair_title(generator, article, 'Break Free From Debt', language='en', category='Finance')
+        self.assertEqual(proposal, {'title': 'Emergency Fund Size: How Much to Save', 'focus_keyword': 'emergency fund'})
+        prompt = generator.prompts[0]
+        self.assertIn('- How big should it be?', prompt)
+        self.assertIn('- Where to keep it', prompt)
+        self.assertIn('Excerpt: How much to keep in an emergency fund.', prompt)
+        self.assertIn('PUBLISHED TITLE TO STAY DISTINCT FROM: Break Free From Debt', prompt)
+        self.assertIn(f'at most {TITLE_TARGET_CHARS} characters', prompt)
+        self.assertGreaterEqual(generator.max_tokens, 4096)
+
+    def test_unusable_repair_title_is_none(self):
+        article = {'title': 'Household Debt Payoff', 'content': '<h2>A</h2>'}
+        too_long = 'x' * (TITLE_MAX_CHARS + 1)
+        for reply in ('{"title": "Household Debt Payoff"}', json.dumps({'title': too_long}), 'no json',
+                      ConnectionError('down')):
+            with self.subTest(reply=reply):
+                self.assertIsNone(propose_repair_title(FakeGenerator(reply), article, 'Published'))
+
+
 class JobSimilarityTestCase(unittest.TestCase):
     TOPICS = ['Eliminate Family Debt Fast: Ultimate 2026 Household Payoff Guide', 'Emergency Fund Basics']
     PUBLISHED = 'Break Free From Debt: 4 Practical Household Payoff Models'
@@ -285,8 +498,22 @@ class JobSimilarityTestCase(unittest.TestCase):
             s.add(PostLog(user_id=1, site_id=1, category_name='Finance', title=self.PUBLISHED,
                           success=True, result='ok', created_at=now))
         self.generator = Mock()
-        # Gray-zone title pairs are confirmed by the model (scripted: same intent).
-        self.generator.generate_text.side_effect = lambda *a, **k: json.dumps({'same_intent': True})
+        # Small model calls, routed by prompt. Scripted replies per kind; by
+        # default gray-zone title pairs are confirmed (same intent) and the
+        # title proposals are unusable.
+        self.replies = {}
+        self.prompts = []  # (kind, prompt)
+        self.stages = []  # (kind, cost stage the call was made in)
+
+        def generate_text(prompt, *args, **kwargs):
+            kind = ('alternatives' if 'alternative working titles' in prompt
+                    else 'repair' if 'Propose a new title' in prompt else 'same_intent')
+            self.prompts.append((kind, prompt))
+            self.stages.append((kind, current_stage()))
+            if self.replies.get(kind):
+                return self.replies[kind].pop(0)
+            return json.dumps({'same_intent': True}) if kind == 'same_intent' else 'no json'
+        self.generator.generate_text.side_effect = generate_text
         self.generator.generate_checked_article.side_effect = lambda *a, **k: {
             'title': 'Emergency Fund Basics: How Much to Save', 'content': '<p>x</p>'}
         self.generator.generate_image.return_value = None
@@ -329,6 +556,10 @@ class JobSimilarityTestCase(unittest.TestCase):
     def generation_call(self, index=0):
         return self.generator.generate_checked_article.call_args_list[index]
 
+    def calls(self):
+        """Kinds of the small model calls made so far."""
+        return [kind for kind, _ in self.prompts]
+
 
 class ScheduledTopicTests(JobSimilarityTestCase):
     def test_similar_research_topic_is_consumed_and_the_next_one_used(self):
@@ -365,6 +596,10 @@ class ScheduledTopicTests(JobSimilarityTestCase):
         self.generator.generate_checked_article.side_effect = lambda *a, **k: {
             'title': 'Household Debt Payoff: Break Free Faster', 'content': '<p>x</p>'}
         self.post()
+        # The title repair came first (its reply is unusable here), then the
+        # full regeneration.
+        self.assertEqual(self.calls().count('repair'), 1)
+        self.assertIn(('repair', 'cek kemiripan'), self.stages)
         calls = self.generator.generate_checked_article.call_args_list
         self.assertEqual(len(calls), 2)
         self.assertTrue(calls[1].kwargs['avoid_similar'])
@@ -373,7 +608,7 @@ class ScheduledTopicTests(JobSimilarityTestCase):
         self.assertEqual(self.credits(), 11)
         self.assertEqual(self.last_log().result,
                          f"Artikel tidak diterbitkan: Topik terlalu mirip dengan artikel yang sudah terbit: "
-                         f"'{self.PUBLISHED}'")
+                         f"'{self.PUBLISHED}' (skor 1,00; kata-kata judulnya hampir sama)")
         self.assertEqual(self.topics_left(), [])  # content failure: topic consumed
 
 
@@ -400,7 +635,7 @@ class QueueItemSimilarityTests(JobSimilarityTestCase):
         self.assertFalse(log.success)
         self.assertEqual(log.title, 'GAGAL: Eliminate Family Debt Fast: Ultimate 2026 Household Payoff Guide')
         self.assertEqual(log.result, "Artikel tidak diterbitkan: Topik terlalu mirip dengan artikel yang sudah "
-                                     f"terbit: '{self.PUBLISHED}'")
+                                     f"terbit: '{self.PUBLISHED}' (skor 0,68; AI menilai topiknya sama)")
 
     def test_recent_wordpress_posts_count_as_published(self):
         self.publisher.get_recent_posts.return_value = [
@@ -414,6 +649,152 @@ class QueueItemSimilarityTests(JobSimilarityTestCase):
         jobs.generate_and_post(1, item_id=5, credit_pre_reserved=True)
         self.assertEqual(self.item().status, 'posted')
         self.assertEqual(self.generation_call().args[2], 'Emergency Fund Basics')
+
+
+class PreWritingTitleTests(JobSimilarityTestCase):
+    """The brief's working title is checked before any article is written."""
+
+    SIMILAR = 'Household Debt Payoff: Break Free Faster'
+    DISTINCT = 'Emergency Fund Basics: How Much to Save'
+
+    def setUp(self):
+        super().setUp()
+        with self.db.get_session() as s:
+            s.get(ResearchData, 1).suggested_topics = [{'topic': 'Emergency Fund Basics'}]
+
+    def post_with_working_title(self, working_title):
+        brief = {'working_title': working_title, 'search_intent': 'Know how much to save.',
+                 'must_answer': ['How much is enough?'], 'angle': 'Planned angle', 'avoid': ['Filler']}
+        with patch.object(jobs, 'build_content_brief', Mock(return_value=brief)):
+            self.post()
+
+    def brief_text(self):
+        return self.generation_call().kwargs['content_brief']
+
+    def test_distinct_working_title_reaches_the_writer(self):
+        self.post_with_working_title(self.DISTINCT)
+        self.assertEqual(self.generator.generate_checked_article.call_count, 1)
+        self.assertIn(f'- Working title: {self.DISTINCT} (keep the article and its final title on this angle',
+                      self.brief_text())
+        self.assertNotIn('alternatives', self.calls())
+        self.assertTrue(self.last_log().success)
+
+    def test_similar_working_title_moves_to_a_distinct_angle(self):
+        self.replies['alternatives'] = [json.dumps({'titles': [
+            {'title': 'Household Debt Payoff Models Compared', 'angle': 'Still about debt payoff'},
+            {'title': self.DISTINCT, 'angle': 'How big the emergency fund should be'},
+            {'title': 'Never used', 'angle': 'x'},
+        ]})]
+        self.post_with_working_title(self.SIMILAR)
+        self.assertEqual(self.generator.generate_checked_article.call_count, 1)
+        self.assertNotIn('avoid_similar', self.generation_call().kwargs)
+        text = self.brief_text()
+        self.assertIn(f'- Working title: {self.DISTINCT}', text)
+        self.assertNotIn(self.SIMILAR, text)
+        self.assertIn('- Angle: How big the emergency fund should be', text)
+        self.assertIn(f"Repeating the intent of the published article '{self.PUBLISHED}'", text)
+        # One small call for the alternatives, accounted to the similarity stage.
+        self.assertEqual(self.calls().count('alternatives'), 1)
+        self.assertIn(('alternatives', 'cek kemiripan'), self.stages)
+        alternatives_prompt = next(p for kind, p in self.prompts if kind == 'alternatives')
+        self.assertIn(f'PLANNED TITLE (too similar): {self.SIMILAR}', alternatives_prompt)
+        self.assertIn(f'PUBLISHED TITLES TO STAY DISTINCT FROM (most important first):\n- {self.PUBLISHED}',
+                      alternatives_prompt)
+        self.assertTrue(self.last_log().success)
+
+    def test_no_distinct_angle_fails_before_writing(self):
+        for reply in (json.dumps({'titles': [{'title': 'Household Debt Payoff Models Compared'},
+                                             {'title': 'Debt Payoff for the Household'}]}), 'no json'):
+            with self.subTest(reply=reply):
+                self.replies['alternatives'] = [reply]
+                credits = self.credits()
+                self.post_with_working_title(self.SIMILAR)
+                self.generator.generate_checked_article.assert_not_called()
+                self.generator.generate_image.assert_not_called()
+                self.publisher.create_post.assert_not_called()
+                self.assertEqual(self.credits(), credits + 1)  # the pre-reserved credit is refunded
+                log = self.last_log()
+                self.assertFalse(log.success)
+                self.assertEqual(log.title, f'GAGAL: {self.SIMILAR}')
+                self.assertEqual(log.result, "Artikel tidak diterbitkan: Topik terlalu mirip dengan artikel yang "
+                                             f"sudah terbit: '{self.PUBLISHED}' (skor 1,00; kata-kata judulnya "
+                                             "hampir sama)")
+
+    def test_every_similarity_check_gets_the_category(self):
+        seen = []
+        real = jobs.find_similar_published
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs.get('category'))
+            return real(*args, **kwargs)
+        with patch.object(jobs, 'find_similar_published', spy):
+            self.post_with_working_title(self.DISTINCT)
+        self.assertGreaterEqual(len(seen), 3)  # research topic, working title, generated title
+        self.assertEqual(set(seen), {'Finance'})
+
+
+class TitleRepairTests(JobSimilarityTestCase):
+    """A written article whose title repeats a published one gets a new title first."""
+
+    REPEATING = 'Household Debt Payoff: Break Free Faster'
+    REPAIRED = 'Emergency Fund Basics: How Much to Save'
+
+    def setUp(self):
+        super().setUp()
+        with self.db.get_session() as s:
+            s.get(ResearchData, 1).suggested_topics = [{'topic': 'Emergency Fund Basics'}]
+        self.articles = [self.article(self.REPEATING)]
+        self.generator.generate_checked_article.side_effect = lambda *a, **k: dict(self.articles.pop(0))
+
+    def article(self, title):
+        return {'title': title, 'focus_keyword': 'debt payoff',
+                'meta_description': f'{title}: a plan for the money you need for surprises.',
+                'excerpt': 'How much to keep in an emergency fund.',
+                'content': '<p>An emergency fund covers surprises.</p><h2>How much is enough?</h2><p>x</p>'
+                           '<h2>Where to keep it</h2><p>y</p>'}
+
+    def test_repaired_title_is_published_without_regenerating(self):
+        self.replies['repair'] = [json.dumps({'title': self.REPAIRED, 'focus_keyword': 'emergency fund'})]
+        self.post()
+        self.assertEqual(self.generator.generate_checked_article.call_count, 1)
+        args = self.publisher.create_post.call_args.args
+        self.assertEqual(args[0], self.REPAIRED)
+        self.assertEqual(args[4], f'{self.REPAIRED}: a plan for the money you need for surprises.')
+        self.assertEqual(args[6], 'emergency fund')  # old keyword not in the new title; new one is in the text
+        self.assertEqual(self.calls().count('repair'), 1)
+        self.assertIn(('repair', 'cek kemiripan'), self.stages)
+        repair_prompt = next(p for kind, p in self.prompts if kind == 'repair')
+        self.assertIn('- How much is enough?', repair_prompt)
+        self.assertIn('Excerpt: How much to keep in an emergency fund.', repair_prompt)
+        self.assertIn(f'PUBLISHED TITLE TO STAY DISTINCT FROM: {self.PUBLISHED}', repair_prompt)
+        self.assertTrue(self.last_log().success)
+        self.assertEqual(self.last_log().title, self.REPAIRED)
+
+    def test_repair_still_similar_falls_back_to_regeneration(self):
+        self.replies['repair'] = [json.dumps({'title': 'Household Debt Payoff Models Compared'})]
+        self.articles.append(self.article(self.REPAIRED))
+        self.post()
+        calls = self.generator.generate_checked_article.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[1].kwargs['avoid_similar'])
+        self.assertEqual(self.publisher.create_post.call_args.args[0], self.REPAIRED)
+        self.assertEqual(self.calls().count('repair'), 1)  # no second repair after the regeneration
+
+
+class TopicTooSimilarMessageTests(unittest.TestCase):
+    def test_reason_in_the_history_message(self):
+        error = jobs.TopicTooSimilar('Judul Lama', reason='skor 0,66; AI tidak tersedia, memakai ambang skor')
+        self.assertEqual(str(error), "Topik terlalu mirip dengan artikel yang sudah terbit: 'Judul Lama' "
+                                     "(skor 0,66; AI tidak tersedia, memakai ambang skor)")
+        match = find_similar_published('Couples and Money Management: What to Disclose and Sign',
+                                       ['Best Couple Money Management Apps 2026: Ditch Spreadsheets'], language='en',
+                                       generator=FakeGenerator('{"same_intent": true}'))
+        self.assertEqual(str(jobs.TopicTooSimilar.from_match(match)),
+                         "Topik terlalu mirip dengan artikel yang sudah terbit: 'Best Couple Money Management Apps "
+                         "2026: Ditch Spreadsheets' (skor 0,66; AI menilai topiknya sama)")
+        # A plain (title, score) tuple (patched in tests) has no reason.
+        self.assertEqual(str(jobs.TopicTooSimilar.from_match(('Judul', 0.9))),
+                         "Topik terlalu mirip dengan artikel yang sudah terbit: 'Judul'")
 
 
 if __name__ == '__main__':

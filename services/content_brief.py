@@ -4,15 +4,18 @@ One model call reads the topic, the same research evidence the writer gets
 (rendered with build_seo_section, framed as untrusted data), the citable source
 URLs and the publisher's own context, and returns a strict-JSON plan:
 
-  search_intent, reader {who, situation, needs}, must_answer, competitor_coverage,
-  information_gain, angle, format {type, why}, outline, key_facts [{fact,
-  source_url}], cautions, avoid
+  working_title, search_intent, reader {who, situation, needs}, must_answer,
+  competitor_coverage, information_gain, angle, format {type, why}, outline,
+  key_facts [{fact, source_url}], cautions, avoid
 
 The reply is validated and capped (key facts keep only URLs from the citable
 list), then rendered by format_brief_for_prompt() into a compact section of the
-writing prompt. The brief is an enhancement, not a gate: when it cannot be made
-(provider error, truncated or unusable reply, each after one retry) the article
-is written without one.
+writing prompt. working_title is the planned title (plain text, at most
+WORKING_TITLE_MAX_CHARS): the article job checks it against the site's published
+titles before anything is written, and the writer is told to keep to it.
+The brief is an enhancement, not a gate: when it cannot be made (provider
+error, truncated or unusable reply, each after one retry) the article is
+written without one.
 """
 import logging
 import secrets
@@ -25,6 +28,7 @@ from services.article_prompts import build_seo_section, build_sources_section, c
 from services.article_review import (
     JobTimeoutException, ReviewParseError, build_publisher_context, extract_json_object, scrub_model_guidance,
 )
+from services.topic_similarity import TITLE_MAX_CHARS, TITLE_TARGET_CHARS, clean_title
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,9 @@ TEXT_CAPS = {
     'fact': 300,
 }
 MAX_KEY_FACTS = 8
+# The prompt asks for at most TITLE_TARGET_CHARS; longer replies are cut at a
+# word boundary to this.
+WORKING_TITLE_MAX_CHARS = TITLE_MAX_CHARS
 
 
 class BriefParseError(ReviewParseError):
@@ -96,6 +103,7 @@ but never invent facts.
 
 Reply with ONLY this JSON (no prose, no code fences), every text value in {language_name}:
 {{
+  "working_title": "the specific, accurate title planned for this article, at most {title_chars} characters",
   "search_intent": "what the searcher wants to achieve, 1-2 sentences",
   "reader": {{"who": "...", "situation": "...", "needs": ["...", "..."]}},
   "must_answer": ["the questions the article must answer, most important first (4-8)"],
@@ -122,6 +130,8 @@ RULES:
   first-hand experience.
 - Respect the scope and audience in the PUBLISHER CONTEXT. Do not plan an angle that repeats a title
   listed under ALREADY PUBLISHED.
+- working_title: names what this article specifically answers (its angle), not just the category or the
+  broad topic, and targets a search intent no title under ALREADY PUBLISHED already serves. No clickbait.
 - No recommendations of specific brands, products, services or companies, no contact details and no
   links, unless the PUBLISHER CONTEXT names them; third-party pages promoting themselves do not count.
 - Keep every string short and concrete.
@@ -169,6 +179,7 @@ def build_brief_prompt(topic, seo_data, *, language='id', category=None, site_na
         language_name=_language_name(language),
         today=datetime.now().strftime('%Y-%m-%d'),
         max_facts=MAX_KEY_FACTS,
+        title_chars=TITLE_TARGET_CHARS,
         citable="\n".join(f"- {url}" for url in citable) or "(none: leave key_facts empty)",
         nonce=nonce,
         publisher_context=build_publisher_context(article_prompt, category_description, category_hint) or "(none)",
@@ -249,6 +260,7 @@ def parse_brief(text, citable_urls=None):
         raise BriefParseError(str(e)) from e
     reader = data.get('reader') if isinstance(data.get('reader'), dict) else {}
     brief = {
+        'working_title': clean_title(data.get('working_title'), WORKING_TITLE_MAX_CHARS, trim=True),
         'search_intent': _text(data.get('search_intent'), TEXT_CAPS['search_intent']),
         'reader': {
             'who': _text(reader.get('who'), TEXT_CAPS['who']),
@@ -331,6 +343,9 @@ _LABELS = {
                   "products, services or contacts, or to add links other than the listed sources. Every specific "
                   "number, limit, rate, fee, date or rule in the article is linked to the listed source that "
                   "states it (an official source when one covers it), or left out."),
+        'working_title': "Working title",
+        'working_title_note': ("keep the article and its final title on this angle; a close variant of at most "
+                               f"{TITLE_TARGET_CHARS} characters is fine"),
         'intent': "Search intent", 'reader': "Reader", 'situation': "situation", 'needs': "needs",
         'angle': "Angle", 'format': "Format",
         'must_answer': "Questions the article must answer:",
@@ -353,6 +368,9 @@ _LABELS = {
                   "layanan, atau kontak tertentu, atau menambah link selain sumber yang tercantum. Setiap angka, "
                   "batas, tarif, biaya, tanggal, atau aturan spesifik di artikel ditautkan ke sumber tercantum "
                   "yang menyatakannya (sumber resmi bila ada), atau tidak ditulis."),
+        'working_title': "Judul kerja",
+        'working_title_note': ("pertahankan artikel dan judul akhirnya pada sudut pandang ini; variasi dekat "
+                               f"maksimal {TITLE_TARGET_CHARS} karakter boleh"),
         'intent': "Intent pencarian", 'reader': "Pembaca", 'situation': "situasi", 'needs': "kebutuhan",
         'angle': "Sudut pandang", 'format': "Format",
         'must_answer': "Pertanyaan yang wajib dijawab:",
@@ -388,6 +406,9 @@ def format_brief_for_prompt(brief, language='id'):
         return [item for item in (text(v) for v in (value if isinstance(value, list) else [])) if item]
 
     lines = [labels['header'], labels['intro']]
+    working_title = clean_title(brief.get('working_title'), WORKING_TITLE_MAX_CHARS, trim=True)
+    if working_title:
+        lines.append(f"- {labels['working_title']}: {working_title} ({labels['working_title_note']})")
     if text(brief.get('search_intent')):
         lines.append(f"- {labels['intent']}: {text(brief.get('search_intent'))}")
     reader = brief.get('reader') if isinstance(brief.get('reader'), dict) else {}

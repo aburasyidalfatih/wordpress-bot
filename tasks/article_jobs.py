@@ -35,7 +35,9 @@ from services.content_planner import (
 )
 from services.quality_gate import check_article, link_host, strip_invalid_internal_links
 from services.search_console import build_search_opportunities
-from services.topic_similarity import find_similar_published, significant_tokens
+from services.topic_similarity import (
+    describe_match, find_similar_published, propose_distinct_titles, propose_repair_title, significant_tokens,
+)
 from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result, make_post_slug
 
 # RQ statuses in which a job may still run or is running.
@@ -269,12 +271,23 @@ SITE_PUBLISH_LOCK_POLL_SECONDS = 5
 
 
 class TopicTooSimilar(Exception):
-    """The topic or title repeats an article the site already published (a content failure)."""
+    """The topic or title repeats an article the site already published (a content failure).
 
-    def __init__(self, existing_title, article_title=None):
+    reason: why the titles matched, in Indonesian (topic_similarity.describe_match),
+    shown in brackets in the post history.
+    """
+
+    def __init__(self, existing_title, article_title=None, reason=None):
         self.existing_title = existing_title
         self.article_title = article_title
-        super().__init__(f"Topik terlalu mirip dengan artikel yang sudah terbit: '{existing_title}'")
+        self.reason = reason
+        message = f"Topik terlalu mirip dengan artikel yang sudah terbit: '{existing_title}'"
+        super().__init__(f"{message} ({reason})" if reason else message)
+
+    @classmethod
+    def from_match(cls, match, article_title=None):
+        """From a find_similar_published match ((title, score) or a SimilarMatch)."""
+        return cls(match[0], article_title=article_title, reason=describe_match(match))
 
 
 # Failures shown in the history as a deliberate "not published", not a crash.
@@ -746,26 +759,35 @@ def _review_generated_article(generator, article, seo_data, *, language, categor
     return result
 
 
-def _writing_brief(generator, topic, seo_data, *, language, category_name, site_name, category_description=None,
+def _content_brief(generator, topic, seo_data, *, language, category_name, site_name, category_description=None,
                    article_prompt=None, published_titles=None, category_hint=None):
-    """The writing brief rendered for the article prompt, or None.
+    """The writing brief (a dict, see services.content_brief), or None.
 
     The brief is an enhancement, not a gate: when it cannot be made the article
     is written without one (build_content_brief logs why).
     """
     try:
         with cost_stage('brief'):
-            brief = build_content_brief(
+            return build_content_brief(
                 generator, topic, seo_data, language=language, category=category_name, site_name=site_name,
                 category_description=category_description, article_prompt=article_prompt,
                 published_titles=published_titles, category_hint=category_hint,
-            )
+            ) or None
     except JobTimeoutException:
         raise
     except Exception as e:
         logger.warning(f"Content brief for '{topic}' failed; writing without one: {e}")
         return None
+
+
+def _render_brief(brief, language):
+    """The brief rendered for the article prompt, or None."""
     return (format_brief_for_prompt(brief, language) or None) if brief else None
+
+
+def _writing_brief(generator, topic, seo_data, *, language, **kwargs):
+    """The writing brief rendered for the article prompt, or None (see _content_brief)."""
+    return _render_brief(_content_brief(generator, topic, seo_data, language=language, **kwargs), language)
 
 
 def _improve_generated_article(generator, article, generation_args, generation_options, *, seo_data, brief_text,
@@ -1108,13 +1130,17 @@ class _ArticlePostJob:
             self._check_topic_is_new(generator, self.custom_topic)
         seo_data = self._gather_seo_data(generator)
         self.seo_data = seo_data
-        self.brief_text = _writing_brief(
+        brief = _content_brief(
             generator, self.custom_topic or self.category['name'], seo_data, language=self._language(),
             category_name=self.category['name'], site_name=site_config.get('site_name'),
             category_description=self._category_description(),
             article_prompt=site_config.get('article_prompt'), published_titles=self.published_titles,
             category_hint=self._category_hint(),
         )
+        # The planned title must not repeat a published article: checked (and
+        # moved to a distinct angle, or failed cheaply) before anything is written.
+        brief = self._check_working_title(generator, brief)
+        self.brief_text = _render_brief(brief, self._language())
         self._generate_article(generator, existing_titles, seo_data, recent_posts)
         if recent_posts is None:
             # The recent posts could not be fetched: no allow-list was really
@@ -1214,17 +1240,66 @@ class _ArticlePostJob:
     def _category_hint(self):
         return _category_hint(self.site_config or {}, self.category['name'], self.category.get('id'))
 
+    def _category_name(self):
+        return (self.category or {}).get('name')
+
     def _similar_published(self, generator, title):
-        """(published title, score) that `title` would cannibalize, or None."""
+        """(published title, score) that `title` would cannibalize, or None.
+
+        The category's own words are no evidence of a repeat (see
+        services.topic_similarity); the match carries the reason it matched.
+        """
         with cost_stage('cek kemiripan'):
             return find_similar_published(title, self.published_titles, language=self._language(),
-                                          generator=generator)
+                                          generator=generator, category=self._category_name())
 
     def _check_topic_is_new(self, generator, topic):
         match = self._similar_published(generator, topic)
         if match:
-            logger.warning(f"Topic '{topic}' repeats published article '{match[0]}' (score {match[1]}).")
-            raise TopicTooSimilar(match[0])
+            logger.warning(f"Topic '{topic}' repeats published article '{match[0]}' "
+                           f"({describe_match(match) or match[1]}).")
+            raise TopicTooSimilar.from_match(match)
+
+    def _check_working_title(self, generator, brief):
+        """The brief with a planned title that repeats no published article.
+
+        Runs after the brief and before any article is written. A working title
+        too similar to a published one is replaced by the first of a few
+        alternative angles (one small model call) that passes the check; the
+        writer then keeps to it (the brief renders it as "Judul kerja"). When
+        none passes, TopicTooSimilar is raised before the article costs
+        anything. Without a brief or a working title there is nothing to check
+        here (the generated title is still checked).
+        """
+        working_title = (brief or {}).get('working_title')
+        if not working_title:
+            return brief
+        match = self._similar_published(generator, working_title)
+        if not match:
+            return brief
+        logger.warning(f"Working title '{working_title}' repeats published article '{match[0]}' "
+                       f"({describe_match(match) or match[1]}); asking for distinct angles before writing.")
+        avoid = [match[0]] + [t for t in list(self.avoid_titles) + list(self.published_titles)
+                              if t and t != match[0]]
+        with cost_stage('cek kemiripan'):
+            alternatives = propose_distinct_titles(
+                generator, self.custom_topic or self._category_name(), working_title, avoid,
+                language=self._language(), category=self._category_name(), angle=brief.get('angle'),
+            )
+        for alternative in alternatives:
+            other = self._similar_published(generator, alternative['title'])
+            if other:
+                logger.info(f"Alternative working title '{alternative['title']}' repeats '{other[0]}' "
+                            f"({describe_match(other) or other[1]}).")
+                continue
+            logger.info(f"Working title '{working_title}' replaced by distinct angle '{alternative['title']}'.")
+            avoid_note = (f"Mengulang intent artikel yang sudah terbit: '{match[0]}'" if self._language() != 'en'
+                          else f"Repeating the intent of the published article '{match[0]}'")
+            return dict(brief, working_title=alternative['title'], angle=alternative['angle'] or brief.get('angle'),
+                        avoid=list(brief.get('avoid') or []) + [avoid_note])
+        logger.warning(f"No distinct working title for '{working_title}' ({len(alternatives)} alternative(s) "
+                       "tried); failing before writing.")
+        raise TopicTooSimilar.from_match(match, article_title=working_title)
 
     @contextmanager
     def _site_publish_lock(self):
@@ -1287,11 +1362,12 @@ class _ArticlePostJob:
         # the new titles are matched.
         with cost_stage('cek kemiripan'):
             match = find_similar_published(self.article.get('title', ''), new_titles, language=self._language(),
-                                           generator=generator, corpus=list(self.published_titles) + new_titles)
+                                           generator=generator, corpus=list(self.published_titles) + new_titles,
+                                           category=self._category_name())
         if match:
             logger.warning(f"'{self.article.get('title')}' repeats '{match[0]}', published by another job "
                            "while this article was written.")
-            raise TopicTooSimilar(match[0], article_title=self.article.get('title'))
+            raise TopicTooSimilar.from_match(match, article_title=self.article.get('title'))
 
     def _restore_title_if_repeated(self, generator, previous_title, source):
         """Put previous_title back when the article's new title repeats a published
@@ -1409,9 +1485,45 @@ class _ArticlePostJob:
             seo_data['topic_is_trending'] = True
         return seo_data
 
+    def _repair_title(self, generator, match):
+        """Give the article a new title distinct from the published match[0],
+        from one small model call on its headings and excerpt (no rewrite).
+
+        The focus keyword changes only when the old one is not in the new title
+        and the proposed one appears in the article; a meta description quoting
+        the old title gets the new one. True when the new title was kept.
+        """
+        old_title = self.article.get('title', '')
+        with cost_stage('cek kemiripan'):
+            proposal = propose_repair_title(generator, self.article, match[0], language=self._language(),
+                                            category=self._category_name())
+        if not proposal:
+            return False
+        new_title = proposal['title']
+        again = self._similar_published(generator, new_title)
+        if again:
+            logger.warning(f"Repaired title '{new_title}' still repeats '{again[0]}' "
+                           f"({describe_match(again) or again[1]}).")
+            return False
+        self.article['title'] = new_title
+        keyword, proposed = str(self.article.get('focus_keyword') or '').strip(), proposal.get('focus_keyword')
+        content = html.unescape(re.sub(r'<[^>]+>', ' ', str(self.article.get('content') or ''))).lower()
+        if (proposed and keyword.lower() not in new_title.lower()
+                and ' '.join(proposed.lower().split()) in ' '.join(content.split())):
+            self.article['focus_keyword'] = proposed
+        meta = self.article.get('meta_description')
+        if old_title and isinstance(meta, str) and old_title in meta:
+            self.article['meta_description'] = meta.replace(old_title, new_title)
+        logger.info(f"Title '{old_title}' repeated '{match[0]}' ({describe_match(match) or match[1]}); "
+                    f"repaired to '{new_title}' without rewriting the article "
+                    f"(focus keyword '{self.article.get('focus_keyword')}').")
+        return True
+
     def _generate_article(self, generator, existing_titles, seo_data, recent_posts):
-        """Generate the article, once more with avoid_similar if its title repeats a
-        published article; a second repeat fails the job (TopicTooSimilar)."""
+        """Generate the article. A title that repeats a published article first
+        gets a new title (_repair_title, one small call); only when that fails is
+        the article generated once more with avoid_similar, and a repeat then
+        fails the job (TopicTooSimilar)."""
         site_config = self.site_config
         category_name = self.category['name']
         options = dict(
@@ -1445,15 +1557,16 @@ class _ArticlePostJob:
             self.article = generate(existing_titles)
 
         match = self._similar_published(generator, self.article.get('title', ''))
+        if not match or self._repair_title(generator, match):
+            return
+        logger.warning(
+            f"Similar title detected ({describe_match(match) or match[1]}): '{self.article.get('title')}' ~ "
+            f"'{match[0]}'; the title repair failed. Regenerating..."
+        )
+        self.article = generate(titles_to_avoid(match[0]), avoid_similar=True)
+        match = self._similar_published(generator, self.article.get('title', ''))
         if match:
-            logger.warning(
-                f"Similar title detected (score {match[1]}): '{self.article.get('title')}' ~ '{match[0]}'. "
-                "Regenerating..."
-            )
-            self.article = generate(titles_to_avoid(match[0]), avoid_similar=True)
-            match = self._similar_published(generator, self.article.get('title', ''))
-            if match:
-                raise TopicTooSimilar(match[0], article_title=self.article.get('title'))
+            raise TopicTooSimilar.from_match(match, article_title=self.article.get('title'))
 
     def _publish(self, publisher, image_data, featured_image_id, image_failed, on_logged=None):
         """Publish, settle and record the post. on_logged runs once the PostLog
