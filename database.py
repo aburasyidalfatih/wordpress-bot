@@ -443,7 +443,10 @@ class Database:
         let their errors propagate (they no longer swallow them) so a failure is
         recorded here instead of being mistaken for success.
         """
+        # Column additions on `config` run first: later steps (plain config)
+        # load Config rows through the ORM, which selects every mapped column.
         steps = [
+            ('AI providers', self.migrate_add_ai_provider_columns),
             ('plain config', self.migrate_plain_configs),
             ('timezone', self.migrate_add_timezone_column),
             ('language', self.migrate_add_language_column),
@@ -453,7 +456,6 @@ class Database:
             ('Search Console', self.migrate_search_console_foundation),
             ('credit system', self.migrate_credit_system_tables),
             ('foreign keys', self.migrate_add_foreign_keys),
-            ('AI providers', self.migrate_add_ai_provider_columns),
         ]
         failed = []
         for name, step in steps:
