@@ -43,6 +43,10 @@ it (usage.iterations), and an estimated USD cost at the model's own prices.
 research() never raises, except the RQ job timeout, which must reach the job.
 On any failure it returns None and the caller falls back to the classic
 providers; a Claude failure never fails an article or a research job.
+A 429 for the account's usage limit (not an ordinary rate limit) is not
+retried: it pauses Claude research for every worker through Redis
+(ai_providers.pause_claude_usage), and while paused research() returns None
+without a request.
 """
 import json
 import logging
@@ -65,7 +69,8 @@ from seo_research import (
 )
 from services.ai_costs import CLAUDE_PRICES, token_cost_usd
 from services.ai_providers import (
-    REASONING_MIN_OUTPUT_TOKENS, claude_output_config, is_retryable_provider_error, open_claude_stream,
+    REASONING_MIN_OUTPUT_TOKENS, claude_output_config, claude_usage_paused, is_retryable_provider_error,
+    is_usage_limit_error, open_claude_stream, pause_claude_usage,
 )
 from services.article_prompts import clean_source_url
 
@@ -165,6 +170,9 @@ MAX_SOURCE_CHARS = 40
 MAX_CANDIDATES = 10
 
 FAILURE_REASON = 'Riset web Claude gagal; memakai DuckDuckGo/Jina sebagai cadangan.'
+# The Anthropic account crossed its usage limit (see ai_providers.pause_claude_usage).
+USAGE_LIMIT_REASON = ('Batas pemakaian Anthropic tercapai; riset web Claude dijeda sementara, '
+                      'memakai DuckDuckGo/Jina sebagai cadangan.')
 
 SYSTEM_PROMPT = """You are a web research assistant for a publisher that writes evidence-based articles. You collect source material with the web_search and web_fetch tools; you never write the article.
 
@@ -187,6 +195,10 @@ Use an empty list for any part you could not find or were not asked for."""
 
 class ResearchFailed(Exception):
     """The Claude call produced nothing usable; the caller falls back to classic."""
+
+
+class UsageLimitReached(ResearchFailed):
+    """A 429 for the account's usage limit: not retried, Claude research is paused."""
 
 
 def _now():
@@ -729,6 +741,10 @@ class ClaudeWebResearch:
             except (BaseTimeoutException, ResearchFailed):
                 raise
             except Exception as exc:
+                if is_usage_limit_error(exc):
+                    # Retrying cannot help until the limit is raised; pause instead.
+                    pause_claude_usage(exc)
+                    raise UsageLimitReached(str(exc)) from exc
                 retryable = is_retryable_provider_error(exc)
                 if attempt == 1 and retryable and not state['tools_ran']:
                     logger.warning(f"Claude web research request failed ({type(exc).__name__}: {exc}); retrying once.")
@@ -1234,6 +1250,12 @@ class ClaudeWebResearch:
         Wikipedia is not researched here: the free Wikipedia API does it.
         """
         self.last_error = None
+        if claude_usage_paused():
+            # The account is over its usage limit: no request, classic providers only.
+            logger.info(f"Claude web research for '{topic}' skipped: Anthropic usage-limit pause is active; "
+                        "using the classic providers.")
+            self.last_error = USAGE_LIMIT_REASON
+            return None
         language = 'en' if language == 'en' else 'id'
         excluded = normalize_hosts(exclude_hosts)
         wants = {'competitors': want_competitors, 'official': want_official, 'news': want_news,
@@ -1291,6 +1313,10 @@ class ClaudeWebResearch:
             # Only reachable when research() runs on the job's main thread (where
             # RQ raises its timeout); the RQ job's own handling settles it.
             raise
+        except UsageLimitReached:
+            # pause_claude_usage already logged the one warning.
+            self.last_error = USAGE_LIMIT_REASON
+            return None
         except ResearchFailed as e:
             logger.warning(f"Claude web research for '{topic}' failed: {e}; using the classic providers.")
             self.last_error = FAILURE_REASON

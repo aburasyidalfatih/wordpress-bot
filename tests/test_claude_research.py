@@ -995,5 +995,127 @@ class SEOResearchIntegrationTests(unittest.TestCase):
         self.assertEqual(tools[0]['blocked_domains'], ['situs.example'])
 
 
+# ---------------------------------------------------------------------------
+# Usage-limit pause
+# ---------------------------------------------------------------------------
+
+# Production message of the Anthropic org's monthly usage limit.
+USAGE_LIMIT_MESSAGE = ("You have reached your API usage limits: your organization has crossed its monthly API "
+                       "usage threshold, set based on your organization's usage tier.")
+
+
+def rate_limit_error(msg):
+    body = {'type': 'error', 'error': {'type': 'rate_limit_error', 'message': msg}}
+    return anthropic.RateLimitError(msg, response=httpx2.Response(429, request=REQUEST), body=body)
+
+
+def usage_limit_error():
+    return rate_limit_error(USAGE_LIMIT_MESSAGE)
+
+
+def ordinary_rate_limit_error():
+    return rate_limit_error('Number of request tokens has exceeded your per-minute rate limit.')
+
+
+class FakeRedis:
+    """The two Redis calls the pause uses; down=True raises like a lost connection."""
+
+    def __init__(self, down=False):
+        self.down = down
+        self.data, self.ttl = {}, {}
+
+    def set(self, key, value, ex=None, nx=False):
+        if self.down:
+            raise ConnectionError('Redis is down')
+        if nx and key in self.data:
+            return None
+        self.data[key], self.ttl[key] = value, ex
+        return True
+
+    def exists(self, key):
+        if self.down:
+            raise ConnectionError('Redis is down')
+        return int(key in self.data)
+
+
+class UsageLimitPauseTests(FastRetryMixin, unittest.TestCase):
+    # SEOResearch helpers for the source-metadata check.
+    PROVIDERS = SEOResearchIntegrationTests.PROVIDERS
+    run_topic = SEOResearchIntegrationTests.run_topic
+    _run = SEOResearchIntegrationTests._run
+
+    def setUp(self):
+        super().setUp()
+        self.redis = FakeRedis()
+        patcher = patch.object(ai_providers, '_pause_store', return_value=self.redis)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def ok(self):
+        return message(research_blocks() + [text(payload(competitors=[comp()]))])
+
+    def test_usage_limit_pauses_without_retry_and_the_next_call_sends_nothing(self):
+        research = engine(usage_limit_error(), self.ok())
+        with self.assertLogs('services.ai_providers', 'WARNING') as logs:
+            self.assertIsNone(research.research(TOPIC))
+        # Not retried: the limit does not clear in 3 seconds.
+        self.assertEqual(research.client.messages.stream.call_count, 1)
+        self.assertEqual(research.last_error, claude_research.USAGE_LIMIT_REASON)
+        self.assertIn('Batas pemakaian Anthropic', research.last_error)
+        self.assertEqual(self.redis.ttl, {ai_providers.CLAUDE_USAGE_PAUSE_KEY: 6 * 3600})
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn('Claude web research paused for 6h', logs.output[0])
+
+        # The next call (a new job's engine, too) makes no request at all.
+        for nxt in (research, engine(self.ok())):
+            self.assertIsNone(nxt.research(TOPIC))
+            self.assertEqual(nxt.last_error, claude_research.USAGE_LIMIT_REASON)
+        self.assertEqual(research.client.messages.stream.call_count, 1)
+
+    def test_pause_warning_is_logged_once_when_workers_hit_the_limit_together(self):
+        engine(usage_limit_error()).research(TOPIC)
+        with self.assertNoLogs('services.ai_providers', 'WARNING'):
+            ai_providers.pause_claude_usage(usage_limit_error())
+
+    def test_ordinary_rate_limit_is_retried_once_and_does_not_pause(self):
+        research = engine(ordinary_rate_limit_error(), self.ok())
+        self.assertEqual(len(research.research(TOPIC)['competitors']), 1)
+        self.assertEqual(research.client.messages.stream.call_count, 2)
+        research = engine(ordinary_rate_limit_error(), ordinary_rate_limit_error(), self.ok())
+        self.assertIsNone(research.research(TOPIC))
+        self.assertEqual(research.client.messages.stream.call_count, 2)
+        self.assertEqual(research.last_error, claude_research.FAILURE_REASON)
+        self.assertEqual(self.redis.data, {})
+        self.assertFalse(ai_providers.claude_usage_paused())
+
+    def test_redis_down_behaves_as_before(self):
+        for store in (FakeRedis(down=True), None):
+            with patch.object(ai_providers, '_pause_store', return_value=store):
+                research = engine(usage_limit_error(), self.ok())
+                self.assertIsNone(research.research(TOPIC))  # classic fallback, no exception
+                self.assertEqual(research.client.messages.stream.call_count, 1)
+                # Nothing could be stored: the next call still tries Claude.
+                self.assertFalse(ai_providers.claude_usage_paused())
+                self.assertEqual(len(research.research(TOPIC)['competitors']), 1)
+                self.assertEqual(research.client.messages.stream.call_count, 2)
+
+    def test_paused_research_is_unavailable_in_source_metadata_and_classic_runs(self):
+        ai_providers.pause_claude_usage()
+        claude = engine(self.ok())
+        result, mocks = self.run_topic(claude)
+        claude.client.messages.stream.assert_not_called()
+        mocks['analyze_competitors'].assert_called_once()
+        mocks['get_official_sources'].assert_called_once()
+        meta = result['source_metadata']['claude_web']
+        self.assertEqual(meta['status'], 'unavailable')
+        self.assertIn('Batas pemakaian Anthropic tercapai; riset web Claude dijeda sementara', meta['reason'])
+
+    def test_pause_expires_with_its_key(self):
+        ai_providers.pause_claude_usage()
+        self.redis.data.clear()  # the 6-hour TTL ran out
+        research = engine(self.ok())
+        self.assertEqual(len(research.research(TOPIC)['competitors']), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -3,7 +3,7 @@ config selection for Gemini, Claude (Anthropic) and OpenAI. No network calls."""
 import base64
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import anthropic
 import httpx2
@@ -12,7 +12,7 @@ import openai
 from services import ai_providers
 from services.ai_providers import (
     AIProviderError, AnthropicText, GeminiImage, GeminiText, OpenAIImage, OpenAIText,
-    describe_provider_error, is_fatal_provider_error, is_retryable_provider_error,
+    describe_provider_error, is_fatal_provider_error, is_retryable_provider_error, is_usage_limit_error,
     make_image_provider, make_text_provider, merge_shared_ai_config,
 )
 from services.article_generator import ArticleGenerator
@@ -159,6 +159,75 @@ class ErrorPolicyTests(unittest.TestCase):
         self.assertIn('Claude', describe_provider_error(status_error(anthropic, 401), 'anthropic'))
         self.assertIn('Kuota', describe_provider_error(status_error(openai, 429), 'openai'))
         self.assertIsNone(describe_provider_error(ValueError('x'), 'openai'))
+
+    def test_usage_limit_message(self):
+        expected = ('Batas pemakaian bulanan akun Anthropic tercapai. Naikkan batas di console.anthropic.com '
+                    'atau ganti provider teks di Panel Admin.')
+        error = usage_limit_error()
+        self.assertTrue(is_usage_limit_error(error))
+        self.assertEqual(describe_provider_error(error, 'anthropic'), expected)
+        # Callers without a provider name (article quality) get the same message.
+        self.assertEqual(describe_provider_error(error), expected)
+        # Still retryable for the SDK/tenacity: the article fails with this message, no provider switch.
+        self.assertTrue(is_retryable_provider_error(error))
+        # An ordinary rate limit keeps the old message.
+        ordinary = rate_limit_error('Number of request tokens has exceeded your per-minute rate limit.')
+        self.assertFalse(is_usage_limit_error(ordinary))
+        self.assertIn('Kuota', describe_provider_error(ordinary, 'anthropic'))
+        self.assertFalse(is_usage_limit_error(status_error(anthropic, 400)))
+
+
+USAGE_LIMIT_MESSAGE = ("You have reached your API usage limits: your organization has crossed its monthly API "
+                       "usage threshold, set based on your organization's usage tier.")
+
+
+def rate_limit_error(msg):
+    body = {'type': 'error', 'error': {'type': 'rate_limit_error', 'message': msg}}
+    return anthropic.RateLimitError(msg, response=httpx2.Response(429, request=REQUEST), body=body)
+
+
+def usage_limit_error():
+    return rate_limit_error(USAGE_LIMIT_MESSAGE)
+
+
+def failing_claude_client(error):
+    stream = MagicMock()
+    stream.__enter__.side_effect = error
+    return SimpleNamespace(messages=SimpleNamespace(stream=Mock(return_value=stream)),
+                           beta=SimpleNamespace(messages=SimpleNamespace(stream=Mock(return_value=stream))))
+
+
+class ClaudeUsagePauseTests(unittest.TestCase):
+    def store(self):
+        store = MagicMock()
+        store.set.return_value = True
+        patcher = patch.object(ai_providers, '_pause_store', return_value=store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return store
+
+    def test_article_writing_on_claude_pauses_research_but_still_fails(self):
+        store = self.store()
+        text = AnthropicText(None, 'claude-opus-5-5', client=failing_claude_client(usage_limit_error()))
+        with self.assertRaises(anthropic.RateLimitError):
+            text.generate('tulis')
+        store.set.assert_called_once_with(ai_providers.CLAUDE_USAGE_PAUSE_KEY, 1,
+                                          ex=ai_providers.CLAUDE_USAGE_PAUSE_SECONDS, nx=True)
+        self.assertEqual(ai_providers.CLAUDE_USAGE_PAUSE_SECONDS, 6 * 3600)
+
+    def test_ordinary_rate_limit_does_not_pause(self):
+        store = self.store()
+        error = rate_limit_error('Number of request tokens has exceeded your per-minute rate limit.')
+        with self.assertRaises(anthropic.RateLimitError):
+            AnthropicText(None, 'claude-opus-5-5', client=failing_claude_client(error)).generate('tulis')
+        store.set.assert_not_called()
+
+    def test_redis_errors_never_raise(self):
+        store = self.store()
+        store.set.side_effect = ConnectionError('down')
+        store.exists.side_effect = ConnectionError('down')
+        self.assertFalse(ai_providers.pause_claude_usage(usage_limit_error()))
+        self.assertFalse(ai_providers.claude_usage_paused())
 
 
 class ConfigSelectionTests(unittest.TestCase):

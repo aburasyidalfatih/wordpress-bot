@@ -189,6 +189,49 @@ class CategorySlugTests(unittest.TestCase):
         self.assertEqual(make_post_slug('Tanpa Utang Konsumtif'), 'tanpa-utang-konsumtif')
 
 
+class OddKeywordSlugTests(unittest.TestCase):
+    """Focus keywords that are research phrases or questions: the title gives the slug."""
+
+    TITLE = 'How Many Debt Payoff Strategies Are There? A Clear Guide'
+
+    def test_production_research_phrase_falls_back_to_the_title(self):
+        slug = make_post_slug(self.TITLE, 'how many paying off debt strategies are presented')
+        self.assertEqual(slug, 'how-many-debt-payoff-strategies-are-there')
+        self.assertEqual(slug, make_post_slug(self.TITLE, None))
+        self.assertNotIn('presented', slug)
+        self.assertLessEqual(len(slug), MAX_SLUG_CHARS)
+        self.assertLessEqual(len(slug.split('-')), MAX_SLUG_WORDS)
+
+    def test_question_keyword_falls_back_to_the_title(self):
+        # Every word is in the title, but the keyword is phrased as a question.
+        self.assertEqual(make_post_slug('Panduan Klaim BPJS Kesehatan: Berapa Lama Prosesnya',
+                                        'berapa lama klaim bpjs kesehatan'),
+                         'panduan-klaim-bpjs-kesehatan-berapa-lama-prosesnya')
+        title = 'Snowball Method Explained: Pay Off Debt One Card at a Time'
+        self.assertEqual(make_post_slug(title, 'what is the snowball method'), make_post_slug(title, None))
+        self.assertEqual(make_post_slug(title, None), 'snowball-method-explained-pay-off-debt-one-card')
+        for word in ('how', 'what', 'why', 'when', 'which', 'who', 'is', 'are', 'can', 'should', 'do', 'does',
+                     'apa', 'apakah', 'bagaimana', 'mengapa', 'kenapa', 'berapa', 'kapan', 'siapa', 'bisakah',
+                     'bolehkah'):
+            self.assertIn(word, wp_publisher.SLUG_QUESTION_WORDS)
+
+    def test_long_keyword_falls_back_to_the_title(self):
+        title = 'Emergency Fund Savings Plan for Young Families on a Tight Budget'
+        # Six significant words, all in the title: still too long for a slug.
+        self.assertEqual(make_post_slug(title, 'emergency fund savings plan young families'),
+                         make_post_slug(title, None))
+        # Five significant words is fine.
+        self.assertEqual(make_post_slug(title, 'emergency fund savings plan families'),
+                         'emergency-fund-savings-plan-families')
+
+    def test_keyword_must_share_sixty_percent_of_its_words_with_the_title(self):
+        title = 'Debt Snowball Method: Pay Off Credit Cards Faster'
+        # 3 of 5 significant words in the title (60%): kept.
+        self.assertEqual(make_post_slug(title, 'debt snowball method budget tips'), 'debt-snowball-method-budget-tips')
+        # 2 of 4 (50%): accepted before, now the title is used.
+        self.assertEqual(make_post_slug(title, 'debt snowball budget spreadsheet'), make_post_slug(title, None))
+
+
 class MetaAndTitleTests(PublisherTestCase):
     LONG_META = ('Digitalisasi pendidikan 2026 menuntut sekolah menyiapkan infrastruktur, kompetensi guru, dan tata '
                  'kelola data yang rapi. Panduan ini membahas rencana aksi yang realistis untuk sekolah negeri dan '

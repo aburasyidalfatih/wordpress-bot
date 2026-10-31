@@ -139,6 +139,19 @@ SLUG_STOPWORDS = frozenset({
 # A focus-keyword slug needs at least this many words, so a bare head term
 # ("digitalisasi-pendidikan") does not become the post URL.
 MIN_KEYWORD_SLUG_WORDS = 3
+# A focus keyword phrased as a question or as a long research phrase ("how many
+# paying off debt strategies are presented") reads badly as a URL; the title
+# gives the slug instead. Significant words: not stopwords, numbers or these
+# question words.
+SLUG_QUESTION_WORDS = frozenset({
+    # English
+    'how', 'what', 'why', 'when', 'which', 'who', 'is', 'are', 'can', 'should', 'do', 'does',
+    # Indonesian
+    'apa', 'apakah', 'bagaimana', 'mengapa', 'kenapa', 'berapa', 'kapan', 'siapa', 'bisakah', 'bolehkah',
+})
+MAX_KEYWORD_SLUG_SIGNIFICANT_WORDS = 5
+# Share of the keyword's significant words that must appear in the title.
+MIN_KEYWORD_TITLE_OVERLAP = 0.6
 _YEAR_RE = re.compile(r'^(?:19|20)\d{2}$')
 
 
@@ -184,24 +197,44 @@ def _restates_category(keyword_words, category):
     return False
 
 
+def _keyword_makes_slug(keyword_words, raw_keyword_words, title_words, category):
+    """True when the (trimmed) focus keyword is descriptive enough to be the slug."""
+    content_words = [w for w in keyword_words if w not in SLUG_STOPWORDS and not w.isdigit()]
+    if len(keyword_words) < MIN_KEYWORD_SLUG_WORDS or len(content_words) < 2:
+        return False
+    # Phrased as a question ("how many ...", "berapa ..."): not a URL.
+    if keyword_words[0] in SLUG_QUESTION_WORDS:
+        return False
+    # Counted on the whole keyword, before the slug length cap shortens it.
+    significant = [w for w in raw_keyword_words
+                   if w not in SLUG_STOPWORDS and not w.isdigit() and w not in SLUG_QUESTION_WORDS]
+    if not significant or len(significant) > MAX_KEYWORD_SLUG_SIGNIFICANT_WORDS:
+        return False
+    if sum(w in title_words for w in significant) < MIN_KEYWORD_TITLE_OVERLAP * len(significant):
+        return False
+    return not _restates_category(keyword_words, category)
+
+
 def make_post_slug(title, focus_keyword=None, category=None):
     """Short slug for a new post, or '' to let WordPress derive one.
 
     The focus keyword is used when it is descriptive: at least
-    MIN_KEYWORD_SLUG_WORDS words with two or more content words, at least half
-    of which appear in the title, and not equal to (or contained in) the
-    category name or slug (category: a name/slug or a list of them). A slug
-    like /digitalisasi-pendidikan/digitalisasi-pendidikan/, or a post slug
-    equal to /category/debt-payoff-strategies/, says nothing about the post and
-    collides with the next one on the same head term. Otherwise the title is
-    used. Numbers inside the slug are kept ("pph-21-karyawan").
+    MIN_KEYWORD_SLUG_WORDS words with two or more content words, not phrased
+    as a question (SLUG_QUESTION_WORDS first), at most
+    MAX_KEYWORD_SLUG_SIGNIFICANT_WORDS significant words of which at least
+    MIN_KEYWORD_TITLE_OVERLAP appear in the title, and not equal to (or
+    contained in) the category name or slug (category: a name/slug or a list
+    of them). A slug like /digitalisasi-pendidikan/digitalisasi-pendidikan/,
+    or a post slug equal to /category/debt-payoff-strategies/, says nothing
+    about the post and collides with the next one on the same head term; an
+    odd research phrase (/how-many-paying-off-debt-strategies-are-presented/)
+    does not match the post. Otherwise the title is used. Numbers inside the
+    slug are kept ("pph-21-karyawan").
     """
     title_words = _slug_words(title)
-    keyword_words = _trim_slug_words(_slug_words(focus_keyword))
-    content_words = [w for w in keyword_words if w not in SLUG_STOPWORDS and not w.isdigit()]
-    if (len(keyword_words) >= MIN_KEYWORD_SLUG_WORDS and len(content_words) >= 2
-            and 2 * sum(w in title_words for w in content_words) >= len(content_words)
-            and not _restates_category(keyword_words, category)):
+    raw_keyword_words = _slug_words(focus_keyword)
+    keyword_words = _trim_slug_words(raw_keyword_words)
+    if _keyword_makes_slug(keyword_words, raw_keyword_words, title_words, category):
         return '-'.join(keyword_words)
     return '-'.join(_trim_slug_words(title_words))
 

@@ -45,6 +45,14 @@ _CLAUDE_EFFORT_MODELS = re.compile(
 _CLAUDE_FALLBACK_MODELS = ('claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5')
 CLAUDE_FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 
+# After a usage-limit 429 (the Anthropic account crossed its monthly usage
+# threshold) Claude web research is skipped for this long, shared by every
+# worker through Redis, instead of failing two requests per research call.
+CLAUDE_USAGE_PAUSE_KEY = 'claude_usage_limit_pause'
+CLAUDE_USAGE_PAUSE_SECONDS = 6 * 3600
+# Wording of a usage-limit 429; per-minute rate limits say "rate limit" instead.
+_USAGE_LIMIT_RE = re.compile(r'\busage limits?\b|\busage threshold\b', re.IGNORECASE)
+
 
 class AIProviderError(Exception):
     """A provider failure whose (Indonesian) message is meant for the user."""
@@ -108,12 +116,80 @@ def is_retryable_provider_error(exc):
     return False
 
 
+def is_usage_limit_error(exc):
+    """True for a 429 caused by the account's usage limit (Anthropic: "You have
+    reached your API usage limits ... monthly API usage threshold"), not by an
+    ordinary per-minute rate limit. It does not clear on a retry: only when the
+    limit is raised or the month rolls over."""
+    if status_code_of(exc) != 429:
+        return False
+    body = getattr(exc, 'body', None)
+    text = ' '.join(str(part) for part in (getattr(exc, 'message', None), exc, body) if part)
+    return bool(_USAGE_LIMIT_RE.search(text))
+
+
+def _pause_store():
+    """The app's Redis connection (core_extensions.redis_conn), or None.
+
+    Imported at call time: core_extensions imports this module. Tests replace
+    this function so no test talks to a real Redis.
+    """
+    try:
+        import core_extensions
+    except Exception as e:
+        logger.debug(f"Redis unavailable for the Claude usage-limit pause: {e}")
+        return None
+    return getattr(core_extensions, 'redis_conn', None)
+
+
+def pause_claude_usage(error=None):
+    """Pause Claude web research for CLAUDE_USAGE_PAUSE_SECONDS after a usage-limit 429.
+
+    Logs one warning when the pause starts (the key is set with nx, so
+    concurrent workers that hit the limit too do not log it again). Never
+    raises: without Redis nothing is paused and research behaves as before
+    (one attempt per call, then the classic providers).
+    """
+    hours = CLAUDE_USAGE_PAUSE_SECONDS // 3600
+    detail = f" ({type(error).__name__}: {str(error)[:200]})" if error else ''
+    store = _pause_store()
+    if store is None:
+        logger.warning(f"Claude usage limit reached{detail}; Redis unavailable, Claude web research not paused.")
+        return False
+    try:
+        started = store.set(CLAUDE_USAGE_PAUSE_KEY, 1, ex=CLAUDE_USAGE_PAUSE_SECONDS, nx=True)
+    except Exception as e:
+        logger.warning(f"Claude usage limit reached{detail}; could not store the pause in Redis: {e}")
+        return False
+    if started:
+        logger.warning(f"Claude usage limit reached{detail}; Claude web research paused for {hours}h.")
+    return True
+
+
+def claude_usage_paused():
+    """True while the usage-limit pause is active; False when Redis is unavailable."""
+    store = _pause_store()
+    if store is None:
+        return False
+    try:
+        return bool(store.exists(CLAUDE_USAGE_PAUSE_KEY))
+    except Exception as e:
+        logger.debug(f"Could not read the Claude usage-limit pause from Redis: {e}")
+        return False
+
+
 def describe_provider_error(exc, provider=None):
     """Indonesian message for the user, or None when there is nothing specific to say."""
     if isinstance(exc, AIProviderError):
         return str(exc)
     label = PROVIDER_LABELS.get(provider, 'AI')
     code = status_code_of(exc)
+    if is_usage_limit_error(exc):
+        if provider == 'anthropic' or isinstance(exc, anthropic.APIStatusError):
+            return ('Batas pemakaian bulanan akun Anthropic tercapai. Naikkan batas di console.anthropic.com '
+                    'atau ganti provider teks di Panel Admin.')
+        return (f'Batas pemakaian akun {label} tercapai. Naikkan batas di akun provider '
+                'atau ganti provider teks di Panel Admin.')
     if code in (401, 403):
         return f'API key {label} tidak valid atau tidak memiliki izin akses.'
     if code == 404:
@@ -232,7 +308,14 @@ class AnthropicText:
         )
 
     def generate(self, prompt, system=None, max_tokens=8192, temperature=None, top_p=None):
-        message = stream_claude_message(self.client, self._request_kwargs(prompt, system, max_tokens))
+        try:
+            message = stream_claude_message(self.client, self._request_kwargs(prompt, system, max_tokens))
+        except Exception as e:
+            # The article still fails with this error (describe_provider_error
+            # explains it); only Claude web research is paused.
+            if is_usage_limit_error(e):
+                pause_claude_usage(e)
+            raise
         # Recorded before the refusal check: a refused request is billed too.
         usage = self.usage_of(message)
         cost = record_usage(self.provider, self.model, usage)
