@@ -215,6 +215,37 @@ def parse_article_response(response_text, topic, language='id'):
     }
 
 
+_LEADING_FILLER = re.compile(r'^(?:\d+\s+|the\s+|a\s+|an\s+)+', re.I)
+
+
+def _norm_phrase(text):
+    return ' '.join(re.sub(r'[^\w\s]', ' ', str(text or '').lower()).split())
+
+
+def choose_focus_keyword(article, category_name, seo_data=None):
+    """The article's focus keyword, never just the category name.
+
+    With thin research the category name tops the keyword list, and the model
+    then picks it for an article about something narrower ("couples and money
+    management" for a weekly budget meeting), which also leaks into the meta
+    description. Prefer a researched keyword the title contains, else the
+    title's lead phrase.
+    """
+    keyword = str(article.get('focus_keyword') or '').strip()
+    title = str(article.get('title') or '')
+    category = _norm_phrase(category_name)
+    if not category or (keyword and _norm_phrase(keyword) != category) or category in _norm_phrase(title):
+        return keyword
+    seo_data = seo_data or {}
+    for item in list(seo_data.get('keywords') or []) + list(seo_data.get('long_tail_keywords')
+                                                            or seo_data.get('long_tail') or []):
+        candidate = _norm_phrase(item.get('keyword') if isinstance(item, dict) else item)
+        if candidate != category and 2 <= len(candidate.split()) <= 5 and candidate in _norm_phrase(title):
+            return candidate
+    lead = _LEADING_FILLER.sub('', _norm_phrase(re.split(r'[:?|]', title)[0]))
+    return lead if 2 <= len(lead.split()) <= 5 else (keyword or str(category_name))
+
+
 # ---------------------------------------------------------------------------
 # Image response helpers
 # ---------------------------------------------------------------------------
@@ -335,6 +366,8 @@ class ArticleGenerator:
         if result.truncated:
             _raise_truncated()
         article = parse_article_response(result.text, topic, language)
+        if custom_topic:  # topic is then the category name
+            article['focus_keyword'] = choose_focus_keyword(article, topic, seo_data)
         article['allowed_link_urls'] = allowed_link_urls
         return article
 
