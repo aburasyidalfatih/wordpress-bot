@@ -5,6 +5,7 @@ ImageProvider; everything SDK-specific (request shape, truncation and refusal
 signals, error classes, image decoding) lives here.
 """
 import base64
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -52,6 +53,11 @@ CLAUDE_USAGE_PAUSE_KEY = 'claude_usage_limit_pause'
 CLAUDE_USAGE_PAUSE_SECONDS = 6 * 3600
 # Wording of a usage-limit 429; per-minute rate limits say "rate limit" instead.
 _USAGE_LIMIT_RE = re.compile(r'\busage limits?\b|\busage threshold\b', re.IGNORECASE)
+# After a 401 (invalid Anthropic key) Claude web research is skipped for this
+# long. The pause is keyed by a fingerprint of the rejected key, so saving a new
+# key in the admin panel ends it at once.
+CLAUDE_AUTH_PAUSE_KEY = 'claude_auth_failure_pause'
+CLAUDE_AUTH_PAUSE_SECONDS = 6 * 3600
 
 
 class AIProviderError(Exception):
@@ -178,6 +184,51 @@ def claude_usage_paused():
         return False
 
 
+def is_auth_error(exc):
+    """True for a 401: the API key itself was rejected (e.g. "invalid x-api-key")."""
+    return status_code_of(exc) == 401
+
+
+def _auth_pause_key(api_key):
+    fingerprint = hashlib.sha256(str(api_key or '').encode('utf-8')).hexdigest()[:16]
+    return f'{CLAUDE_AUTH_PAUSE_KEY}:{fingerprint}'
+
+
+def pause_claude_auth(api_key, error=None):
+    """Pause Claude web research on api_key for CLAUDE_AUTH_PAUSE_SECONDS after a 401.
+
+    Same contract as pause_claude_usage: one warning when the pause starts,
+    never raises, nothing paused without Redis.
+    """
+    hours = CLAUDE_AUTH_PAUSE_SECONDS // 3600
+    detail = f" ({type(error).__name__}: {str(error)[:200]})" if error else ''
+    store = _pause_store()
+    if store is None:
+        logger.warning(f"Anthropic API key rejected{detail}; Redis unavailable, Claude web research not paused.")
+        return False
+    try:
+        started = store.set(_auth_pause_key(api_key), 1, ex=CLAUDE_AUTH_PAUSE_SECONDS, nx=True)
+    except Exception as e:
+        logger.warning(f"Anthropic API key rejected{detail}; could not store the pause in Redis: {e}")
+        return False
+    if started:
+        logger.warning(f"Anthropic API key rejected{detail}; Claude web research paused for {hours}h "
+                       "for this key.")
+    return True
+
+
+def claude_auth_paused(api_key):
+    """True while api_key is paused after a 401; False when Redis is unavailable."""
+    store = _pause_store()
+    if store is None:
+        return False
+    try:
+        return bool(store.exists(_auth_pause_key(api_key)))
+    except Exception as e:
+        logger.debug(f"Could not read the Claude auth-failure pause from Redis: {e}")
+        return False
+
+
 def describe_provider_error(exc, provider=None):
     """Indonesian message for the user, or None when there is nothing specific to say."""
     if isinstance(exc, AIProviderError):
@@ -283,6 +334,8 @@ class AnthropicText:
         # retries once instead of its default twice to keep worst-case time sane.
         self.client = client or anthropic.Anthropic(api_key=api_key, max_retries=1)
         self.model = model
+        # Kept for the auth-failure pause, which is keyed by the rejected key.
+        self.api_key = api_key
 
     def _request_kwargs(self, prompt, system, max_tokens):
         kwargs = {
@@ -315,6 +368,8 @@ class AnthropicText:
             # explains it); only Claude web research is paused.
             if is_usage_limit_error(e):
                 pause_claude_usage(e)
+            elif is_auth_error(e) and self.api_key:
+                pause_claude_auth(self.api_key, e)
             raise
         # Recorded before the refusal check: a refused request is billed too.
         usage = self.usage_of(message)

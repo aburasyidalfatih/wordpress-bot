@@ -105,19 +105,21 @@ def _without_own_pages(seo_data, own_hosts):
     return filtered
 
 
-def _claude_research_engine(ai_config):
-    """Claude web research engine for the effective AI config, or None (classic research).
+def _web_research_engine(ai_config):
+    """Web research engine for the effective AI config, or None (classic research).
 
     ai_config is the job's load_config() result, so the admin's shared
-    Anthropic key (merge_shared_ai_config) enables it for every user.
+    Anthropic / Gemini keys (merge_shared_ai_config) enable it for every user:
+    Claude web research, else Gemini with Google Search grounding, see
+    services.research_engine.
     """
-    if not (isinstance(ai_config, dict) and ai_config.get('anthropic_api_key')):
-        return None  # no key: classic research, without importing the SDK
+    if not (isinstance(ai_config, dict) and (ai_config.get('anthropic_api_key') or ai_config.get('gemini_api_key'))):
+        return None  # no key: classic research, without importing the SDKs
     try:
-        from services.claude_research import from_config
-        return from_config(ai_config)
+        from services.research_engine import research_engine_from_config
+        return research_engine_from_config(ai_config)
     except Exception as e:
-        logger.warning(f"Claude web research unavailable, using classic research: {e}")
+        logger.warning(f"Web research engine unavailable, using classic research: {e}")
         return None
 
 
@@ -126,8 +128,9 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
 
     exclude_hosts: the site's own host(s); its pages are not used as competitors
     or sources.
-    ai_config: the effective AI config; with an Anthropic key, competitors and
-    official sources come from Claude's web tools (classic providers as fallback).
+    ai_config: the effective AI config; with an Anthropic or Gemini key,
+    competitors and official sources come from Claude's web tools or Gemini's
+    Google Search grounding (classic providers as fallback).
 
     Returns seo_data unchanged on failure; this is an enrichment step and must not
     be able to fail an article.
@@ -137,9 +140,9 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
         # and do not import in every environment.
         from seo_research import SEOResearch
         research = SEOResearch()
-        claude = _claude_research_engine(ai_config)
-        if claude is not None:
-            research.claude = claude
+        engine = _web_research_engine(ai_config)
+        if engine is not None:
+            research.claude = engine
         topic_data = research.research_topic(topic, category_name, language=language,
                                              exclude_hosts=exclude_hosts or None)
     except JobTimeoutException:
@@ -148,10 +151,17 @@ def _merge_topic_research(seo_data, topic, category_name, language='id', exclude
         logger.warning(f"Topic-level research failed for '{topic}': {e}")
         return seo_data
 
-    claude_meta = ((topic_data.get('source_metadata') or {}).get('claude_web') or {}) \
-        if isinstance(topic_data, dict) else {}
-    if isinstance(claude_meta.get('estimated_cost_usd'), (int, float)):
-        add_cost('riset', claude_meta['estimated_cost_usd'])
+    source_metadata = topic_data.get('source_metadata') if isinstance(topic_data, dict) else None
+    for engine_key in ('claude_web', 'gemini_web'):
+        engine_meta = source_metadata.get(engine_key) if isinstance(source_metadata, dict) else None
+        if not isinstance(engine_meta, dict):
+            continue
+        if isinstance(engine_meta.get('estimated_cost_usd'), (int, float)):
+            add_cost('riset', engine_meta['estimated_cost_usd'])
+        elif engine_meta.get('model') and engine_meta.get('tokens'):
+            # A call without a tabulated price (Gemini): recorded as unpriced,
+            # with its tokens, like record_usage does for other Gemini calls.
+            add_cost('riset', None, engine_meta['tokens'])
 
     merged = dict(seo_data or {})
 

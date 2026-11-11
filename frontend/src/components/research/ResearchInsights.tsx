@@ -19,6 +19,7 @@ const SOURCE_LABEL: Record<string, string> = {
   search_console: 'Search Console',
   competitors: 'Kompetitor',
   claude_web: 'Riset web Claude',
+  gemini_web: 'Riset web Gemini',
   social: 'Sosial',
   news: 'Berita',
   wikipedia: 'Wikipedia',

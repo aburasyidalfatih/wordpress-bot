@@ -46,7 +46,9 @@ providers; a Claude failure never fails an article or a research job.
 A 429 for the account's usage limit (not an ordinary rate limit) is not
 retried: it pauses Claude research for every worker through Redis
 (ai_providers.pause_claude_usage), and while paused research() returns None
-without a request.
+without a request. A 401 (invalid API key) pauses the same way, for that key
+only (ai_providers.pause_claude_auth); last_failure tells the caller which of
+these happened, so services.research_engine can switch to Gemini research.
 """
 import json
 import logging
@@ -69,8 +71,8 @@ from seo_research import (
 )
 from services.ai_costs import CLAUDE_PRICES, token_cost_usd
 from services.ai_providers import (
-    REASONING_MIN_OUTPUT_TOKENS, claude_output_config, claude_usage_paused, is_retryable_provider_error,
-    is_usage_limit_error, open_claude_stream, pause_claude_usage,
+    REASONING_MIN_OUTPUT_TOKENS, claude_auth_paused, claude_output_config, claude_usage_paused, is_auth_error,
+    is_retryable_provider_error, is_usage_limit_error, open_claude_stream, pause_claude_auth, pause_claude_usage,
 )
 from services.article_prompts import clean_source_url
 
@@ -173,6 +175,13 @@ FAILURE_REASON = 'Riset web Claude gagal; memakai DuckDuckGo/Jina sebagai cadang
 # The Anthropic account crossed its usage limit (see ai_providers.pause_claude_usage).
 USAGE_LIMIT_REASON = ('Batas pemakaian Anthropic tercapai; riset web Claude dijeda sementara, '
                       'memakai DuckDuckGo/Jina sebagai cadangan.')
+# The Anthropic API key was rejected with a 401 (see ai_providers.pause_claude_auth).
+AUTH_FAILURE_REASON = ('API key Anthropic ditolak (tidak valid); riset web Claude dijeda sementara, '
+                       'memakai sumber cadangan.')
+# last_failure values: why the last research() returned None.
+FAILURE_AUTH = 'auth'
+FAILURE_USAGE_LIMIT = 'usage_limit'
+FAILURE_ERROR = 'error'
 
 SYSTEM_PROMPT = """You are a web research assistant for a publisher that writes evidence-based articles. You collect source material with the web_search and web_fetch tools; you never write the article.
 
@@ -199,6 +208,10 @@ class ResearchFailed(Exception):
 
 class UsageLimitReached(ResearchFailed):
     """A 429 for the account's usage limit: not retried, Claude research is paused."""
+
+
+class AuthenticationFailed(ResearchFailed):
+    """A 401 for the API key: not retried, Claude research is paused for that key."""
 
 
 def _now():
@@ -570,6 +583,10 @@ class _Page:
 class ClaudeWebResearch:
     """Competitors, official sources, news, discussions, questions and videos via Claude's web tools."""
 
+    # Source-metadata key and display name (SEOResearch labels its entries with them).
+    source_key = 'claude_web'
+    label = 'Claude'
+
     def __init__(self, api_key, model=DEFAULT_ANTHROPIC_MODEL, client=None):
         # max_retries=0: the single retry is done here (_send), and only when no
         # server tool ran yet, so a retry never re-bills searches or fetches.
@@ -578,6 +595,10 @@ class ClaudeWebResearch:
         self.model = model or DEFAULT_ANTHROPIC_MODEL
         # Indonesian reason for the last failed call (shown in source metadata).
         self.last_error = None
+        # FAILURE_AUTH / FAILURE_USAGE_LIMIT / FAILURE_ERROR for the last failed call, else None.
+        self.last_failure = None
+        # Kept for the auth-failure pause, which is keyed by the rejected key.
+        self.api_key = api_key or getattr(self.client, 'api_key', None)
 
     # -- request ------------------------------------------------------------
 
@@ -745,6 +766,11 @@ class ClaudeWebResearch:
                     # Retrying cannot help until the limit is raised; pause instead.
                     pause_claude_usage(exc)
                     raise UsageLimitReached(str(exc)) from exc
+                if is_auth_error(exc):
+                    # An invalid key fails identically every time.
+                    if self.api_key:
+                        pause_claude_auth(self.api_key, exc)
+                    raise AuthenticationFailed(str(exc)) from exc
                 retryable = is_retryable_provider_error(exc)
                 if attempt == 1 and retryable and not state['tools_ran']:
                     logger.warning(f"Claude web research request failed ({type(exc).__name__}: {exc}); retrying once.")
@@ -1045,7 +1071,7 @@ class ClaudeWebResearch:
                 'word_count': len(re.findall(r'\w+', page.text)),
                 'published_hint': published,
                 'key_passages': passages,
-                'retrieved_via': 'claude_web',
+                'retrieved_via': self.source_key,
             })
         # Pages with enough verified passages first (stable), then thin ones.
         competitors.sort(key=lambda item: len(item['key_passages']) < MIN_GOOD_PASSAGES)
@@ -1250,11 +1276,17 @@ class ClaudeWebResearch:
         Wikipedia is not researched here: the free Wikipedia API does it.
         """
         self.last_error = None
+        self.last_failure = None
         if claude_usage_paused():
             # The account is over its usage limit: no request, classic providers only.
             logger.info(f"Claude web research for '{topic}' skipped: Anthropic usage-limit pause is active; "
                         "using the classic providers.")
-            self.last_error = USAGE_LIMIT_REASON
+            self.last_error, self.last_failure = USAGE_LIMIT_REASON, FAILURE_USAGE_LIMIT
+            return None
+        if self.api_key and claude_auth_paused(self.api_key):
+            logger.info(f"Claude web research for '{topic}' skipped: this Anthropic key was rejected (401) "
+                        "recently; using the fallback.")
+            self.last_error, self.last_failure = AUTH_FAILURE_REASON, FAILURE_AUTH
             return None
         language = 'en' if language == 'en' else 'id'
         excluded = normalize_hosts(exclude_hosts)
@@ -1315,16 +1347,20 @@ class ClaudeWebResearch:
             raise
         except UsageLimitReached:
             # pause_claude_usage already logged the one warning.
-            self.last_error = USAGE_LIMIT_REASON
+            self.last_error, self.last_failure = USAGE_LIMIT_REASON, FAILURE_USAGE_LIMIT
+            return None
+        except AuthenticationFailed as e:
+            logger.warning(f"Claude web research for '{topic}' failed: the Anthropic API key was rejected ({e}).")
+            self.last_error, self.last_failure = AUTH_FAILURE_REASON, FAILURE_AUTH
             return None
         except ResearchFailed as e:
             logger.warning(f"Claude web research for '{topic}' failed: {e}; using the classic providers.")
-            self.last_error = FAILURE_REASON
+            self.last_error, self.last_failure = FAILURE_REASON, FAILURE_ERROR
             return None
         except Exception as e:
             logger.error(f"Claude web research for '{topic}' failed: {type(e).__name__}: {e}; "
                          "using the classic providers.")
-            self.last_error = FAILURE_REASON
+            self.last_error, self.last_failure = FAILURE_REASON, FAILURE_ERROR
             return None
 
         # Searches are billed per search the API counted; fetches are the pages

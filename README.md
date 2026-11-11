@@ -211,6 +211,22 @@ riset. Biaya tambahan per riset: pencarian web $10 per 1.000 pencarian (maks.
 $0,09) ditambah token; konten halaman yang di-fetch dihitung sebagai token input.
 Perkiraan biaya per panggilan dicatat di log.
 
+Kalau riset web Claude tidak tersedia (tidak ada key Anthropic, `CLAUDE_WEB_RESEARCH=false`,
+jeda batas pemakaian Anthropic, atau key Anthropic ditolak dengan 401), mesin riset
+memakai `services/gemini_research.py`: satu request Gemini (Model Teks Gemini) dengan
+grounding Google Search, memakai key Gemini yang sudah ada. Pemilihan mesin ada di
+`services/research_engine.py`; bila kedua key ada, Claude dicoba dulu dan Gemini
+dipakai untuk riset yang sama bila Claude ditolak (401) atau kena batas pemakaian. Key
+Anthropic yang ditolak dijeda 6 jam (khusus key itu), jadi artikel berikutnya langsung
+ke Gemini. Gemini hanya memilih halaman lewat Google Search (teks balasannya diabaikan):
+link redirect grounding diurai ke URL aslinya, halaman dikelompokkan menurut URL
+(resmi, berita, diskusi, YouTube, kompetitor), lalu setiap halaman di-fetch sendiri
+(requests, timeout pendek, Jina Reader sebagai cadangan untuk halaman yang dirender
+skrip, halaman error "404" dibuang). Kutipan, heading, teks diskusi, dan pertanyaan
+diambil dari halaman itu sendiri dan lolos filter yang sama seperti riset Claude;
+judul dan tanggal berita juga dari halaman. Batas waktu keras 200 detik. Status `gemini_web` dicatat di metadata sumber; biayanya dicatat sebagai
+panggilan tanpa tarif. Matikan dengan `GEMINI_WEB_RESEARCH=false`.
+
 Peringatan di kartu riset kini menyebut bukti penulis yang benar-benar kurang
 (`services/research_notes.py`: kompetitor, pertanyaan pembaca, saran kata kunci),
 mis. "Pertanyaan pembaca memakai template cadangan"; sumber opsional yang tidak

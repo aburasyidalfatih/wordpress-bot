@@ -217,13 +217,13 @@ class ClaudeEngineTests(ResearchJobTestCase):
             original_init(seo)
             created.append(seo)
 
-        factory = types.ModuleType('services.claude_research')
-        factory.from_config = from_config
+        factory = types.ModuleType('services.research_engine')
+        factory.research_engine_from_config = from_config
         self.add_site(['Keuangan'])
         config = {'ai_text_provider': 'gemini', 'anthropic_api_key': 'shared-admin-key'}
         with patch.object(FakeSEO, '__init__', init), \
                 patch.object(rj.core_extensions, 'load_config', Mock(return_value=config)) as load, \
-                patch.dict(sys.modules, {'services.claude_research': factory}):
+                patch.dict(sys.modules, {'services.research_engine': factory}):
             result = rj.deep_research_job(1, False, 1, None)
         return result, created, load
 

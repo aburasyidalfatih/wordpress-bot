@@ -726,6 +726,9 @@ class SEOResearch:
     the Wikipedia background come from Claude's web_search/web_fetch tools; the
     DuckDuckGo + Jina Reader providers for those parts only run as a fallback,
     for each part Claude did not return. Without one, research is unchanged.
+    The engine may also be services.gemini_research.GeminiWebResearch (or a
+    fallback wrapper, see services.research_engine): same interface, and its
+    source_key / label name its source-metadata entries.
     """
 
     def __init__(self, exclude_hosts=None, claude=None):
@@ -739,6 +742,16 @@ class SEOResearch:
         self.exclude_hosts = exclude_hosts
         # Optional ClaudeWebResearch; None keeps every provider classic.
         self.claude = claude
+
+    def _engine_key(self):
+        """Source-metadata key of the web research engine ('claude_web', 'gemini_web')."""
+        key = getattr(self.claude, 'source_key', None)
+        return key if isinstance(key, str) and key else 'claude_web'
+
+    def _engine_label(self):
+        """Display name of the web research engine for Indonesian reasons ('Claude', 'Gemini')."""
+        label = getattr(self.claude, 'label', None)
+        return label if isinstance(label, str) and label else 'Claude'
 
     def _excluded(self, exclude_hosts=None):
         """Normalized hosts to exclude: the argument, else the instance default."""
@@ -818,7 +831,8 @@ class SEOResearch:
     def _claude_research(self, topic, language, excluded, **options):
         """Claude's validated web research parts, or None (failed / nothing usable).
 
-        Records a 'claude_web' source entry either way and never raises. It runs
+        Records the engine's source entry ('claude_web', or 'gemini_web' for
+        Gemini research) either way and never raises. It runs
         on a worker thread (see _run_with_claude), where RQ's job timeout never
         fires: RQ signals the job's main thread, which is waiting in
         claude_future.result() or in a classic provider and propagates it there.
@@ -829,10 +843,12 @@ class SEOResearch:
             logger.error(f"Claude web research raised for '{topic}': {type(e).__name__}: {e}")
             result = None
 
+        # Read after the call: a fallback wrapper reports the engine that ran.
         model = getattr(self.claude, 'model', None)
+        source_key, label = self._engine_key(), self._engine_label()
         if not isinstance(result, dict):
-            reason = getattr(self.claude, 'last_error', None) or 'Riset web Claude gagal; memakai sumber cadangan.'
-            self._mark_source('claude_web', 'unavailable', count=0, model=model, reason=reason)
+            reason = getattr(self.claude, 'last_error', None) or f'Riset web {label} gagal; memakai sumber cadangan.'
+            self._mark_source(source_key, 'unavailable', count=0, model=model, reason=reason)
             return None
         stats = result.get('stats') or {}
         good, thin = self._split_claude_competitors(result)
@@ -848,10 +864,11 @@ class SEOResearch:
         total = sum(n for part, n in counts.items() if part != 'thin_competitors')
         details = {'count': total, 'model': stats.get('model', model), 'searches': stats.get('searches'),
                    'fetches': stats.get('fetches'), 'estimated_cost_usd': stats.get('estimated_cost_usd'),
+                   'tokens': (stats.get('input_tokens') or 0) + (stats.get('output_tokens') or 0),
                    **{f'{part}_count': n for part, n in counts.items()}}
         if not total:
-            details['reason'] = 'Tidak ada sumber dari Claude yang lolos validasi; memakai sumber cadangan.'
-        self._mark_source('claude_web', 'real' if total else 'unavailable', **details)
+            details['reason'] = f'Tidak ada sumber dari {label} yang lolos validasi; memakai sumber cadangan.'
+        self._mark_source(source_key, 'real' if total else 'unavailable', **details)
         return result
 
     @staticmethod
@@ -892,12 +909,12 @@ class SEOResearch:
             if not videos:
                 return None
             return self.youtube_insights_for([(v['url'], v.get('title')) for v in videos], language=language,
-                                             via='claude_web')
+                                             via=self._engine_key())
         else:
             items = list(claude.get(name) or [])
             if not items:
                 return None
-        self._mark_source(CLAUDE_PART_SOURCES.get(name, name), 'real', count=len(items), via='claude_web')
+        self._mark_source(CLAUDE_PART_SOURCES.get(name, name), 'real', count=len(items), via=self._engine_key())
         return items
 
     def _top_up_competitors(self, good, classic_items, thin, limit):
@@ -906,7 +923,7 @@ class SEOResearch:
                                    key=lambda item: item.get('url') if isinstance(item, dict) else item)[:limit]
         # Only thin pages (one verified passage each) are partial evidence.
         status = 'real' if (good or classic_items) else 'partial'
-        self._mark_source('competitors', status, count=len(merged), via='claude_web+duckduckgo',
+        self._mark_source('competitors', status, count=len(merged), via=f'{self._engine_key()}+duckduckgo',
                           claude_count=len(good), thin_count=len(thin))
         return merged
 
@@ -975,7 +992,7 @@ class SEOResearch:
         if not ideas:
             return
         previous = self.source_status.get('google_autocomplete') or {}
-        details = {'via': 'claude_web', 'derived_from': 'search_titles'}
+        details = {'via': self._engine_key(), 'derived_from': 'search_titles'}
         if previous.get('reason'):
             details['google_error'] = previous['reason']
         collected['suggestions'] = ideas
