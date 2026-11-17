@@ -12,9 +12,9 @@ from services.article_review import ReviewResult
 from services.ai_costs import current_stage
 from services.topic_similarity import (
     BORDERLINE_THRESHOLD, CORE_MATCH_SCORE, DEFINITE_THRESHOLD, REASON_AI, REASON_AI_BUDGET, REASON_CORE,
-    REASON_CORE_SUBTITLE, REASON_NO_AI, REASON_SCORE, SIMILAR_THRESHOLD, TITLE_MAX_CHARS, TITLE_TARGET_CHARS,
+    REASON_CORE_SUBTITLE, REASON_KEYWORD, REASON_NO_AI, REASON_SCORE, SIMILAR_THRESHOLD, TITLE_MAX_CHARS, TITLE_TARGET_CHARS,
     SimilarMatch, category_words, clean_title, core_signature, core_topic_match, describe_match, drop_core_repeats,
-    find_similar_published, propose_distinct_titles, propose_repair_title, restates_category, signatures_match,
+    find_similar_published, keyword_collision, propose_distinct_titles, propose_repair_title, restates_category, signatures_match,
     significant_tokens, similarity_score, title_core,
 )
 from test_article_quality_support import quality_stub_patches
@@ -795,6 +795,97 @@ class TopicTooSimilarMessageTests(unittest.TestCase):
         # A plain (title, score) tuple (patched in tests) has no reason.
         self.assertEqual(str(jobs.TopicTooSimilar.from_match(('Judul', 0.9))),
                          "Topik terlalu mirip dengan artikel yang sudah terbit: 'Judul'")
+
+
+class KeywordCollisionTests(unittest.TestCase):
+    """Titles can share no words while both posts target one keyword; the slug carries it."""
+
+    PUBLISHED_EN = [('5 Core Reasons Your Household Needs a Family Budget', 'importance-of-family-budget')]
+    PUBLISHED_ID = [('Jadwal Pencairan Dana BOS 2026 Tahap 1, 2, dan Kemenag', 'jadwal-pencairan-dana-bos-tahap')]
+
+    def test_same_keyword_repeats_without_a_model_call(self):
+        generator = FakeGenerator()
+        match = keyword_collision('importance-of-family-budget', self.PUBLISHED_EN, language='en',
+                                  generator=generator, candidate_title='5 Importance of Family Budget',
+                                  category='Family Budgeting Basics')
+        self.assertEqual(match, ('5 Core Reasons Your Household Needs a Family Budget', 1.0))
+        self.assertEqual(match.reason, REASON_KEYWORD)
+        self.assertEqual(generator.prompts, [])
+        self.assertIn('kata kunci targetnya sama', describe_match(match))
+
+    def test_numbers_and_the_wordpress_suffix_do_not_count(self):
+        published = [('Old', 'importance-of-family-budget-2')]
+        self.assertIsNotNone(keyword_collision('importance-of-family-budget-2026', published, language='en'))
+
+    def test_contained_keyword_is_put_to_the_model_with_the_shared_keyword(self):
+        generator = FakeGenerator('{"same_intent": true}')
+        match = keyword_collision('dana-bos-tahap', self.PUBLISHED_ID, generator=generator,
+                                  candidate_title='Penyaluran Dana BOS Tahap 1 2026',
+                                  category='Manajemen Keuangan dan Dana BOS Sekolah')
+        self.assertEqual(match.reason, REASON_KEYWORD)
+        self.assertEqual(match[1], 0.6)
+        self.assertIn('same search keyword "dana bos tahap"', generator.prompts[0])
+
+    def test_contained_keyword_with_a_different_intent_passes(self):
+        generator = FakeGenerator('{"same_intent": false}')
+        self.assertIsNone(keyword_collision('dana-bos-tahap', self.PUBLISHED_ID, generator=generator))
+
+    def test_contained_keyword_without_a_model_repeats(self):
+        self.assertIsNotNone(keyword_collision('dana-bos-tahap', self.PUBLISHED_ID))
+
+    def test_short_or_small_overlaps_do_not_count(self):
+        # Two words only, and three words that are under 60% of the longer slug.
+        self.assertIsNone(keyword_collision('dana-bos', self.PUBLISHED_ID))
+        self.assertIsNone(keyword_collision('dana-bos-tahap', [('X', 'jadwal-pencairan-dana-bos-tahap-kemenag-madrasah')]))
+        self.assertIsNone(keyword_collision('cara-membuat-rpp', self.PUBLISHED_ID))
+
+    def test_category_words_alone_are_no_evidence(self):
+        published = [('Family Budget Basics Guide', 'family-budget')]
+        self.assertIsNone(keyword_collision('family-budget', published, language='en',
+                                            category='Family Budgeting Basics'))
+
+    def test_model_calls_are_capped(self):
+        published = [('A', 'jadwal-pencairan-dana-bos-tahap'), ('B', 'syarat-pencairan-dana-bos-tahap'),
+                     ('C', 'laporan-pencairan-dana-bos-tahap')]
+        generator = FakeGenerator('{"same_intent": false}', '{"same_intent": false}')
+        self.assertIsNone(keyword_collision('dana-bos-tahap', published, generator=generator))
+        self.assertEqual(len(generator.prompts), 2)
+
+
+class KeywordRepeatJobTests(JobSimilarityTestCase):
+    """A written article whose slug repeats a published post's keyword gets a
+    new title and keyword (one small call), or is not published."""
+
+    OTHER = 'Rainy Day Savings: A Starter Guide'
+
+    def setUp(self):
+        super().setUp()
+        with self.db.get_session() as s:
+            s.get(ResearchData, 1).suggested_topics = [{'topic': 'Emergency Fund Basics'}]
+            s.add(PostLog(user_id=1, site_id=1, category_name='Finance', title=self.OTHER, success=True,
+                          result='ok', post_url='https://example.com/emergency-fund-basics/',
+                          created_at=datetime.now()))
+        self.generator.generate_checked_article.side_effect = lambda *a, **k: {
+            'title': 'Emergency Fund Basics: How Much to Save', 'focus_keyword': 'emergency fund basics',
+            'content': '<p>How big an emergency fund size should be for a family.</p>'}
+
+    def test_keyword_repeat_gets_a_new_title_and_keyword(self):
+        self.replies['repair'] = [json.dumps({'title': 'Emergency Fund Size for Families',
+                                              'focus_keyword': 'emergency fund size'})]
+        self.post()
+        self.assertEqual(self.calls().count('repair'), 1)
+        self.assertEqual(self.generator.generate_checked_article.call_count, 1)  # no rewrite
+        args = self.publisher.create_post.call_args.args
+        self.assertEqual(args[0], 'Emergency Fund Size for Families')
+        self.assertEqual(args[6], 'emergency fund size')
+
+    def test_unrepaired_keyword_repeat_is_not_published(self):
+        self.post()
+        self.assertEqual(self.generator.generate_checked_article.call_count, 2)
+        self.publisher.create_post.assert_not_called()
+        self.assertEqual(self.last_log().result,
+                         "Artikel tidak diterbitkan: Topik terlalu mirip dengan artikel yang sudah terbit: "
+                         f"'{self.OTHER}' (skor 1,00; kata kunci targetnya sama dengan artikel yang sudah terbit)")
 
 
 if __name__ == '__main__':

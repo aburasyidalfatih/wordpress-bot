@@ -36,7 +36,8 @@ from services.content_planner import (
 from services.quality_gate import check_article, link_host, strip_invalid_internal_links
 from services.search_console import build_search_opportunities
 from services.topic_similarity import (
-    describe_match, find_similar_published, propose_distinct_titles, propose_repair_title, significant_tokens,
+    describe_match, find_similar_published, keyword_collision, propose_distinct_titles, propose_repair_title,
+    significant_tokens,
 )
 from services.wp_publisher import WordPressPublisher, is_unconfirmed_post_result, make_post_slug
 
@@ -718,6 +719,33 @@ def _published_titles(user_id, site_id, recent_posts, extra_titles=()):
     return output
 
 
+def _url_slug(url):
+    """The last path segment of a post URL (its slug), or ''."""
+    path = re.sub(r'[?#].*$', '', str(url or '')).rstrip('/')
+    return path.rsplit('/', 1)[-1] if '//' in path and path.count('/') > 2 else ''
+
+
+def _published_slugs(user_id, site_id, recent_posts):
+    """(title, slug) of the site's posts: the post history (newest
+    PUBLISHED_TITLES_LIMIT) and the recent WordPress posts. Never raises: an
+    empty list only disables the keyword check."""
+    pairs = []
+    try:
+        pairs += db.get_existing_post_urls(user_id, site_id, limit=PUBLISHED_TITLES_LIMIT) or []
+    except JobTimeoutException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not load published post URLs for site {site_id}: {e}")
+    pairs += [(post.get('title'), post.get('url')) for post in recent_posts or [] if isinstance(post, dict)]
+    seen, output = set(), []
+    for title, url in pairs:
+        slug = _url_slug(url)
+        if title and slug and slug not in seen:
+            seen.add(slug)
+            output.append((str(title).strip(), slug))
+    return output
+
+
 def _cited_source_urls(article, internal_posts):
     """Research source URLs the writer was allowed to cite: the article's link
     allow-list minus the site's own posts. None when no allow-list was built."""
@@ -1134,6 +1162,7 @@ class _ArticlePostJob:
         send_telegram_notification(site_config, _start_message(site_config, self.category, self.custom_topic))
         existing_titles = db.get_existing_titles(self.user_id, self.site_id, self.category['name'], limit=50)
         self.published_titles = _published_titles(self.user_id, self.site_id, recent_posts, existing_titles)
+        self.published_slugs = _published_slugs(self.user_id, self.site_id, recent_posts)
         if self.item_id:
             # A user-chosen title that repeats a published article is not
             # written at all (checked before any research or generation cost).
@@ -1262,6 +1291,26 @@ class _ArticlePostJob:
         with cost_stage('cek kemiripan'):
             return find_similar_published(title, self.published_titles, language=self._language(),
                                           generator=generator, category=self._category_name())
+
+    def _keyword_repeat(self, generator):
+        """The published post whose target keyword (slug) the article's would-be
+        slug repeats, as a SimilarMatch, or None. Titles can share no words while
+        both posts target one keyword; the slug carries it."""
+        slug = make_post_slug(self.article.get('title', ''), self.article.get('focus_keyword'),
+                              self._category_name())
+        with cost_stage('cek kemiripan'):
+            return keyword_collision(slug, getattr(self, 'published_slugs', None), language=self._language(),
+                                     generator=generator, candidate_title=self.article.get('title'),
+                                     category=self._category_name())
+
+    def _repeat_of_published(self, generator):
+        """(match, by_keyword): the published article the written article repeats
+        by its title, else by its target keyword; (None, False) when none."""
+        match = self._similar_published(generator, self.article.get('title', ''))
+        if match:
+            return match, False
+        match = self._keyword_repeat(generator)
+        return match, bool(match)
 
     def _check_topic_is_new(self, generator, topic):
         match = self._similar_published(generator, topic)
@@ -1495,13 +1544,15 @@ class _ArticlePostJob:
             seo_data['topic_is_trending'] = True
         return seo_data
 
-    def _repair_title(self, generator, match):
+    def _repair_title(self, generator, match, by_keyword=False):
         """Give the article a new title distinct from the published match[0],
         from one small model call on its headings and excerpt (no rewrite).
 
         The focus keyword changes only when the old one is not in the new title
-        and the proposed one appears in the article; a meta description quoting
-        the old title gets the new one. True when the new title was kept.
+        (or the match was on the keyword itself, by_keyword) and the proposed one
+        appears in the article; a meta description quoting the old title gets
+        the new one. True when the new title was kept and, for a keyword match,
+        the article no longer repeats the published keyword.
         """
         old_title = self.article.get('title', '')
         with cost_stage('cek kemiripan'):
@@ -1515,12 +1566,19 @@ class _ArticlePostJob:
             logger.warning(f"Repaired title '{new_title}' still repeats '{again[0]}' "
                            f"({describe_match(again) or again[1]}).")
             return False
+        previous = {key: self.article.get(key) for key in ('title', 'focus_keyword')}
         self.article['title'] = new_title
         keyword, proposed = str(self.article.get('focus_keyword') or '').strip(), proposal.get('focus_keyword')
         content = html.unescape(re.sub(r'<[^>]+>', ' ', str(self.article.get('content') or ''))).lower()
-        if (proposed and keyword.lower() not in new_title.lower()
+        if (proposed and (by_keyword or keyword.lower() not in new_title.lower())
                 and ' '.join(proposed.lower().split()) in ' '.join(content.split())):
             self.article['focus_keyword'] = proposed
+        if by_keyword:
+            again = self._keyword_repeat(generator)
+            if again:
+                logger.warning(f"Repaired title '{new_title}' still targets the keyword of '{again[0]}'.")
+                self.article.update(previous)
+                return False
         meta = self.article.get('meta_description')
         if old_title and isinstance(meta, str) and old_title in meta:
             self.article['meta_description'] = meta.replace(old_title, new_title)
@@ -1566,15 +1624,16 @@ class _ArticlePostJob:
         else:
             self.article = generate(existing_titles)
 
-        match = self._similar_published(generator, self.article.get('title', ''))
-        if not match or self._repair_title(generator, match):
+        match, by_keyword = self._repeat_of_published(generator)
+        if not match or self._repair_title(generator, match, by_keyword=by_keyword):
             return
         logger.warning(
-            f"Similar title detected ({describe_match(match) or match[1]}): '{self.article.get('title')}' ~ "
+            f"Similar {'target keyword' if by_keyword else 'title'} detected "
+            f"({describe_match(match) or match[1]}): '{self.article.get('title')}' ~ "
             f"'{match[0]}'; the title repair failed. Regenerating..."
         )
         self.article = generate(titles_to_avoid(match[0]), avoid_similar=True)
-        match = self._similar_published(generator, self.article.get('title', ''))
+        match, _by_keyword = self._repeat_of_published(generator)
         if match:
             raise TopicTooSimilar.from_match(match, article_title=self.article.get('title'))
 

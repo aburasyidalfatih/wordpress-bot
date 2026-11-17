@@ -174,6 +174,13 @@ REASON_AI = 'ai_same'                     # gray zone, the model said same inten
 REASON_NO_AI = 'no_ai'                    # gray zone, no model given: SIMILAR_THRESHOLD decided
 REASON_AI_UNAVAILABLE = 'ai_unavailable'  # gray zone, the model could not answer
 REASON_AI_BUDGET = 'ai_budget'            # gray zone, MAX_AI_CONFIRMATIONS already spent
+REASON_KEYWORD = 'keyword'                # same target keyword (post slug) as a published post
+
+# keyword_collision: a slug contained in another counts when it has at least
+# this many significant words and this share of the longer one's words
+# ("dana-bos-tahap" in "jadwal-pencairan-dana-bos-tahap": 3 words, 0.6).
+KEYWORD_CONTAINED_MIN_WORDS = 3
+KEYWORD_CONTAINED_MIN_SHARE = 0.6
 _REASON_TEXT = {
     REASON_CORE: 'inti topik judulnya sama',
     REASON_CORE_SUBTITLE: 'inti topik dan subjudulnya sama',
@@ -182,6 +189,7 @@ _REASON_TEXT = {
     REASON_NO_AI: 'tanpa cek AI, memakai ambang skor',
     REASON_AI_UNAVAILABLE: 'AI tidak tersedia, memakai ambang skor',
     REASON_AI_BUDGET: 'batas cek AI tercapai, memakai ambang skor',
+    REASON_KEYWORD: 'kata kunci targetnya sama dengan artikel yang sudah terbit',
 }
 
 
@@ -488,8 +496,12 @@ def similarity_score(tokens_a, tokens_b, weights=None, category_words=frozenset(
     return min(1.0, max(score, sequence if sequence >= 0.8 else 0.0))
 
 
-def _same_intent_by_ai(generator, candidate, existing, language, category=None):
-    """True/False from the model, or None when it could not answer."""
+def _same_intent_by_ai(generator, candidate, existing, language, category=None, shared_keyword=None):
+    """True/False from the model, or None when it could not answer.
+
+    shared_keyword: the search keyword both articles' URLs target (see
+    keyword_collision), stated to the model as evidence.
+    """
     # Local import: only borderline matches need it.
     from services.article_review import extract_json_object
 
@@ -497,6 +509,11 @@ def _same_intent_by_ai(generator, candidate, existing, language, category=None):
         f"Both are filed in the site's category \"{str(category)[:120]}\". Words of the category name are in "
         "every article there, so sharing them is not evidence of the same intent.\n" if category else ""
     )
+    if shared_keyword:
+        category_line += (
+            f"Both articles target the same search keyword \"{str(shared_keyword)[:120]}\" (it is in both URLs), "
+            "so they compete for the same Google queries unless they clearly serve different searchers.\n"
+        )
     prompt = (
         "Decide whether two article titles from the same website target the same search intent.\n"
         "Same intent means: the person searching for what one article answers would be fully satisfied by "
@@ -534,6 +551,56 @@ def _matched(candidate, title, score, reason):
     logger.info(f"Topic similarity match: reason={reason} score={match[1]:.3f} "
                 f"candidate={candidate!r} published={title!r}")
     return match
+
+
+def slug_keyword_tokens(slug, language='id'):
+    """Significant words of a post slug (its target keyword); numbers and the
+    "-2" WordPress adds to a taken slug drop out."""
+    return set(significant_tokens(str(slug or '').replace('-', ' '), language))
+
+
+def keyword_collision(slug, published, *, language='id', generator=None, candidate_title=None, category=None):
+    """The published post whose target keyword the new post's slug repeats, as
+    a SimilarMatch (reason REASON_KEYWORD), or None.
+
+    published: (title, slug) of the site's posts. Titles can differ in every
+    word ("5 Core Reasons Your Household Needs a Family Budget" / "5 Importance
+    of Family Budget for Steady Earners") while both posts target one keyword,
+    which the slug carries (importance-of-family-budget and the -2 WordPress
+    added). The same significant words repeat outright. A slug contained in
+    the other (KEYWORD_CONTAINED_MIN_WORDS words, KEYWORD_CONTAINED_MIN_SHARE of
+    the longer) is put to the model with the shared keyword, at most
+    MAX_AI_CONFIRMATIONS times; without a model it repeats. Shared words that
+    are all the category's own are no evidence.
+    """
+    tokens = slug_keyword_tokens(slug, language)
+    if len(tokens) < 2:
+        return None
+    words = category_words(category, language)
+    candidate = candidate_title or slug
+    confirmations = 0
+    for title, other_slug in published or []:
+        other = slug_keyword_tokens(other_slug, language)
+        if len(other) < 2 or tokens <= words or other <= words:
+            continue
+        if tokens == other:
+            return _matched(candidate, title, 1.0, REASON_KEYWORD)
+        small, large = sorted((tokens, other), key=len)
+        share = len(small) / len(large)
+        if not (small < large and len(small) >= KEYWORD_CONTAINED_MIN_WORDS
+                and share >= KEYWORD_CONTAINED_MIN_SHARE):
+            continue
+        if generator is not None:
+            if confirmations >= MAX_AI_CONFIRMATIONS:
+                continue
+            confirmations += 1
+            shared = ' '.join(word for word in str(slug).split('-') if word)
+            if _same_intent_by_ai(generator, candidate, title, language, category, shared_keyword=shared) is False:
+                logger.info(f"Keyword of '{candidate}' ({slug}) is inside '{title}' ({other_slug}), "
+                            "but the AI sees a different intent.")
+                continue
+        return _matched(candidate, title, share, REASON_KEYWORD)
+    return None
 
 
 def find_similar_published(candidate, published_titles, *, language='id', generator=None, corpus=None,

@@ -918,6 +918,15 @@ class Database:
             logs = query.order_by(PostLog.created_at.desc()).limit(limit).all()
             return [log.title for log in logs]
 
+    def get_existing_post_urls(self, user_id, site_id, limit=200):
+        """(title, post_url) of the site's successful posts, newest first."""
+        with self.get_session() as session:
+            logs = (session.query(PostLog.title, PostLog.post_url)
+                    .filter(PostLog.user_id == user_id, PostLog.site_id == site_id, PostLog.success.is_(True),
+                            PostLog.post_url.isnot(None))
+                    .order_by(PostLog.created_at.desc()).limit(limit).all())
+            return [(log.title, log.post_url) for log in logs]
+
     def save_research_data(self, user_id, site_id, category, trending, rising, top,
                            suggestions, keywords=None, questions=None, long_tail=None,
                            competitor_outlines=None, youtube_insights=None,
