@@ -387,7 +387,9 @@ def _stale_research_categories(site, now=None):
         researched_at = latest_by_key.get(key)
         if researched_at is None or researched_at < cutoff:
             stale.append(name)
-        elif researched_at < early_cutoff and topics_by_key.get(key, 0) < EARLY_REFRESH_MIN_TOPICS:
+        # By calendar day: the daily run starts at about the same minute each
+        # day, so comparing times could miss the seventh day by minutes.
+        elif researched_at.date() <= early_cutoff.date() and topics_by_key.get(key, 0) < EARLY_REFRESH_MIN_TOPICS:
             logger.info(f"Category '{name}' of site_id={site.id} has {topics_by_key.get(key, 0)} unused "
                         "research topic(s) left; refreshing its research early.")
             stale.append(name)

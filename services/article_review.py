@@ -34,6 +34,7 @@ import logging
 import re
 import secrets
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from services.ai_providers import AIProviderError, describe_provider_error, is_retryable_provider_error
@@ -357,6 +358,11 @@ CHECK, in priority order:
    would not need to look up. Remove unsupported specific claims or rewrite them as
    honest qualitative statements ("costs often fall", not "costs fall 40%"). Hedge or remove
    time-sensitive claims (current rates, limits, rules) that the evidence does not state.
+   The current year is {current_year}. A cap, quota, rate, fee or threshold set by a regulation
+   must name the regulation or year it comes from; a value the evidence shows only for an
+   earlier year must not be presented as the current rule (critical edit: state its year and
+   point readers to the latest guidance). When the evidence shows different values, the newest
+   regulation wins.
    {evidence_note}
 2. Fabrication. Invented people, experts, organisations, studies, surveys, quotes, testimonials,
    statistics, or case studies presented as real, and any claimed first-hand publisher experience or
@@ -459,6 +465,7 @@ def build_review_prompt(article, evidence, *, language, category, site_name, ymy
         category=str(category or '-')[:120],
         language_name=_language_name(language),
         evidence_note=evidence_note,
+        current_year=datetime.now().year,
         safety_rules=_YMYL_RULES if ymyl else _GENERAL_RULES,
         max_find=PROMPT_FIND_CHARS,
         max_edits=MAX_EDITS,

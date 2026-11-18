@@ -900,6 +900,11 @@ OUTPUT_CONTRACT_TEMPLATE = """
    "Sources"/"Sumber"/"References" section: the publisher adds one automatically.
 8. <META_DESCRIPTION>: 140-155 characters, never more than 158. Title: at most 60
    characters.
+9. Rules that change over time (caps, quotas, rates, fees, thresholds, schedules set by a
+   regulation or guideline): name the regulation or the year it applies to, as the source
+   states it. The current year is {current_year}. When sources give different values, use
+   the newest regulation. Never present a value from an older year's rule as the current
+   rule: say which year it comes from and tell the reader to check the latest guidance.
 {evidence_policy}"""
 
 
@@ -998,7 +1003,7 @@ def build_article_prompt(topic, existing_titles=None, custom_topic=None, seo_dat
         # A custom prompt without the category placeholder still gets the
         # publisher's private hint (it was written for this purpose).
         prompt += build_category_brief(None, language, category_hint)
-    prompt = prompt + "\n\n" + OUTPUT_CONTRACT_TEMPLATE.format(evidence_policy=evidence_policy)
+    prompt = prompt + "\n\n" + OUTPUT_CONTRACT_TEMPLATE.format(evidence_policy=evidence_policy, current_year=current_year)
     if quality_feedback:
         prompt += build_quality_correction(quality_feedback)
     return prompt, evidence_policy, allowed_link_urls

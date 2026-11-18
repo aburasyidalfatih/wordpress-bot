@@ -4,6 +4,7 @@ import re
 import sys
 import types
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from services.article_generator import parse_article_response
@@ -87,6 +88,13 @@ class DefaultPromptTests(unittest.TestCase):
                 self.assertIsNone(re.search(pattern, prompt, re.IGNORECASE), f'{language}: {pattern}')
             # The default itself must not tell the model to claim team experience.
             self.assertNotIn('pengalaman tim praktisi', DEFAULT_ARTICLE_PROMPTS[language])
+
+    def test_regulation_values_need_their_year(self):
+        for language in ('id', 'en'):
+            prompt, _, _ = build_article_prompt('Keuangan', language=language)
+            self.assertIn(f'The current year is {datetime.now().year}', prompt)
+            self.assertIn('the newest regulation', prompt)
+            self.assertIn("Never present a value from an older year's rule", prompt)
 
     def test_new_guidance_is_present(self):
         id_prompt, _, _ = build_article_prompt('Keuangan', language='id')

@@ -13,7 +13,7 @@ from services.ai_providers import AIProviderError, TextResult
 from services.article_generator import ArticleGenerator, TruncatedGenerationError
 from services.article_review import (
     ArticleReviewRejected, ArticleReviewUnavailable, ProtectedLinks, ReviewParseError, apply_edits,
-    build_publisher_context, build_review_evidence, extract_json_object, is_ymyl_topic, parse_review_response,
+    build_publisher_context, build_review_prompt, build_review_evidence, extract_json_object, is_ymyl_topic, parse_review_response,
     review_article,
 )
 
@@ -446,6 +446,16 @@ class YmylAndEvidenceTests(unittest.TestCase):
         self.assertIn('No research evidence was given to the writer', prompt)
         self.assertIn('must be written in English', prompt)
         self.assertNotIn('YMYL topic', prompt)
+
+
+class RegulationYearReviewTests(unittest.TestCase):
+    def test_review_prompt_asks_for_the_current_rule(self):
+        from datetime import datetime
+        prompt = build_review_prompt({'title': 'Dana BOS', 'content': '<p>x</p>'}, 'evidence', language='id',
+                                     category='Keuangan', site_name='Site', ymyl=True)
+        self.assertIn(f'The current year is {datetime.now().year}', prompt)
+        self.assertIn('regulation wins', prompt)
+        self.assertIn('must not be presented as the current rule', prompt)
 
 
 if __name__ == '__main__':

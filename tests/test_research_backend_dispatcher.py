@@ -70,6 +70,17 @@ class ScheduledResearchTests(DispatcherTestCase):
         # Same free scheduled job: force=False, never charged.
         self.assertEqual(self.queue.enqueue.call_args.args[2], False)
 
+    def test_early_refresh_counts_calendar_days(self):
+        # Researched by the previous daily run 7 days ago, a few minutes after
+        # this run's time: still due today, not a day later.
+        stamp = datetime.now() - timedelta(days=7) + timedelta(minutes=5)
+        with self.db.get_session() as s:
+            s.add(ResearchData(user_id=1, site_id=1, category='Keuangan', confidence_level='high',
+                               researched_at=stamp, created_at=stamp, suggested_topics=[]))
+        self.assertEqual(dispatcher._stale_research_categories(self.site(names=('Keuangan',))), ['Keuangan'])
+        self.add_research('Parenting', 6, topics=[])  # six days: not yet
+        self.assertEqual(dispatcher._stale_research_categories(self.site(names=('Parenting',))), [])
+
     def test_topics_of_older_fresh_rows_count_but_used_or_expired_rows_do_not(self):
         self.add_research('Keuangan', 20, topics=['A'])
         self.add_research('Keuangan', 10, topics=['B'])
