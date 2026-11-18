@@ -15,6 +15,7 @@ from services.article_prompts import (
     build_category_brief,
     build_sources_section,
     citable_sources,
+    is_uncitable_source,
     clean_source_url,
     public_category_description,
 )
@@ -88,6 +89,16 @@ class DefaultPromptTests(unittest.TestCase):
                 self.assertIsNone(re.search(pattern, prompt, re.IGNORECASE), f'{language}: {pattern}')
             # The default itself must not tell the model to claim team experience.
             self.assertNotIn('pengalaman tim praktisi', DEFAULT_ARTICLE_PROMPTS[language])
+
+    def test_homework_and_document_dump_hosts_are_never_cited(self):
+        seo = {'competitor_outlines': [
+            {'url': 'https://brainly.co.id/tugas/123', 'title': 'Jawaban'},
+            {'url': 'https://id.scribd.com/document/1/sop', 'title': 'SOP'},
+            {'url': 'https://www.sekolah.example/sop', 'title': 'Panduan SOP'},
+        ]}
+        self.assertEqual([s['url'] for s in citable_sources(seo)], ['https://www.sekolah.example/sop'])
+        self.assertFalse(is_uncitable_source('https://notbrainly.com/x'))
+        self.assertFalse(is_uncitable_source('https://zenodo.org/records/1'))
 
     def test_regulation_values_need_their_year(self):
         for language in ('id', 'en'):

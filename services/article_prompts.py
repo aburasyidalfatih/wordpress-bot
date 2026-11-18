@@ -733,6 +733,24 @@ def _source_candidates(seo_data, language):
             yield title, yt.get('url'), title, False
 
 
+# Hosts never offered as a citation: homework-answer sites and document dumps
+# (re-uploaded files of unknown origin). Their pages may still inform the
+# research, they are just no authority to link a claim to.
+_UNCITABLE_HOST_RE = re.compile(
+    r'(?:^|\.)(?:brainly\.[a-z.]+|scribd\.com|studocu\.com|coursehero\.com|quizlet\.com|slideshare\.net|'
+    r'docplayer\.[a-z.]+|dokumen\.tips|pdfcoffee\.com|idoc\.pub|123dok\.com)$'
+)
+
+
+def is_uncitable_source(url):
+    """True for a URL on a host never cited as a source (see _UNCITABLE_HOST_RE)."""
+    try:
+        host = (urlsplit(str(url or '')).hostname or '').lower()
+    except ValueError:
+        return True
+    return bool(_UNCITABLE_HOST_RE.search(host))
+
+
 def citable_sources(seo_data, language='id'):
     """The sources the writer may cite, as listed in its prompt: dicts with
     'url' (cleaned), 'title' (third-party text, sanitized; may be ''),
@@ -743,7 +761,7 @@ def citable_sources(seo_data, language='id'):
     sources, seen = [], set()
     for label, raw_url, title, official in _source_candidates(seo_data, language):
         url = clean_source_url(raw_url)
-        if not url:
+        if not url or is_uncitable_source(url):
             continue
         key = url.lower().rstrip('/').removeprefix('https://').removeprefix('http://').removeprefix('www.')
         if key in seen:
